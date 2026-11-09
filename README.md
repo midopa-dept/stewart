@@ -1,180 +1,179 @@
+English | [한국어](README.ko.md)
+
 # stewart
 
-> A small, self-hosted agent runner for OpenAI-compatible `/v1/chat/completions` servers (vLLM, llama.cpp).
-> It runs a tool-calling loop (read/write/edit files, shell, search, web) on a local folder, records every run,
-> and adds safety rails (plan/ask modes, working-folder boundary, checkpoints and rollback, hooks, opt-in memory).
-> The prompts, tool messages and docs are in Korean. Python 3.12+, two runtime dependencies.
+stewart is a small agent runner for OpenAI-compatible chat completion servers such as vLLM and llama.cpp.
 
-stewart 는 OpenAI `/v1/chat/completions` 꼴 서버(vLLM·llama.cpp 등)에 붙어 도는 작은 에이전트 실행기다.
-작업 폴더 하나를 받아 모델이 도구(파일 읽기·쓰기·고치기, 셸, 검색, 웹)를 부르며 일을 하게 하고,
-그 과정을 모두 기록으로 남긴다. 모델·서버는 직접 띄운다(이 저장소에는 모델이 없다).
+Point it at a folder and a model you host yourself. The model works through tools: it reads and edits files, runs shell commands, searches and fetches web pages.
+Every run leaves a full record, so you can compare what the model says it did with what it actually did.
 
-- 무인 실행 `stewart run` 과 대화형 `stewart chat`(입력창이 고정된 화면)
-- 실행 모드: `auto`(바로) · `edits`(파일 편집은 바로, 셸은 묻기) · `ask`(읽기 말고 다 묻기) · `plan`(읽기만 하고 계획)
-- 체크포인트와 되돌리기(`/undo`·`/rewind`·`stewart rewind`), 끝내지 못한 무인 실행의 자동 되돌림(프로필 칸)
-- 작업 폴더 경계(밖 쓰기는 chat 은 묻고 run 은 거부), 비밀 파일 보호, stewart 설정 폴더 보호
-- 프로필(TOML)로 도구·지시문·상한을 정한다. 내장 프로필: `code`·`chat`·`research`·`organize`·`media` 등
+Prompts, tool messages and command help are in Korean.
 
----
+## What it is
 
-## 1. 설치
+- A tool-calling loop over `/v1/chat/completions`, written in Python 3.12 with two runtime dependencies (prompt_toolkit, rich).
+- Two ways to run it:
+  - `stewart run` takes one task and runs it unattended.
+  - `stewart chat` is an interactive session with a fixed input line.
+- No model is included. You start the server; stewart connects to it.
 
-필요한 것: macOS 또는 Linux, [uv](https://docs.astral.sh/uv/), git. (ripgrep `rg` 이 있으면 검색이 빨라진다.)
+## Features
+
+- Execution modes:
+  - `auto` runs tools right away.
+  - `edits` applies file edits right away and asks before shell commands.
+  - `ask` asks before anything except reads.
+  - `plan` only reads, then writes a plan.
+- Checkpoints and rollback: `/undo`, `/rewind`, `stewart rewind`. An unattended run that does not finish can be rolled back automatically (profile setting).
+- A working-folder boundary, secret-file protection, and a filtered shell environment (see [Safety model](#safety-model)).
+- Context handling:
+  - stewart reads the server's `max_model_len` and compacts history to fit.
+  - On a context overflow it folds the history once and retries.
+  - When a thinking turn hits the length limit with an empty answer, it retries that turn once with thinking off.
+- Profiles (TOML) set tools, instructions and limits. Built-in profiles include `code`, `chat`, `research`, `organize` and `media`.
+- `ask_user` for clarifying questions, `delegate` for a sub-worker with its own context, skills, and minimal hooks.
+- Optional self-checks before finishing:
+  - a check command
+  - a requirements review
+  - a "should I have asked?" check
+  - a regression baseline
+  - a todo check
+- Optional memory: a run index, notes, per-subject pages and an injected index, maintained by `stewart dream`, which you run yourself.
+- Run records in `events.jsonl`, `transcript.md`, `summary.json` and `facts.md`.
+
+## Quick start
+
+### 1. Install
+
+You need macOS or Linux, [uv](https://docs.astral.sh/uv/) and git. [ripgrep](https://github.com/BurntSushi/ripgrep) makes search faster if it is installed.
 
 ```bash
-git clone <이 저장소 주소> stewart
+git clone https://github.com/midopa-dept/stewart.git
 cd stewart
 uv sync
 uv run stewart --help
 ```
 
-백엔드 설정 파일을 만든다. 예시를 복사해 고친다.
+Copy the example backend file and edit it:
 
 ```bash
 mkdir -p ~/.config/stewart
 cp backends.example.toml ~/.config/stewart/backends.toml
 ```
 
-stewart 는 백엔드 설정을 이 차례로 찾는다: `STEWART_BACKENDS`(파일 경로) → `~/.config/stewart/backends.toml` → 저장소 뿌리 `backends.toml`.
+### 2. Try it with a local model
 
-## 2. 먼저 내 컴퓨터에서 작은 모델로 해 보기(선택)
-
-GPU 를 빌리기 전에 흐름을 익히려면 [llama.cpp](https://github.com/ggml-org/llama.cpp) 의 `llama-server` 로 작은 GGUF 모델을 띄운다.
-도구 호출을 지원하는 instruct 모델을 고른다.
+Start a small instruct model that supports tool calling with [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`:
 
 ```bash
-llama-server -m <모델.gguf> --port 8080 --ctx-size 16384 --jinja
+llama-server -m <model.gguf> --port 8080 --ctx-size 16384 --jinja
 ```
 
-`~/.config/stewart/backends.toml` 의 `[backends.local]` 이 `http://127.0.0.1:8080/v1` 을 가리킨다. `model` 은 서버가 아는 이름으로 바꾼다.
+In `~/.config/stewart/backends.toml`, `[backends.local]` points to `http://127.0.0.1:8080/v1`. Set `model` to the name your server reports. Then:
 
 ```bash
 uv run stewart ping -b local
-uv run stewart chat -b local --workdir <작업 폴더>
+uv run stewart chat -b local --workdir ~/my-project
 ```
 
-## 3. GPU 를 빌려 모델을 띄우고 stewart 로 쓰기
+### 3. Use a rented GPU
 
-아래는 처음 하는 사람 기준의 순서다. 우리는 27B 급 4비트 모델을 RTX 3090(24 GB) 한 장에서 vLLM 으로 띄워 썼다.
-더 작은 모델이면 더 작은 GPU 로도 된다.
+To run a larger model on a rented GPU without exposing it to the internet, use [stewart-cloud](https://github.com/midopa-dept/stewart-cloud).
 
-### 3-1. GPU 인스턴스 빌리기
-
-1. GPU 를 시간 단위로 빌려 주는 곳(예: Vast.ai·RunPod·Lambda 등)에 계정을 만든다. 돈이 드는 일이다 — 켜 둔 시간만큼 낸다.
-2. 인스턴스를 고른다.
-   - GPU: 모델 크기에 맞게. 27B 4비트 + 긴 문맥이면 VRAM 24 GB 이상.
-   - 디스크: 모델 크기 + 여유(27B 4비트면 50 GB 이상).
-   - 이미지: vLLM 공식 이미지 `vllm/vllm-openai` 를 쓰면 설치가 없다. 판을 고정한다(태그나 digest).
-3. **공개 포트를 열지 않는다.** vLLM 포트(8000)를 인터넷에 내놓지 않고, 아래 3-3 의 SSH 터널이나 사설망으로만 닿게 한다.
-
-### 3-2. 인스턴스에서 vLLM 띄우기
-
-인스턴스에 SSH 로 들어가 띄운다(공식 이미지면 `vllm` 명령이 있다). 모델은 Hugging Face 저장소 이름이나 내려받은 폴더다.
+If you set up a server yourself, stewart works with any OpenAI-compatible endpoint that supports tool calls. With vLLM, enable a tool-call parser that matches your model family:
 
 ```bash
-vllm serve <Hugging Face 모델 저장소 또는 폴더> \
-  --served-model-name my-model \
-  --host 127.0.0.1 --port 8000 \
-  --max-model-len 65536 \
-  --gpu-memory-utilization 0.92 \
-  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
-  --reasoning-parser qwen3
+vllm serve <model> --served-model-name my-model \
+  --host 127.0.0.1 --port 8000 --max-model-len 65536 \
+  --enable-auto-tool-choice --tool-call-parser <parser>
 ```
 
-- `--host 127.0.0.1`: 인스턴스 밖에서 바로 닿지 않게 한다(터널로만).
-- `--enable-auto-tool-choice --tool-call-parser …`: stewart 는 도구 호출이 되어야 돈다. 파서는 모델 계열에 맞춘다
-  (위 값은 Qwen3 계열에 우리가 쓴 것. 다른 계열은 vLLM 문서의 tool calling 표를 본다).
-- `--max-model-len`: GPU 메모리에 맞게. stewart 는 시작할 때 `/v1/models` 의 `max_model_len` 을 읽어 그 길이에 맞춰 문맥을 접는다.
-- 키를 쓰려면 `--api-key <값>` 을 더하고, stewart 쪽은 그 값을 환경 변수로 준다(파일에 적지 않는다).
+Keep the port private. Reach it through an SSH tunnel or a private network, then add it as a backend (below).
 
-로그에 서버가 떴다고 나오면 인스턴스 안에서 확인한다:
+## Configuration
 
-```bash
-curl -s http://127.0.0.1:8000/v1/models
-```
+stewart looks for the backend file in this order:
 
-### 3-3. 내 컴퓨터에서 터널로 붙기
-
-빌려 주는 곳이 알려 준 SSH 주소·포트로 터널을 연다(이 창은 열어 둔다).
-
-```bash
-ssh -N -L 8000:127.0.0.1:8000 -p <SSH 포트> root@<인스턴스 주소>
-```
-
-이제 내 컴퓨터의 `127.0.0.1:8000` 이 인스턴스의 vLLM 이다. 사설망(예: Tailscale)을 쓰면 터널 대신 그 주소를 쓴다.
-
-### 3-4. stewart 설정과 실행
-
-`~/.config/stewart/backends.toml` 의 `[backends.cloud]` 를 고친다.
+1. `STEWART_BACKENDS` (a file path)
+2. `~/.config/stewart/backends.toml`
+3. `backends.toml` at the repository root
 
 ```toml
 [backends.cloud]
 base_url = "http://127.0.0.1:8000/v1"
-model = "my-model"                 # vllm --served-model-name 과 같게
-max_context = 65536                # 서버 값과 다르면 시작할 때 서버 값을 쓰고 알려 준다
+model = "my-model"                      # same as --served-model-name
+max_context = 65536                     # replaced by the server's max_model_len at startup
 concurrency = 8
-api_key_env = "STEWART_CLOUD_API_KEY"   # --api-key 를 썼으면 이 환경 변수에 값을 넣는다
+api_key_env = "STEWART_CLOUD_API_KEY"   # name of the variable that holds the key; never the key itself
 timeout_s = 240
+
+[backends.cloud.params]                 # merged into every request body
+temperature = 0.2
+max_tokens = 8192
 ```
+
+Common commands:
 
 ```bash
-uv run stewart ping -b cloud                        # 연결·한 줄 답·도구 호출 확인
-uv run stewart chat -b cloud --workdir ~/my-project # 대화형
-uv run stewart run -p code -b cloud --workdir ~/my-project --task "실패하는 시험을 고쳐라"
+uv run stewart ping -b cloud
+uv run stewart chat -b cloud --workdir ~/my-project
+uv run stewart run -p code -b cloud --workdir ~/my-project --task "Fix the failing test"
+uv run stewart run -p code -b cloud --workdir ~/my-project --plan --task "..."
+uv run stewart profiles
 ```
 
-- `run` 은 무인 실행이다. 기본 모드는 `auto` 라 도구를 바로 쓴다. 처음에는 `chat`(기본 `edits`) 이나 `run --plan` 으로 보는 것이 안전하다.
-- 실행 기록은 `~/.local/state/stewart/runs/<시각>-<프로필>/` 에 남는다(`transcript.md`·`events.jsonl`·`summary.json`·`facts.md`).
+- Profiles:
+  - Built-in profiles live in `profiles/`.
+  - Your own go in `~/.config/stewart/profiles/`.
+  - Use `extends = "code"` to inherit a profile and override only what you need.
+- Run records go to `~/.local/state/stewart/runs/<time>-<profile>/`.
+- Web search:
+  - Uses a [SearXNG](https://github.com/searxng/searxng) JSON endpoint set in `STEWART_SEARXNG_URL`.
+  - `web_fetch` refuses private addresses.
+- Thinking:
+  - Toggle it with `--think` or `/think`.
+  - Tune it with `STEWART_THINK_MAX_TOKENS` and `STEWART_THINK_SAMPLING`.
+- Self-checks: `STEWART_CHECK_ON_STOP` (on in the `code` profile), `STEWART_REVIEW_ON_STOP`, `STEWART_ASK_CHECK`, `STEWART_BASELINE_DIFF` and `STEWART_TODO_CHECK`. The others are off by default.
+- Memory: off by default. Turn it on with `memory = true` in a profile or `STEWART_MEMORY=1`.
+- Hooks:
+  - Set them in a profile's `[hooks]` table: `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop`.
+  - Each hook gets JSON on stdin. Exit code 2 blocks the action.
+- Tests: `uv run python -m unittest discover -s tests -t .` runs against fake servers and needs no network.
 
-### 3-5. 다 쓰면 반드시 끈다
+## Safety model
 
-빌려 주는 곳의 화면이나 명령으로 인스턴스를 **정지하거나 지운다.** 터널만 닫으면 돈은 계속 나간다.
+stewart lets a model run shell commands. The rails below reduce mistakes; they are not isolation. Run it on a machine without important data, or inside an OS sandbox, a dedicated account or a container.
 
-## 4. 알아 둘 것
+- **Working-folder boundary.**
+  - Paths are resolved with realpath and their parent folders are checked by inode, so a symlink does not lead out of the folder.
+  - A write outside the folder is refused in `run` and asked about in `chat`; an approval covers that path only.
+  - `extra_write_dirs` and `read_outside` (allow, ask or deny) widen or narrow the boundary.
+  - Shell commands are checked for common write forms only.
+- **Secret files.** Tools neither read nor write files that look like `.env` files, keys or certificates (profile `[secret_files]`). stewart's own config folder is also protected.
+- **Filtered environment.**
+  - The model's shell does not see stewart's virtual environment, its `PATH` entry, `STEWART_*` variables, or any variable that contains stewart's install path.
+  - API keys are read from environment variables named in the backend file; the file holds only the variable name.
+- **Approvals.** Modes decide what runs without asking. Writes outside the folder and edits to stewart's config ask in every mode, and for these an empty answer counts as no.
+- **Records.** Results from the Brave search engine are kept out of run records. `python -m stewart.scrub_records` removes them from older records (dry run by default).
 
-| 주제 | 요지 |
-|---|---|
-| 프로필 | `profiles/*.toml`. 사용자 프로필은 `~/.config/stewart/profiles/`, `extends = "code"` 로 내장 프로필을 물려받고 바꿀 칸만 적는다. `uv run stewart profiles` |
-| 모드 | `--mode auto\|edits\|ask\|plan`(chat), `run --plan`. chat 에서 `/mode`·`/plan on\|off` |
-| 되돌리기 | 도구가 쓴 파일은 차례마다 체크포인트. chat `/undo`·`/rewind N`, `stewart rewind <기록>`. 셸이 바꾼 파일은 되돌리지 못한다 |
-| 작업 폴더 경계 | 작업 폴더 밖 쓰기: chat 은 묻고(그 경로만 승인), run 은 거부. 프로필 `extra_write_dirs`·`read_outside`. 셸은 흔한 쓰기 꼴만 본다 — 완전한 격리가 아니다 |
-| 비밀 파일 | `.env`·키·인증서 꼴은 도구가 읽지도 쓰지도 않는다(프로필 `[secret_files]`) |
-| 셸 환경 | 모델의 셸에서 stewart 자신의 가상 환경·`STEWART_*` 변수를 뺀다 |
-| 웹 | `web_search` 는 SearXNG JSON API(`STEWART_SEARXNG_URL`), `web_fetch` 는 사설 주소를 막는다. Brave 엔진 결과는 기록에 남기지 않는다 |
-| 기억(기본 끔) | 프로필 `memory = true` 또는 `STEWART_MEMORY=1`. 실행 색인·메모·대상별 쪽·주입 색인. 쪽과 색인은 `stewart dream` 이 쓴다 |
-| hooks | 프로필 `[hooks]`: `SessionStart`·`PreToolUse`·`PostToolUse`·`Stop`. 표준 입력 JSON, exit 2 = 막음 |
-| 자기 점검(기본 끔) | `STEWART_CHECK_ON_STOP`(code 는 켬)·`STEWART_REVIEW_ON_STOP`·`STEWART_ASK_CHECK`·`STEWART_BASELINE_DIFF`·`STEWART_TODO_CHECK` |
-| 생각(thinking) | `--think`·`/think`. 생각 켬 차례의 상한·샘플링: `STEWART_THINK_MAX_TOKENS`·`STEWART_THINK_SAMPLING` |
-| 시험 | `uv run python -m unittest discover -s tests -t .`(가짜 서버로만, 망 없음) |
+## How it differs
 
-**안전에 대해.** stewart 는 모델이 셸 명령을 돌리게 한다. 경계·모드·확인은 실수를 줄이는 장치이지 격리가 아니다.
-중요한 자료가 있는 기기에서 `auto` 로 돌리지 말고, 운영체제 샌드박스·전용 계정·컨테이너 안에서 쓰는 것을 권한다.
+stewart is a small, inspectable runner for self-hosted models, not a general agent framework.
 
-## 5. 우리가 한 것
+- It assumes a model you serve yourself, and adapts to the server's context length and tool-call quirks: it re-asks after broken tool calls, detects repeated identical calls, and handles empty thinking-only turns.
+- Records come first. Each run keeps enough detail to check the model's final report against the files it changed and the commands it ran.
+- Self-checks and memory are separate switches that default to off, so you can turn on one at a time and see what it changes.
 
-이 저장소에서 실제로 만들고 시험한 것만 적는다.
+## Acknowledgements and references
 
-- OpenAI chat/completions 도구 호출 고리: 깨진 툴콜 다시 묻기, 같은 호출·같은 결과 되풀이 감지와 마무리 강제, 남은 단계 알림, 한국어 보고 강제, JSON 스키마 출력
-- 서버 문맥 길이(`max_model_len`) 읽기, 응답 상한 몫을 뺀 문맥 접기, 문맥 넘침 뒤 한 번 접고 다시 보내기
-- 생각만 하다 생성 상한에 닿아 빈 답이 된 차례를 생각 끔으로 한 번 다시 보내기, 잘린 생각의 되풀이 지표 기록
-- 실행 기록(`events.jsonl`·대화록·`facts`) — 모델의 보고와 실제로 한 일을 대조하게
-- 체크포인트·되돌리기, 끝내지 못한 실행의 되돌림, 작업 폴더 경계(realpath·inode 로 판정), 비밀 파일·설정 폴더 보호, 셸 환경 정리
-- 실행 모드(auto·edits·ask·plan), 되묻기 도구(`ask_user`), 하위 작업자(`delegate`), 스킬, hooks 최소판
-- 끝내기 전 확인 명령(실패면 출력을 돌려줌)과 켬·끔 손잡이(요구 대조·되묻기 판단·회귀 기준선·할 일 확인)
-- 기억: 실행 색인·메모·대상별 쪽·주입 색인과 `stewart dream`(사람이 부르는 정리, 코드가 근거·꼴·크기를 확인)
-- 폴더 정리 도구(훑기·계획·검토 문서·승인 sha 로만 실행·되돌리기), 미디어 분류 보조
-- 대화형 화면(입력창 고정, 진행 표시, 답변 중 끼워 넣기)
+stewart contains no code copied from the projects below. Third-party packages are listed in [NOTICE](NOTICE).
 
-## 6. 출처·참조
+- Anthropic, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) documentation: the shape of execution modes, hooks, todo lists, memory files and sub-agents.
+- Anthropic, "The components of agent memory": memory layers (records, notes, pages, an injected index) and a small injected layer with one page per subject.
+- Qwen3 model card: recommended sampling for thinking mode, used by `STEWART_THINK_SAMPLING=qwen`.
+- [vLLM](https://github.com/vllm-project/vllm), [llama.cpp](https://github.com/ggml-org/llama.cpp), [SearXNG](https://github.com/searxng/searxng), [uv](https://github.com/astral-sh/uv).
+- The tool-call format of the OpenAI Chat Completions API.
 
-설계에 참고한 것과 쓰는 바깥 것이다. 코드를 가져온 곳은 없다(바깥 꾸러미는 NOTICE).
+## License
 
-- Anthropic, *Claude Code* 문서 — 실행 모드·hooks·할 일 목록·기억 파일·하위 에이전트의 사용 꼴을 참고했다.
-- Anthropic, "The components of agent memory"(2026-11) — 기억의 층(기록·메모·쪽·주입 색인)과 꿈꾸기, "주입층은 작게·대상마다 한 쪽" 권고.
-- Qwen3 모델 카드의 생각 모드 샘플링 권장값 — `STEWART_THINK_SAMPLING=qwen` 묶음.
-- [vLLM](https://github.com/vllm-project/vllm)(OpenAI 호환 서버·도구 호출 파서), [llama.cpp](https://github.com/ggml-org/llama.cpp), [SearXNG](https://github.com/searxng/searxng), [uv](https://github.com/astral-sh/uv).
-- OpenAI Chat Completions API 의 도구 호출 꼴.
-
-## 라이선스
-
-Apache License 2.0. `LICENSE`·`NOTICE` 를 본다.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
