@@ -1,0 +1,26 @@
+# 미디어 정리 프로필: 분류 규칙이 놓친 미디어 파일 이름 목록을 보고 서고의 목적지를 제안한다(dry-run, 읽기 도구만).
+# 서고 규칙 예시는 demos/media/library-layout.md, 출력 꼴은 demos/media/schema.json. stewart media 의 기본 프로필이다.
+# 자기 서고에 맞춘 판은 사용자 프로필 폴더(~/.config/stewart/profiles)에 extends = "media" 로 두고 바꿀 칸만 적는다.
+name = "media"
+description = "분류에 실패한 미디어 파일 이름 목록을 보고 목적지를 제안한다. 파일은 옮기지 않는다."
+tools = ["read_file", "list_dir", "search", "web_search"]
+workdir = "../demos/media"
+max_steps = 30   # 웹 검색을 쓰면 묶음 하나에 여러 단계가 든다
+max_consecutive_errors = 3
+shell_timeout_s = 30
+language = "ko"
+
+# 지시문은 비워 둔다: 기준선 점수를 지시문 없이 쟀다. 지시문을 넣으면 기준선을 다시 잰다.
+
+# 웹 검색: SearXNG JSON API. 주소는 환경변수로(없으면 웹 도구 없이 돈다)
+[web_search]
+url_env = "STEWART_SEARXNG_URL"
+max_per_file = 3
+max_results = 5
+timeout_s = 20
+categories = "general,videos"   # 영상 엔진 결과까지
+
+[output]
+format = "json"
+schema_file = "../demos/media/schema.json"
+language_fields = ["reason"]   # reason 은 한국어여야 한다

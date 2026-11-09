@@ -1,0 +1,12 @@
+stewart
+Copyright 2026 midopa-dept
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Runtime dependencies (installed by the package manager, not bundled here):
+- prompt_toolkit (BSD-3-Clause)
+- rich (MIT)
+
+Optional external tools used only when present (not bundled):
+- ripgrep (rg) for the search tool
+- a SearXNG instance for the web_search tool

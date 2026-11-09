@@ -1,0 +1,39 @@
+# stewart 백엔드 정의 예시. 모두 OpenAI /v1/chat/completions 형식.
+# 쓰는 법: 이 파일을 ~/.config/stewart/backends.toml 로 복사해 고친다(또는 STEWART_BACKENDS=<파일>).
+# 찾는 차례: STEWART_BACKENDS → $XDG_CONFIG_HOME/stewart/backends.toml(~/.config/stewart/backends.toml) → 저장소 뿌리 backends.toml
+# 필드: base_url, model, precision(정밀도 라벨, 기록용), max_context(토큰), enabled,
+#       api_key_env(키를 담은 환경변수 이름; 값은 파일에 적지 않는다), timeout_s, concurrency(한 프로세스의 동시 요청 상한),
+#       [backends.<이름>.params] 요청 본문에 그대로 합칠 값(temperature, chat_template_kwargs, max_tokens 등)
+# vLLM 서버면 실제 문맥 길이는 시작할 때 /v1/models 의 max_model_len 에서 다시 읽는다(STEWART_SERVED_CONTEXT=0 이면 안 읽음).
+
+default = "local"
+
+[backends.local]
+description = "이 기기의 llama.cpp llama-server"
+base_url = "http://127.0.0.1:8080/v1"
+model = "local-model"
+precision = "Q4_K_M"
+max_context = 16384          # llama-server --ctx-size 와 맞춘다
+enabled = true
+timeout_s = 600
+
+[backends.local.params]
+temperature = 0.2
+chat_template_kwargs = { enable_thinking = false }
+
+[backends.cloud]
+# 빌린 GPU 의 vLLM. 공개 포트를 열지 않고 사설망(예: Tailscale)이나 SSH 터널로만 닿게 둔다.
+description = "원격 GPU vLLM(사설망)"
+base_url = "http://gpu.example-tailnet.ts.net:8000/v1"
+model = "qwen3.8-27b"                 # vLLM --served-model-name
+precision = "W4A16"
+max_context = 65536
+concurrency = 8
+enabled = true
+api_key_env = "STEWART_CLOUD_API_KEY" # vLLM --api-key 를 쓰면 그 값을 담은 환경변수 이름(비어 있으면 키 없이 보냄)
+timeout_s = 240                       # 한 요청 상한. 큰 파일 쓰기가 잘리지 않게 max_tokens 와 짝
+
+[backends.cloud.params]
+temperature = 0.2
+chat_template_kwargs = { enable_thinking = false }
+max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생성 막기). finish_reason=length 는 summary length_stops

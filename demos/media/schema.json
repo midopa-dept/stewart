@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": ["items"],
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["file", "destination", "reason", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "file": {"type": "string"},
+          "destination": {"type": "string"},
+          "reason": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "new_folder": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}
