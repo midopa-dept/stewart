@@ -144,7 +144,8 @@ class Plan:
             dst_in = str(it.get("dst", "")).strip().rstrip("/")
             if (why := names.parts_ok(dst_in)):
                 return None, f"dst: {why}"
-            if names.under_to_delete(self.k(dst_in), self.fold):
+            # 대소문자만 다른 _TO_DELETE/ 도 막는다. 대소문자를 구분하는 FS 에서는 다른 폴더지만 사람이 보기에는 같은 이름이다
+            if names.under_to_delete(names.key(dst_in, True), True):
                 return None, f"지울 것은 op=to_delete 로 한다({names.TO_DELETE}/ 로 직접 옮기지 않는다)"
         dst, new_folder = self._disk_dst(dst_in)
         dk = self.k(dst)

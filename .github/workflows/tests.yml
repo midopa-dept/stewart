@@ -18,9 +18,22 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Install (locked)
         run: uv sync --frozen --python ${{ matrix.python }}
       - name: Run tests
-        run: uv run --frozen --python ${{ matrix.python }} python -m unittest discover -s tests -t . -v
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python ${{ matrix.python }} python -m unittest discover -s tests -t . -v 2>&1 | tee test-output.txt
+      - name: Failed tests in the job summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '### Failed tests'
+            echo '```'
+            grep -E -A 25 '^(FAIL|ERROR):' test-output.txt | head -n 300 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
