@@ -21,6 +21,7 @@ class Base(unittest.TestCase):
         self.env = T.ToolEnv(self.tmp)
 
     def tearDown(self):
+        T.close_env(self.env)   # run_shell 이 띄운 셸을 닫는다(판 68 시험 감시)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def touch_outside(self, text):

@@ -39,6 +39,7 @@ class TSameCommand(unittest.TestCase):
         s = C.ChatSession(p, Backend("f", "http://x/v1", "m", "q", 100000), Recorder(self.tmp / "runs", "c"), ui,
                           stream=False, mode="edits")
         self.addCleanup(lambda: s.rec._ev.closed or s.rec._ev.close())
+        self.addCleanup(lambda: C.T.close_env(s.env))
         return s, ui
 
     def test_same_command_asked_once(self):

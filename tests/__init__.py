@@ -33,28 +33,99 @@ import urllib.request  # noqa: E402
 # 127.0.0.1 시험 서버로 가는 요청: 환경·시스템 프록시를 타지 않는다(macOS urllib 은 시스템 프록시를 따른다)
 LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# 시험 하나 감시(판 67): 공개 트리 시험이 가끔 30분 제한까지 멈췄다. 시험 하나가 STEWART_TEST_TIMEOUT 초(기본 240)를 넘으면
-# 모든 스레드의 스택을 stderr 에 찍고 끝낸다 — 멈춤이 바로 실패 + 스택으로 바뀐다. 0 이면 끔
+# 시험 하나 감시(판 67·68): 공개 트리 시험이 가끔 30분 제한까지 멈췄고, 시험이 띄운 셸(새 세션)이 남아 고아가 됐다.
+# - 시험 하나가 STEWART_TEST_TIMEOUT 초(기본 240)를 넘으면: 모든 스레드 스택을 찍고, 남은 stewart 셸·허브 작업자를 묶음째 끝낸 뒤 실패로 끝낸다
+#   (감시 스레드. 그 스레드도 못 돌면 faulthandler 가 +60초에 스택만 찍고 끝낸다). 0 이면 끔
+# - 시험이 끝났는데 그 시험이 띄운 셸·작업자가 살아 있으면 묶음째 끝내고 그 시험을 실패로 적는다(STEWART_TEST_LEAKS=warn 이면 경고만)
 import faulthandler as _fh  # noqa: E402
+import threading as _th  # noqa: E402
 import unittest as _ut  # noqa: E402
 
 _TEST_TIMEOUT = float(os.environ.get("STEWART_TEST_TIMEOUT") or 240)
-if _TEST_TIMEOUT > 0 and not getattr(_ut.TestCase, "_stewart_watchdog", False):
+_LEAKS = os.environ.get("STEWART_TEST_LEAKS") or "fail"
+
+
+def _live_children():
+    """살아 있는 stewart 셸(Shell)·셸 백그라운드 작업·허브 작업자 [(설명, 끝내기)]."""
+    out = []
+    try:
+        from stewart import osdep as _od, shell as _sh
+        for p in list(_sh.SPAWNED):
+            if p.poll() is None:
+                def _stop(p=p):
+                    _od.kill_group(p, True)
+                    try:
+                        p.wait(timeout=5)
+                    except Exception:
+                        pass
+                out.append((f"셸 pid {p.pid}", _stop))
+    except Exception:
+        pass
+    try:
+        from stewart import hub as _hb, osdep as _od2
+        for p in list(_hb.WORKERS):
+            if p.poll() is None:
+                def _stop2(p=p):
+                    _od2.kill_group(p, True)
+                    try:
+                        p.wait(timeout=5)
+                    except Exception:
+                        pass
+                out.append((f"허브 작업자 pid {p.pid}", _stop2))
+    except Exception:
+        pass
+    return out
+
+
+def _reap_all():
+    for _d, stop in _live_children():
+        try:
+            stop()
+        except Exception:
+            pass
+
+
+if not getattr(_ut.TestCase, "_stewart_watchdog", False):
     _orig_run = _ut.TestCase.run
 
     def _run_with_watchdog(self, result=None):
-        import sys as _sys
-        _sys.stderr.write("")   # stderr 가 열려 있는지
-        _fh.dump_traceback_later(_TEST_TIMEOUT, exit=True)
+        before = {d for d, _ in _live_children()}
+        done = _th.Event()
+        if _TEST_TIMEOUT > 0:
+            def _watch(test=self):
+                if done.wait(_TEST_TIMEOUT):
+                    return
+                import sys as _sys
+                _sys.stderr.write(f"\n[시험 감시] {test.id()} 가 {_TEST_TIMEOUT:.0f}초를 넘었다 — 스택을 찍고 남은 셸·작업자를 끝낸 뒤 끝낸다\n")
+                _fh.dump_traceback(all_threads=True)
+                _reap_all()
+                os._exit(3)
+            _th.Thread(target=_watch, name="stewart-test-watchdog", daemon=True).start()
+            _fh.dump_traceback_later(_TEST_TIMEOUT + 60, exit=True)
         try:
             return _orig_run(self, result)
         finally:
-            _fh.cancel_dump_traceback_later()
+            done.set()
+            if _TEST_TIMEOUT > 0:
+                _fh.cancel_dump_traceback_later()
+            left = [(d, stop) for d, stop in _live_children() if d not in before]
+            if left:
+                for _d, stop in left:
+                    try:
+                        stop()
+                    except Exception:
+                        pass
+                msg = "시험이 끝났는데 띄운 것이 남았다(끝냈다): " + ", ".join(d for d, _ in left) + " — 시험에서 close 를 부르거나 addCleanup 으로 닫는다"
+                if _LEAKS == "fail" and result is not None:
+                    result.addFailure(self, (AssertionError, AssertionError(msg), None))
+                else:
+                    import sys as _sys
+                    _sys.stderr.write(f"\n[시험 감시] {self.id()}: {msg}\n")
     _ut.TestCase.run = _run_with_watchdog
     _ut.TestCase._stewart_watchdog = True
+    _atexit.register(_reap_all)   # 시험 묶음 끝에도 남은 것을 묶음째(atexit 는 정상 끝에서만 — 시간 끊김은 위 감시가)
     # 끝낼 때(남은 일반 스레드를 기다리는 자리)에서 멈추는 것도 잡는다: 그 자리에 들어서면 120초 감시를 건다
     try:
-        import threading as _th
         _th._register_atexit(lambda: _fh.dump_traceback_later(120, exit=True))
     except Exception:
         pass

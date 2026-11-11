@@ -170,6 +170,7 @@ class TApp(unittest.TestCase):
         p = Profile(name="chat", path=self.tmp / "p.toml", system="s", tools=["*"], workdir=self.tmp, max_steps=10)
         s = C.ChatSession(p, self.bk, Recorder(self.tmp / "runs", f"chat-{mode}-{id(ui)}"), ui, mode=mode)
         self.addCleanup(lambda: s.rec._ev.closed or s.rec._ev.close())
+        self.addCleanup(lambda: C.T.close_env(s.env))   # 셸을 닫는다(판 68 시험 감시)
         ui.bind(s)
         return s
 

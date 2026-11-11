@@ -33,6 +33,7 @@ import sys
 import threading
 import time
 import urllib.request
+import weakref
 from datetime import datetime
 from pathlib import Path
 
@@ -238,10 +239,15 @@ def _locked(fn):
     return wrap
 
 
+LIVE_HUBS: "weakref.WeakSet[Hub]" = weakref.WeakSet()
+WORKERS: list = []   # 시험 묶음이 끝나지 않은 작업자를 찾는 데 쓴다
+
+
 class Hub:
     def __init__(self, state_dir: Path, runs_dir: Path, notify_url: str | None = None, notify=None,
                  worktree_root: str | None = None):
         self.dir = Path(state_dir)
+        LIVE_HUBS.add(self)
         self._lock = threading.RLock()
         self.worktree_root = worktree_root   # "{repo}" 자리 글을 받는다. 없으면 default_worktree_dir
         self.main_answer = None              # 메인 세션의 답 받기(허브 프로세스 안 큐). HubMain 이 붙인다
@@ -377,6 +383,8 @@ class Hub:
             p = subprocess.Popen(argv, cwd=str(sd.root), env=worker_env(), stdin=subprocess.DEVNULL, stdout=log,
                                  stderr=subprocess.STDOUT, **kw, **osdep.group_popen_kwargs())
             osdep.attach_group(p)           # 풀지 못하면 작업자를 끝내고 OSError
+            WORKERS.append(p)               # 강한 참조(시험 감시가 허브 객체가 버려져도 남은 작업자를 찾게, 판 68)
+            del WORKERS[:-200]
         except BaseException:
             os.close(w)
             raise

@@ -11,6 +11,7 @@ class TestShellOutputClip(unittest.TestCase):
         self.env = T.ToolEnv(workdir=Path(self.d.name))
 
     def tearDown(self):
+        T.close_env(self.env)
         self.d.cleanup()
 
     def test_short_unchanged(self):

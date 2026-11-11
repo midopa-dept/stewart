@@ -119,7 +119,12 @@ def spawn(argv: list[str], cwd: Path, env: dict | None = None, stdin=subprocess.
     p = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=stdin, stdout=stdout, stderr=stderr,
                          **osdep.group_popen_kwargs())
     osdep.attach_group(p)
+    SPAWNED.append(p)
+    del SPAWNED[:-200]          # 끝난 것은 오래 들고 있지 않는다
     return p
+
+
+SPAWNED: list = []   # 띄운 셸·백그라운드 작업(강한 참조) — 셸 객체가 버려져도 살아 있는 묶음을 찾을 수 있게(시험 감시, 판 68)
 
 
 def _killpg(p: subprocess.Popen, hard: bool = True) -> None:
