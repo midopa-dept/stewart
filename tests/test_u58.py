@@ -166,7 +166,8 @@ class TLabelAndUse(unittest.TestCase):
         bk = Backend("x", "https://a.example/v1", "m", "api", 1000)
         B.count_use(bk, {"usage": {"prompt_tokens": 100, "completion_tokens": 7}})
         B.count_use(bk, {"usage": {"prompt_tokens": 10, "completion_tokens": 3, "cost_usd": 0.5}})
-        self.assertEqual(bk.used, {"calls": 2, "prompt": 110, "completion": 10, "cost_usd": 0.5})
+        self.assertEqual(bk.used, {"calls": 2, "prompt": 110, "completion": 10, "cost_usd": 0.5,
+                                   "cache_hit": 0, "cache_seen": 0})   # 캐시 칸이 없는 API 는 적중률에 안 든다(판 86)
         self.assertNotIn("used", json.dumps(bk.public()))
 
     def test_ui_built(self):

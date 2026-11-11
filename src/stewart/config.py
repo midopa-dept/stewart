@@ -59,7 +59,8 @@ class Backend:
     api_key_keychain: str | None = None   # macOS 키체인 항목 이름(service). 환경 변수보다 뒤, 파일보다 앞(값은 기록·출력하지 않는다)
     thinking_control: str = "chat_template"   # 생각 켜고 끄기를 보내는 꼴: chat_template(vLLM·llama.cpp) | none(보내지 않음 — 생각 고정 API)
     price: dict = field(default_factory=dict)  # {input, output, cache_read?} 달러/1M 토큰 — 있으면 응답 usage 에 cost_usd
-    used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0})   # 이 프로세스 누계(화면)
+    used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0,
+                                                 "cache_hit": 0, "cache_seen": 0})   # 이 프로세스 누계(화면). cache_seen = 캐시 칸을 준 호출의 입력 토큰
     retries: int | None = None  # 429·5xx·연결 끊김에 다시 보낼 횟수. None 이면 실사용(chat·허브) 4·평가(run) 0. STEWART_BACKEND_RETRIES 가 이긴다
     context_budget: int | None = None   # 실사용 문맥 몫(토큰). 창(max_context)이 커도 이 값을 창으로 보고 압축한다(길수록 느리고 비싸고 흐려진다). STEWART_CONTEXT_BUDGET 가 이긴다
 

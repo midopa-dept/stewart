@@ -159,6 +159,49 @@ def count_use(backend: Backend, data: dict) -> None:
     used["prompt"] += int(u.get("prompt_tokens") or 0)
     used["completion"] += int(u.get("completion_tokens") or 0)
     used["cost_usd"] = round(used["cost_usd"] + float(u.get("cost_usd") or 0), 6)
+    hit = cache_hit_tokens(u)
+    if hit is not None:   # 캐시 적중률(판 86): 캐시 칸을 준 호출만 센다
+        used["cache_hit"] = used.get("cache_hit", 0) + hit
+        used["cache_seen"] = used.get("cache_seen", 0) + int(u.get("prompt_tokens") or 0)
+
+
+def cache_hit_tokens(u: dict) -> int | None:
+    """usage 의 캐시 적중 입력 토큰: OpenAI 꼴 prompt_tokens_details.cached_tokens 또는 DeepSeek 꼴 prompt_cache_hit_tokens. 없으면 None."""
+    if not isinstance(u, dict):
+        return None
+    if u.get("prompt_cache_hit_tokens") is not None:
+        return int(u["prompt_cache_hit_tokens"] or 0)
+    d = u.get("prompt_tokens_details")
+    if isinstance(d, dict) and d.get("cached_tokens") is not None:
+        return int(d["cached_tokens"] or 0)
+    return None
+
+
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def peak_factor(price: dict, now=None) -> float:
+    """가격표의 혼잡 시간 배수(판 86): price.peak = {multiplier, tz, days = "mon-fri", hours = ["01-04", …]}. 아니면 1."""
+    pk = (price or {}).get("peak")
+    if not isinstance(pk, dict):
+        return 1.0
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    try:
+        t = now or datetime.now(ZoneInfo(str(pk.get("tz") or "UTC")))
+        if now is not None and now.tzinfo is not None:
+            t = now.astimezone(ZoneInfo(str(pk.get("tz") or "UTC")))
+        a, _, b = str(pk.get("days") or "mon-sun").partition("-")
+        lo, hi = DAYS.index(a.strip()[:3]), DAYS.index((b or a).strip()[:3])
+        if not lo <= t.weekday() <= hi:
+            return 1.0
+        for h in pk.get("hours") or []:
+            s, _, e = str(h).partition("-")
+            if int(s) <= t.hour < int(e):
+                return float(pk.get("multiplier") or 1.0)
+    except (ValueError, KeyError):
+        return 1.0
+    return 1.0
 
 
 def add_cost(backend: Backend, data: dict) -> None:
@@ -167,10 +210,10 @@ def add_cost(backend: Backend, data: dict) -> None:
     u = data.get("usage") if isinstance(data, dict) else None
     if not pr or not isinstance(u, dict) or "cost_usd" in u:
         return
-    cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+    cached = cache_hit_tokens(u) or 0
     inp = max(0, (u.get("prompt_tokens") or 0) - cached)
     cost = (inp * float(pr.get("input", 0)) + cached * float(pr.get("cache_read", pr.get("input", 0)))
-            + (u.get("completion_tokens") or 0) * float(pr.get("output", 0))) / 1e6
+            + (u.get("completion_tokens") or 0) * float(pr.get("output", 0))) / 1e6 * peak_factor(pr)
     u["cost_usd"] = round(cost, 6)
 
 

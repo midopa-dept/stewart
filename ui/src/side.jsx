@@ -227,8 +227,10 @@ export function ExternalChip() {
   const u = b.used || {}
   const k = n => n >= 1000000 ? (n / 1000000).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n || 0)
   const short = ext.replace(/\(.*\)/, '').trim()
+  const cache = u.cache_seen ? Math.round(100 * (u.cache_hit || 0) / u.cache_seen) : null   // 캐시 칸을 주는 API 만(판 86)
   return <span class="chip !text-warn flex-none" title={`바깥 API: ${ext} — 이 대화의 글·파일 내용·도구 결과가 그 회사 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)\n이 허브가 켜진 뒤 누계: 호출 ${u.calls || 0}번 · 입력 ${u.prompt || 0} · 출력 ${u.completion || 0} 토큰` + (u.cost_usd ? ` · $${u.cost_usd}` : '')}>
-    <span class="max-md:hidden">바깥 API: </span>{short}<span> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span></span>
+    <span class="max-md:hidden">바깥 API: </span>{short}<span> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span>
+    {cache != null && <span> · 캐시 {cache}%</span>}{u.cost_usd ? <span> · ${u.cost_usd < 0.01 ? u.cost_usd.toFixed(4) : u.cost_usd.toFixed(2)}</span> : null}</span>
 }
 
 export function Sidebar() {

@@ -518,6 +518,18 @@ class ChatSession:
         return f"사용자가 stewart 설정 파일 쓰기를 거부하고 이렇게 말했다: {ans}"
 
     # ---- 할 일 목록이 걸음을 따라오게(판 85): 실행기가 대신 체크하지는 않는다(틀리게 표시하는 것이 더 나쁘다) ----
+    def _prefix_check(self, step: int) -> None:
+        """판 86: 요청 앞부분(지시문 + 도구 정의)이 단계마다 바이트 그대로인가 — 접두 캐시(DeepSeek 등)가 맞으려면 같아야 한다.
+        바뀌면 사건 prefix_changed 와 st["prefix_changes"] 로 센다(바뀐 것이 잘못은 아니다: 압축·도구 목록 바꿈 뒤에는 바뀐다)."""
+        import hashlib
+        sysm = self.messages[0].get("content") if self.messages and self.messages[0].get("role") == "system" else ""
+        h = hashlib.sha256((json.dumps(sysm, ensure_ascii=False) + json.dumps(self.tool_defs or [], ensure_ascii=False)).encode()).hexdigest()[:16]
+        prev = getattr(self, "_prefix_h", None)
+        self._prefix_h = h
+        if prev is not None and prev != h:
+            self.st["prefix_changes"] = self.st.get("prefix_changes", 0) + 1
+            self.rec.event("prefix_changed", step=step)
+
     def _todo_open(self) -> list:
         return [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
 
@@ -936,6 +948,7 @@ class ChatSession:
             est = (last + est_tokens(json.dumps(self.messages[self._pmark:], ensure_ascii=False)) if last
                    else est_tokens(json.dumps(self.messages, ensure_ascii=False)))
             kw = {**mt, **TH.call_kwargs(self.backend, self.tks, mt.get("thinking"), est)}   # 생각 켬 차례만
+            self._prefix_check(step)
             try:
                 if self.stream:
                     self.ui.stream_start()
