@@ -32,3 +32,29 @@ import urllib.request  # noqa: E402
 
 # 127.0.0.1 시험 서버로 가는 요청: 환경·시스템 프록시를 타지 않는다(macOS urllib 은 시스템 프록시를 따른다)
 LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# 시험 하나 감시(판 67): 공개 트리 시험이 가끔 30분 제한까지 멈췄다. 시험 하나가 STEWART_TEST_TIMEOUT 초(기본 240)를 넘으면
+# 모든 스레드의 스택을 stderr 에 찍고 끝낸다 — 멈춤이 바로 실패 + 스택으로 바뀐다. 0 이면 끔
+import faulthandler as _fh  # noqa: E402
+import unittest as _ut  # noqa: E402
+
+_TEST_TIMEOUT = float(os.environ.get("STEWART_TEST_TIMEOUT") or 240)
+if _TEST_TIMEOUT > 0 and not getattr(_ut.TestCase, "_stewart_watchdog", False):
+    _orig_run = _ut.TestCase.run
+
+    def _run_with_watchdog(self, result=None):
+        import sys as _sys
+        _sys.stderr.write("")   # stderr 가 열려 있는지
+        _fh.dump_traceback_later(_TEST_TIMEOUT, exit=True)
+        try:
+            return _orig_run(self, result)
+        finally:
+            _fh.cancel_dump_traceback_later()
+    _ut.TestCase.run = _run_with_watchdog
+    _ut.TestCase._stewart_watchdog = True
+    # 끝낼 때(남은 일반 스레드를 기다리는 자리)에서 멈추는 것도 잡는다: 그 자리에 들어서면 120초 감시를 건다
+    try:
+        import threading as _th
+        _th._register_atexit(lambda: _fh.dump_traceback_later(120, exit=True))
+    except Exception:
+        pass

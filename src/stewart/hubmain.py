@@ -137,6 +137,14 @@ class HubMainUI(HubUI):
 
     def compacted(self, kind: str, info: dict) -> None:
         """chat 이 문맥을 줄였을 때 화면 한 줄(판 65)."""
+        if kind == "nothing":
+            self._add("compact", f"문맥 {info.get('pct')}% — 줄일 오래된 도구 결과도, 아직 접을 앞 대화도 없다(최근 몫은 원문 유지). "
+                                 "계속 차면 [토큰] 탭의 [요약해 접기] 또는 새 메인")
+            return
+        if kind == "summary_fail":
+            self._add("warn", f"문맥이 차서 앞 대화를 요약해 접기를 못 했다({info.get('error')}) — 다음 차례에 다시 해 본다. "
+                              "급하면 작업 내역 [토큰] 탭의 [요약해 접기]")
+            return
         if kind == "clip":
             self._add("compact", f"문맥 줄임: 오래된 도구 결과 {info.get('clipped', 0)}개를 줄였다(원문은 기록에, 필요하면 다시 읽는다)")
         else:

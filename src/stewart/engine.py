@@ -14,7 +14,7 @@ from datetime import datetime
 
 from . import __version__, bounds as BND, hooks as HK, memfile, memory as MEM, selfcheck as SC, think as TH, tools as T
 from .backend import BackendError, chat, is_context_overflow, sync_context
-from .compact import Compactor, est_tokens, repeat_stats, reply_reserve, settings as compact_settings
+from .compact import Compactor, est_tokens, mask_roll, repeat_stats, reply_reserve, settings as compact_settings
 from .check import CheckContext, ToolCall, load_check
 from .config import Backend, Profile
 from .record import Recorder
@@ -192,6 +192,65 @@ def _looks_like_toolcall(text: str, names: list[str]) -> bool:
     if re.search(r"<\|?tool_call|tool_code|\"function\"\s*:|\"name\"\s*:\s*\"(" + "|".join(names) + r")\"", text):
         return True
     return bool(re.search(r"\b(" + "|".join(names) + r")\s*[({]", text))
+
+
+def compact_mode(env=None) -> dict | None:
+    """평가 손잡이(판 66, 압축 방식 비교 SW-18). 주지 않으면 None — 평가 길 동작은 예전 그대로.
+    STEWART_COMPACT_MODE = off | mask | mask+sum | sum | mask-roll, STEWART_COMPACT_WINDOW = 문턱을 잴 창(토큰, 서빙 창은 그대로)."""
+    env = os.environ if env is None else env
+    m = env.get("STEWART_COMPACT_MODE")
+    w = env.get("STEWART_COMPACT_WINDOW")
+    if not m and not w:
+        return None
+    src, bad = [], []
+    mode = "mask+sum"
+    if m:
+        if m in ("off", "mask", "mask+sum", "sum", "mask-roll"):
+            mode, _ = m, src.append("STEWART_COMPACT_MODE")
+        else:
+            bad.append("STEWART_COMPACT_MODE")
+    window = None
+    if w:
+        if w.isdigit() and int(w) >= 1000:
+            window, _ = int(w), src.append("STEWART_COMPACT_WINDOW")
+        else:
+            bad.append("STEWART_COMPACT_WINDOW")
+    ratio = {"off": 0, "mask": 0.5, "mask+sum": 0.5, "sum": None, "mask-roll": 0}[mode]
+    return {"mode": mode, "window": window, "ratio": ratio, "env": src, "ignored": bad}
+
+
+def _fold_summary(messages: list[dict], backend, rec, cstate: dict, step: int, mode: str, last: int) -> dict | None:
+    """평가 길 요약 접기: 시스템·과제(앞 2개)와 최근 10단계는 남기고 그 사이를 요약 한 쪽(사람 자리)으로. 원문은 기록 folds/."""
+    from .compact import ask_summary, summary_text
+    idx = [i for i, m in enumerate(messages) if m.get("role") == "assistant"]
+    if len(idx) <= 10:
+        return None
+    cut = idx[-10]
+    span = messages[2:cut]
+    if len(span) < 3:
+        return None
+    try:
+        summ = ask_summary(chat, backend, summary_text(span))
+    except Exception as e:
+        rec.event("summarize_fail", step=step, mode=mode, error=f"{type(e).__name__}: {e}"[:300])
+        return None
+    if not summ:
+        return None
+    cstate["folds"] += 1
+    try:
+        fd = rec.dir / "folds"
+        fd.mkdir(parents=True, exist_ok=True)
+        (fd / f"{cstate['folds']:03d}.json").write_text(json.dumps({"step": step, "mode": mode, "summary": summ, "messages": span},
+                                                                   ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    before = len(messages)
+    messages[2:cut] = [{"role": "user", "content": "[엔진] 앞 과정 요약 — 문맥을 줄이려고 엔진이 앞 단계들을 접었다. 과제의 지시·금지는 그대로 지킨다. "
+                                                  "실패 기록의 길은 되풀이하지 않는다.\n\n" + summ}]
+    info = {"mode": mode, "step": step, "nth": cstate["folds"], "folded_messages": cut - 2, "before_messages": before,
+            "after_messages": len(messages), "before_tokens": last, "summary_chars": len(summ)}
+    rec.event("summarize", **info)
+    return info
 
 
 def web_settings() -> dict:
@@ -406,10 +465,20 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     comps = CM.Components(rec)            # 구성 요소 사건 기록(기록만, STEWART_COMPONENT_EVENTS=0 이면 끔)
     prompt_mark = 0                      # 마지막 응답 때의 메시지 수(그 뒤 붙은 것만 어림해 프롬프트 크기를 잰다)
     cset = compact_settings(profile, 0.7, 8)       # 프로필 + STEWART_COMPACT_*
-    comp = Compactor(backend.max_context, cset["ratio"], cset["keep_recent"], fold=cset["fold"],
-                     plan_count=lambda: len(env.plan.items) if env.plan is not None else 0,
-                     reserve=(tks["max_tokens"] if tks["max_tokens"] and TH.is_on(backend, None)
-                              else reply_reserve(profile, backend)))
+    cmode = compact_mode()                         # 평가 손잡이(판 66). 없으면 None = 예전 동작 그대로
+    if cmode:
+        cset = {**cset, "mode": cmode["mode"], "window": cmode["window"], "env": cset["env"] + cmode["env"],
+                "ignored": cset["ignored"] + cmode["ignored"]}
+        if cmode["ratio"] is not None:
+            cset["ratio"] = cmode["ratio"]
+
+    def new_comp():
+        return Compactor((cmode["window"] or backend.max_context) if cmode else backend.max_context, cset["ratio"], cset["keep_recent"], fold=cset["fold"],
+                         plan_count=lambda: len(env.plan.items) if env.plan is not None else 0,
+                         reserve=(tks["max_tokens"] if tks["max_tokens"] and TH.is_on(backend, None)
+                                  else reply_reserve(profile, backend)), tail_tokens=bool(cmode))
+    comp = new_comp()
+    cstate = {"clip_step": -1, "sum_step": -1, "folds": 0}
     if cset["env"] or cset["ignored"]:
         rec.event("compact_settings", **cset)
     consecutive = 0
@@ -946,8 +1015,26 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             comps.fire("failure_stop", step, "same_call_failed", "stop", reason=stop_reason,
                        last_k=max(fail_count.values(), default=0))
             break
-        c = comp.maybe(messages, st["last_prompt_tokens"], step)
+        mode = cmode["mode"] if cmode else None
+        win = comp.full_context
+        last = st["last_prompt_tokens"]
+        if mode == "mask-roll":   # 매 단계 최근 10단계 밖 관찰 가리기(논문 꼴 — prefix 캐시는 매번 깨진다)
+            n_masked = mask_roll(messages, 10)
+            if n_masked:
+                rec.event("compact", mode=mode, step=step, masked=n_masked, before_tokens=last)
+        c = None if mode in ("off", "sum", "mask-roll") else comp.maybe(messages, last, step)
         if c:
+            cstate["clip_step"] = step
+        sum_at = 0.7 if mode == "mask+sum" else 0.5 if mode == "sum" else None
+        if (sum_at and not c and last >= sum_at * win and step > max(cstate["clip_step"] if mode == "mask+sum" else -1,
+                                                                    cstate["sum_step"])):
+            r = _fold_summary(messages, backend, rec, cstate, step, mode, last)
+            if r:
+                comp = new_comp()
+                prompt_mark, st["last_prompt_tokens"] = 0, 0
+                cstate["sum_step"] = step
+        if c:
+            c = {**c, **({"mode": mode} if mode else {})}
             rec.event("compact", **c)
             comps.fire("compact", step, "threshold", "compact", tokens_before=c.get("before_tokens"),
                        clipped=c.get("clipped"), chars_before=c.get("chars_before"), chars_after=c.get("chars_after"))

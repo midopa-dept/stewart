@@ -15,3 +15,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stewart"]
+
+# 내장 프로필·백엔드 예시를 wheel 안에(판 67) — 저장소 뿌리에 있어 wheel 만 깔면 빠졌다
+[tool.hatch.build.targets.wheel.force-include]
+"profiles" = "stewart/_profiles"
+"backends.example.toml" = "stewart/_data/backends.example.toml"

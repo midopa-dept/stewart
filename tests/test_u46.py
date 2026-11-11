@@ -49,6 +49,9 @@ class TSummary(MainBase):
         self.assertEqual(ids, calls)                                                       # 툴콜 짝이 깨지지 않음
         self.assertTrue(any(m["kind"] == "compact" and "요약으로 접음" in m["text"] for m in self.main.state()["main_log"]))
         self.assertEqual(self.main.state()["tokens"]["summaries"], 1)
+        fold = json.loads((s.rec.dir / "folds" / "001.json").read_text(encoding="utf-8"))   # 접은 원문 보관
+        self.assertEqual(fold["messages"][0]["content"], "사람 0: 앞으로는 테스트를 먼저 돌려라")
+        self.assertIn("실패 기록", C.SUMMARY_SYSTEM)
         with mock.patch.object(C, "chat", fake):
             self.assertFalse(self.main.compact_now("summary")["ok"])                       # 더 접을 것 없음
 
@@ -106,11 +109,13 @@ class TCompactFix(MainBase):
 
     def test_keep_share_in_tokens(self):
         from stewart.compact import Compactor
-        c = Compactor(1000, ratio=0.5, keep_recent=8, start=1)
+        c = Compactor(1000, ratio=0.5, keep_recent=8, start=1, tail_tokens=True)   # chat·허브
         msgs = [{"role": "system", "content": "s"}] + [{"role": "tool", "tool_call_id": str(i), "content": "한" * 400} for i in range(8)]
         r = c.maybe(msgs, 600)
         self.assertIsNotNone(r)                                   # 글자/3 이면 최근 8개가 다 "작아" 보여 줄일 것이 없었다
         self.assertGreater(r["to"], 1)
+        old = Compactor(1000, ratio=0.5, keep_recent=8, start=1)                    # 평가 길 기본: 예전 글자 셈 그대로
+        self.assertFalse(old.tail_tokens)
 
     def test_hub_compact_command(self):
         self.assertEqual(self.main.send("/compact"), "compacted")

@@ -59,10 +59,9 @@ CONFIRM_TOOLS = WRITE_TOOLS | {"run_shell"}
 COMPACT_RATIO = 0.5    # 마지막 프롬프트 토큰이 max_context 의 이 비율을 넘으면 오래된 도구 결과를 줄인다(판 65: 0.75→0.5 — 27B·150k 에서 긴 문맥은 느리다)
 SUMMARY_RATIO = 0.7    # 줄이고 나서도 이 비율을 넘으면 앞 대화를 요약 한 쪽으로 접는다(Claude Code 의 자동 compact 처럼, 판 65)
 SUMMARY_KEEP_TURNS = 2 # 접을 때 원문 그대로 남기는 최근 사람 차례 수
+SUMMARY_KEEP_STEPS = 10   # 차례가 셋이 안 되는 긴 대화(한 차례가 아주 긴 것)에서 원문 그대로 남기는 최근 단계 수
 SUMMARY_MAX_CHARS = 60000
-SUMMARY_SYSTEM = ("너는 대화 요약가다. 코딩 에이전트와 사람의 앞 대화를 받아, 에이전트가 이어서 일하는 데 필요한 것만 한국어로 정리한다. "
-                  "꼴: ## 목표·사람 요구(사람 말의 지시·금지·선호는 빠짐없이) / ## 한 일과 결과(바꾼 파일·돌린 명령·확인된 사실, 파일:줄) / "
-                  "## 정한 것 / ## 남은 일·막힌 것 / ## 주의(실패한 길·하지 말 것). 추측을 사실처럼 쓰지 않는다. 비밀 값은 옮기지 않는다. 2000자 안.")
+from .compact import SUMMARY_SYSTEM, summary_text, ask_summary   # noqa: E402 — 요약 접기 공용(판 66, 평가 길과 같은 것)
 KEEP_RECENT = 8        # 줄이지 않고 둘 최근 메시지 수
 CLIP_OLD = 300
 
@@ -702,9 +701,16 @@ class ChatSession:
         c = self.comp.maybe(self.messages, last, self.st["steps"], force=force)
         if not c:
             win = getattr(self.comp, "full_context", None) or self.backend.max_context
+            done = None
             if (self.summary_on and not force and last and win and last >= SUMMARY_RATIO * win
                     and self.st["steps"] > getattr(self, "_clip_step", -1)):   # 줄인 뒤 다시 잰 값으로만
-                self.summarize(reason="auto")
+                done = self.summarize(reason="auto")
+            if (not done and not force and last and win and last >= self.comp.next_at
+                    and getattr(self, "_nothing_said", -1) != self.st["turns"]):   # 문턱을 넘었는데 줄일 것도 접을 것도 없다 — 조용히 넘기지 않는다
+                self._nothing_said = self.st["turns"]
+                hook = getattr(self.ui, "compacted", None)
+                if hook is not None:
+                    hook("nothing", {"pct": round(100 * last / win)})
             return 0
         self.st["compactions"] += 1
         self._clip_step = self.st["steps"]
@@ -729,38 +735,47 @@ class ChatSession:
         """앞 대화(시스템 다음 ~ 최근 SUMMARY_KEEP_TURNS 사람 차례 앞)를 도구 없는 한 번으로 요약해 한 쪽으로 접는다.
         접을 것이 없거나 요약을 못 받으면 None(대화는 그대로). 기록(transcript·events)에는 원문이 그대로 남는다."""
         starts = self._turn_starts()
-        if len(starts) <= SUMMARY_KEEP_TURNS:
-            return None
-        cut = starts[-SUMMARY_KEEP_TURNS]
+        keep_user = None
+        if len(starts) > SUMMARY_KEEP_TURNS and starts[-SUMMARY_KEEP_TURNS] > 3:
+            cut = starts[-SUMMARY_KEEP_TURNS]
+        else:   # 한 차례가 아주 긴 경우: 최근 SUMMARY_KEEP_STEPS 단계 앞을 접고, 지금 차례의 사람 말은 원문 그대로 요약 뒤에 붙인다
+            idx = [i for i, m in enumerate(self.messages) if m.get("role") == "assistant"]
+            if len(idx) <= SUMMARY_KEEP_STEPS:
+                return None
+            cut = idx[-SUMMARY_KEEP_STEPS]
+            last_user = max((i for i in starts if i < cut), default=None)
+            if last_user is not None:
+                keep_user = str(self.messages[last_user].get("content") or "")
         span = self.messages[1:cut]
         if len(span) < 3:
             return None
-        lines = []
-        for m in span:
-            role = {"user": "사람", "assistant": "에이전트", "tool": "도구 결과"}.get(m.get("role"), m.get("role"))
-            body = str(m.get("content") or "")
-            lim = 600 if m.get("role") == "tool" else 1500
-            body = body if len(body) <= lim else body[:lim] + f"…({len(body)}자)"
-            calls = "; ".join(f"{(tc.get('function') or {}).get('name')}({str((tc.get('function') or {}).get('arguments') or '')[:200]})"
-                              for tc in m.get("tool_calls") or [])
-            lines.append(f"[{role}] {body}" + (f"\n  호출: {calls}" if calls else ""))
-        text = "\n".join(lines)
-        if len(text) > SUMMARY_MAX_CHARS:
-            text = "…(앞은 너무 길어 끝 부분만)\n" + text[-SUMMARY_MAX_CHARS:]
+        text = summary_text(span)
         try:
-            resp, _dt = chat(self.backend, [{"role": "system", "content": SUMMARY_SYSTEM},
-                                            {"role": "user", "content": "앞 대화:\n" + text}], None, max_tokens=1500, thinking=False)
-            summ = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            summ = ask_summary(chat, self.backend, text)
         except Exception as e:
             self.rec.event("summarize_fail", reason=reason, error=f"{type(e).__name__}: {e}"[:300])
+            hook = getattr(self.ui, "compacted", None)
+            if hook is not None:   # 조용히 넘어가지 않는다(사용자 "자동 compact 안 하는 것 같다")
+                hook("summary_fail", {"reason": reason, "error": f"{type(e).__name__}: {e}"[:160]})
             return None
         if not summ:
             return None
         before = len(self.messages)
+        n_fold = self.st.get("summaries", 0) + 1
+        try:   # 접은 원문을 따로 남긴다(감사·되돌림: 이 파일의 messages 를 요약 자리에 되넣으면 접기 전 대화)
+            fd = self.rec.dir / "folds"
+            fd.mkdir(parents=True, exist_ok=True)
+            (fd / f"{n_fold:03d}.json").write_text(json.dumps({"reason": reason, "summary": summ, "messages": span},
+                                                             ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+        tail_user = (f"\n\n[지금 차례 사람 말(원문)]\n{keep_user}" if keep_user else "")
+        rest = self.messages[cut:]
         self.messages = [self.messages[0],
                          {"role": "user", "content": "[엔진] 앞 대화 요약 — 문맥을 줄이려고 엔진이 앞 대화를 접었다. 원문은 기록에 있다"
-                                                     "(memory_search·기록 파일). 사람의 지시·금지는 그대로 지킨다.\n\n" + summ},
-                         {"role": "assistant", "content": "앞 대화 요약을 받았다. 이어 간다."}] + self.messages[cut:]
+                                                     "(memory_search·기록 파일). 사람의 지시·금지는 그대로 지킨다. 이어 가기 전에 할 일 목록(todo_read)과 "
+                                                     "바꾼 파일의 지금 상태를 한 번 확인하고, 실패 기록의 길은 되풀이하지 않는다.\n\n" + summ + tail_user}] + \
+            ([] if rest and rest[0].get("role") == "assistant" else [{"role": "assistant", "content": "앞 대화 요약을 받았다. 이어 간다."}]) + rest
         self.comp = self._new_compactor()
         self.st["last_prompt_tokens"], self._pmark = 0, 0
         self.st["summaries"] = self.st.get("summaries", 0) + 1
@@ -783,7 +798,7 @@ class ChatSession:
         c = compact_settings(p, COMPACT_RATIO, KEEP_RECENT)        # 프로필 + STEWART_COMPACT_*
         from .compact import reply_reserve
         return Compactor(self.backend.max_context, c["ratio"], c["keep_recent"], CLIP_OLD, start=1, fold=c["fold"],
-                         reserve=reply_reserve(p, self.backend))
+                         reserve=reply_reserve(p, self.backend), tail_tokens=True)
 
     def _close_open_calls(self, reason: str) -> None:
         """중단으로 결과 없이 남은 tool_calls 에 결과를 채운다(다음 요청이 형식 오류가 나지 않게)."""

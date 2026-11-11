@@ -19,6 +19,8 @@ def _xdg(var: str, fallback: str) -> Path:
 # 실행 기록 기본 위치: $XDG_STATE_HOME/stewart/runs(없으면 ~/.local/state/stewart/runs). STEWART_RUNS_DIR·--runs-dir 이 이긴다
 DEFAULT_RUNS_DIR = _xdg("XDG_STATE_HOME", "~/.local/state") / "stewart" / "runs"
 PROFILES_DIR = REPO_ROOT / "profiles"
+if not PROFILES_DIR.is_dir() and (Path(__file__).resolve().parent / "_profiles").is_dir():
+    PROFILES_DIR = Path(__file__).resolve().parent / "_profiles"   # wheel 로 깐 경우(판 67): 패키지 안 사본
 
 
 def user_profiles_dir() -> Path:
@@ -89,7 +91,10 @@ def backends_path() -> Path:
         return user
     if DEFAULT_BACKENDS.is_file():
         return DEFAULT_BACKENDS
-    raise ConfigError(f"백엔드 설정이 없다: {REPO_ROOT / 'backends.example.toml'} 을 {user} 로 복사해 고치거나 "
+    ex = REPO_ROOT / "backends.example.toml"
+    if not ex.is_file():
+        ex = Path(__file__).resolve().parent / "_data" / "backends.example.toml"   # wheel 로 깐 경우
+    raise ConfigError(f"백엔드 설정이 없다: {ex} 을 {user} 로 복사해 고치거나 "
                       "STEWART_BACKENDS=<파일> 을 준다")
 
 

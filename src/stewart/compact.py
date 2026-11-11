@@ -188,7 +188,7 @@ def settings(profile, default_ratio: float, default_keep: int, env=None) -> dict
 class Compactor:
     def __init__(self, max_context: int, ratio: float = 0.7, keep_recent: int = 8, clip: int = CLIP,
                  start: int = 2, re_arm: float = 0.1, keep_share: float = 0.25, fold: bool = False, plan_count=None,
-                 reserve: int = 0):
+                 reserve: int = 0, tail_tokens: bool = False):
         """fold=True(정리 실행): 도구 결과를 한 줄 머리로 접고, keep_recent 를 메시지 수가 아니라 최근 단계 수
         (assistant 메시지 수)로 센다. plan_count() 는 접을 때 계획 건수를 머리에 적는다.
         reserve: 단계당 응답 상한(max_tokens). 판단은 창 = max_context − reserve 로 한다."""
@@ -199,7 +199,11 @@ class Compactor:
         self.full_context = max_context
         # 최근 몫 상한: 남길 최근 메시지 글자 합이 창의 keep_share 만큼(토큰≈글자/3)을 넘으면 더 앞당겨 줄인다.
         # 큰 도구 결과 몇 개가 최근 keep_recent 안에 다 들어 있으면 줄일 것이 없어지기 때문(작은 모델 시험에서 본 것)
-        self.keep_tokens = int(keep_share * self.max_context)   # 판 65: 글자/3 으로 재면 한글·숫자에서 최근 몫이 창 대부분이 됐다 — 토큰 어림으로
+        # 최근 몫을 무엇으로 재나: tail_tokens=True(chat·허브, 평가 손잡이)는 토큰 어림 — 글자/3 으로 재면 한글·숫자에서 최근 몫이
+        # 창 대부분이 되어 줄일 것이 없었다(판 65). 평가 길 기본(False)은 기준선을 흔들지 않게 예전 글자 셈 그대로
+        self.tail_tokens = tail_tokens
+        self.keep_tokens = int(keep_share * self.max_context)
+        self.keep_chars = int(keep_share * self.max_context * 3)
         self.ratio = ratio
         self.keep_recent = keep_recent
         self.clip = clip
@@ -225,10 +229,13 @@ class Compactor:
             end = max(self.upto, end)
         else:
             end = max(self.upto, len(messages) - k)
-            sizes = [est_tokens(json.dumps(m, ensure_ascii=False)) for m in messages[end:]]
+            meas = (lambda m: est_tokens(json.dumps(m, ensure_ascii=False))) if self.tail_tokens \
+                else (lambda m: len(json.dumps(m, ensure_ascii=False)))
+            lim = self.keep_tokens if self.tail_tokens else self.keep_chars
+            sizes = [meas(m) for m in messages[end:]]
             tail = sum(sizes)
             j = 0
-            while end < len(messages) - 2 and tail > self.keep_tokens:   # 마지막 2개(직전 호출과 그 결과)는 늘 남긴다
+            while end < len(messages) - 2 and tail > lim:   # 마지막 2개(직전 호출과 그 결과)는 늘 남긴다
                 tail -= sizes[j]
                 j += 1
                 end += 1
@@ -260,3 +267,55 @@ class Compactor:
         if self.ratio > 0:   # 실제로 줄어든 크기 기준으로 다시 문턱을 건다
             self.next_at = max(self.ratio * self.max_context, prompt_tokens + self.re_arm * self.max_context)
         return p
+
+
+# ── 요약 접기 공용(판 65~66: chat·허브, 판 66: 평가 손잡이 STEWART_COMPACT_MODE) ──
+SUMMARY_SYSTEM = ("너는 대화 요약가다. 코딩 에이전트와 사람의 앞 대화를 받아, 에이전트가 이어서 일하는 데 필요한 것만 한국어로 정리한다. "
+                  "빠뜨리는 것이 더 나쁘다(먼저 빠짐없이, 그다음 군더더기를 뺀다). "
+                  "꼴: ## 목표·사람 요구(사람 말의 지시·금지·선호는 빠짐없이, 가능하면 원문 그대로) / ## 파일 상태(바꾼 파일과 지금 어떻게 돼 있나) / "
+                  "## 한 일과 결과(돌린 명령·확인된 사실, 파일:줄) / ## 정한 것(설계·방향과 까닭) / ## 남은 일·안 풀린 문제 / "
+                  "## 실패 기록(해 봤는데 안 된 길과 까닭 — 되풀이하지 않게). 확인 안 된 것은 '추측'이라 적는다. 비밀 값은 옮기지 않는다. 2500자 안.")
+SUMMARY_MAX_CHARS = 60000
+
+
+def summary_text(span: list[dict]) -> str:
+    """접을 메시지들을 요약기에 넘길 글로(도구 결과 600자·나머지 1500자에서 자르고, 너무 길면 끝 부분만)."""
+    lines = []
+    for m in span:
+        role = {"user": "사람", "assistant": "에이전트", "tool": "도구 결과"}.get(m.get("role"), m.get("role"))
+        body = str(m.get("content") or "")
+        lim = 600 if m.get("role") == "tool" else 1500
+        body = body if len(body) <= lim else body[:lim] + f"…({len(body)}자)"
+        calls = "; ".join(f"{(tc.get('function') or {}).get('name')}({str((tc.get('function') or {}).get('arguments') or '')[:200]})"
+                          for tc in m.get("tool_calls") or [])
+        lines.append(f"[{role}] {body}" + (f"\n  호출: {calls}" if calls else ""))
+    text = "\n".join(lines)
+    if len(text) > SUMMARY_MAX_CHARS:
+        text = "…(앞은 너무 길어 끝 부분만)\n" + text[-SUMMARY_MAX_CHARS:]
+    return text
+
+
+def ask_summary(chat_fn, backend, text: str) -> str:
+    """도구 없는 한 번(생각 끔)으로 요약을 받는다. 빈 글이면 빈 글."""
+    resp, _dt = chat_fn(backend, [{"role": "system", "content": SUMMARY_SYSTEM}, {"role": "user", "content": "앞 대화:\n" + text}],
+                        None, max_tokens=1500, thinking=False)
+    return (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+
+
+def mask_roll(messages: list[dict], keep_steps: int = 10, start: int = 2) -> int:
+    """굴러가는 가리기(arXiv 2508.21433 의 M=10 꼴): 최근 keep_steps 단계(assistant 메시지) 앞의 도구 결과를 자리표로.
+    추론·행동(assistant)은 그대로. 이미 가린 것은 다시 고치지 않는다. 가린 수."""
+    idx = [i for i, m in enumerate(messages) if m.get("role") == "assistant"]
+    if len(idx) <= keep_steps:
+        return 0
+    end = idx[-keep_steps]
+    n = 0
+    for m in messages[start:end]:
+        c = m.get("content")
+        if m.get("role") == "tool" and isinstance(c, str) and not c.startswith(MASKED):
+            m["content"] = MASKED + f"(원래 {len(c)}자 — 필요하면 다시 부른다)"
+            n += 1
+    return n
+
+
+MASKED = "[가림: 이전 관찰]"
