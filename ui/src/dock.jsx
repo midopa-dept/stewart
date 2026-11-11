@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { post, get, store } from './lib.js'
 import { copyText, flash } from './copy.js'
+import { prepImage } from './imgprep.js'
 import { hub, queue, busy, refresh, toast, view, sessions } from './state.js'
 
 const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
@@ -235,13 +236,15 @@ export function Composer({ target }) {
     setText(v); hideSug()
     requestAnimationFrame(() => { const t = ta.current; const p = a + it.insert.length; t.focus(); t.setSelectionRange(p, p) })
   }
-  function addFiles(files) {
+  async function addFiles(files) {   // 큰 폰 사진·HEIC 는 줄여 JPEG 로(imgprep.js, 판 70)
     if (!vision) return
-    for (const f of files) {
-      if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) continue
-      const rd = new FileReader()
-      rd.onload = () => setImgs(xs => xs.length >= IMG_MAX ? xs : [...xs, { name: f.name || 'paste.png', size: f.size, data: String(rd.result).split(',')[1] }])
-      rd.readAsDataURL(f)
+    for (const f of [...files]) {
+      if (!/^image\//.test(f.type) && !/\.(heic|heif)$/i.test(f.name || '')) continue
+      try {
+        const x = await prepImage(f)
+        if (!x) { toast(`${f.name || '사진'}: 이 브라우저가 열 수 없는 꼴이다(HEIC 면 사진 앱에서 JPEG 로 보내기)`); continue }
+        setImgs(xs => xs.length >= IMG_MAX ? xs : [...xs, { name: x.name, size: x.size, data: x.data }])
+      } catch (e) { toast('사진을 못 읽었다: ' + (e?.message || e)) }
     }
   }
   async function send(kind) {
@@ -318,7 +321,7 @@ export function Composer({ target }) {
           onKeyDown={onKey} onBlur={() => setTimeout(hideSug, 150)}
           onPaste={e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length && vision) { e.preventDefault(); addFiles(fs) } }} />
         <div class="flex items-center gap-1.5 mt-1">
-          {vision && <label class="btn btn-ghost px-2.5" title="이미지 붙이기(붙여넣기·끌어다 놓기도 됨)">＋<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={e => { addFiles(e.currentTarget.files); e.currentTarget.value = '' }} /></label>}
+          {vision && <label class="btn btn-ghost px-2.5" title="이미지 붙이기(붙여넣기·끌어다 놓기도 됨)">＋<input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { addFiles(e.currentTarget.files); e.currentTarget.value = '' }} /></label>}
           {isMain && main?.mode && <span class="chip" title="메인 권한 모드">{main.mode}</span>}
           <span class="flex-1" />
           {working && isMain && <span class="chip max-md:hidden">Esc 멈춤</span>}

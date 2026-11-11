@@ -242,7 +242,7 @@ class ChatSession:
         if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(실사용 기본 도구 목록은 그대로)
             defs = [d for d in defs if d["function"]["name"] != "view_image"]
         self.pfl = PC.flags(profile, interactive=True)   # 대화형: Claude Code 꼴 호환 기본 켬(사용자 전역 ~/.claude 는 기본 끔)
-        self.skills = SK.discover(profile.workdir, self.pfl) if (profile.skills is not False and profile.tools) else []   # 세션 시작 때 한 번
+        self.skills = SK.discover(profile.workdir, self.pfl, builtin=SK.builtin_on(True)) if (profile.skills is not False and profile.tools) else []   # 세션 시작 때 한 번
         # 프로젝트 구성: .stewart/commands·agents(호환 .claude/…), 세션 시작 때 한 번
         self.commands = PC.discover_commands(profile.workdir, self.pfl, set(COMMANDS))
         self.agents = PC.discover_agents(profile.workdir, self.pfl) if profile.tools else []

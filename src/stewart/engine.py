@@ -350,7 +350,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         if r.effect == "allow":
             return "allow", ""
         return "deny", f"셸 규칙(deny {r.rule_ids[0]})이 이 명령을 막았다. 다른 방법을 쓰거나 사용자에게 물어라."
-    skill_list = SK.discover(profile.workdir, pfl) if skill_on else []   # 실행 시작 때 한 번
+    skill_list = SK.discover(profile.workdir, pfl, builtin=SK.builtin_on(False)) if skill_on else []   # 실행 시작 때 한 번
     if skill_list:
         tool_defs.append(SK.DEFINITION)
     if not web:  # 검색 주소가 없으면 웹 도구(web_search·web_fetch)를 도구 목록에서 뺀다

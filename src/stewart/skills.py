@@ -99,10 +99,22 @@ def project_dirs(workdir: Path) -> list[Path]:
     return [d / ".stewart" / "skills" for d in search_dirs(Path(workdir))]
 
 
-def discover(workdir: Path, fl=None) -> list[Skill]:
+BUILTIN_DIR = Path(__file__).resolve().parent / "skills_builtin"
+
+
+def builtin_on(interactive: bool) -> bool:
+    """내장 스킬(판 70): 실사용(chat·허브)은 켬, 평가 길(run)은 끔(지시문이 바뀌지 않게). STEWART_BUILTIN_SKILLS=0|1 이 이긴다."""
+    v = os.environ.get("STEWART_BUILTIN_SKILLS")
+    return v == "1" if v in ("0", "1") else interactive
+
+
+def discover(workdir: Path, fl=None, builtin: bool = False) -> list[Skill]:
+    """builtin=True 면 저장소 내장 스킬을 맨 앞(가장 약하게)에 — 사용자 폴더·프로젝트의 같은 이름이 이긴다."""
     from . import projcfg as PC
     found: dict[str, Skill] = {}
     roots = PC.roots("skills", Path(workdir), fl or PC.Flags())   # 호환 → 정본(뒤가 같은 이름을 덮는다)
+    if builtin:
+        roots = [(BUILTIN_DIR, "builtin", "stewart")] + list(roots)
     for root, scope, origin in roots:   # 뒤(정본, 작업 폴더에 가까운 것)가 같은 이름을 덮는다
         try:
             subs = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
