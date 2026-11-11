@@ -45,8 +45,14 @@ class TBundle(unittest.TestCase):
             self.assertIn(s, js)
 
     @unittest.skipUnless(_node_ok(), "node 없음")
-    def test_node_imgprep(self):
-        r = subprocess.run(["node", "--test", "test/imgprep.test.mjs", "test/mdtilde.test.mjs"], cwd=ROOT / "ui", capture_output=True, text=True, timeout=60,
+    def test_node_imgprep(self):   # 꾸러미 없이 도는 시험만(깨끗한 CI 러너에는 node 는 있어도 ui/node_modules 가 없다)
+        r = subprocess.run(["node", "--test", "test/imgprep.test.mjs"], cwd=ROOT / "ui", capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "MISE_OFFLINE": "1"})
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
+
+    @unittest.skipUnless(_node_ok() and (ROOT / "ui" / "node_modules" / "marked").is_dir(), "node 또는 ui/node_modules(marked) 없음")
+    def test_node_mdtilde(self):   # marked 를 불러오므로 npm 꾸러미가 깔린 개발 자리에서만
+        r = subprocess.run(["node", "--test", "test/mdtilde.test.mjs"], cwd=ROOT / "ui", capture_output=True, text=True, timeout=60,
                            env={**os.environ, "MISE_OFFLINE": "1"})
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
 

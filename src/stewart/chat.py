@@ -184,6 +184,15 @@ def _one_line(s: str, n: int = 100) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+TODO_NUDGE_AFTER = 4     # 진행 중 항목이 있는데 도구 호출이 이만큼 지나도록 목록이 그대로면 한 번 끼운다(판 85)
+_STEP_DONE = re.compile(r"(?:단계|step)\s*(\d+)\s*(?:을|를|은|는|이|가)?\s*(?:끝|마쳤|마침|완료|done|finished)|(\d+)\s*단계\s*(?:끝|완료|마침)", re.I)
+
+
+def todo_nudge_on(env=None) -> bool:
+    env = os.environ if env is None else env
+    return env.get("STEWART_TODO_NUDGE", "1") != "0"
+
+
 def TR_keep(mode: str, think, has_calls: bool) -> bool:
     from .toolrepair import keep_reasoning
     return keep_reasoning(mode, think, has_calls)
@@ -507,6 +516,51 @@ class ChatSession:
         if ans.lower() in ("", "n", "no", "ㄴ", "아니"):
             return "사용자가 stewart 설정 파일 쓰기를 거부했다. 설정 파일은 고치지 말고 하려던 바꿈을 보고에 적어라."
         return f"사용자가 stewart 설정 파일 쓰기를 거부하고 이렇게 말했다: {ans}"
+
+    # ---- 할 일 목록이 걸음을 따라오게(판 85): 실행기가 대신 체크하지는 않는다(틀리게 표시하는 것이 더 나쁘다) ----
+    def _todo_open(self) -> list:
+        return [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
+
+    def _todo_watch(self, step: int, calls: list) -> None:
+        if not todo_nudge_on() or "todo_write" not in self.tool_names:
+            return
+        if any(c.get("name") == "todo_write" and c.get("ok") for c in calls):
+            self._todo_since = 0
+            return
+        self._todo_since += len(calls)
+        doing = [t["content"] for t in self._todo_open() if t.get("status") == "in_progress"]
+        if not doing or self._todo_since < TODO_NUDGE_AFTER or self._todo_since - self._todo_nudged_at < TODO_NUDGE_AFTER:
+            return
+        self._todo_nudged_at = self._todo_since
+        RF.append_user(self.messages, f"[엔진] 할 일 목록이 도구 {self._todo_since}번 동안 그대로다(지금 '{doing[0][:60]}' 진행 중). "
+                                      "그 항목을 끝냈으면 todo_write 로 done 으로, 다음 항목을 in_progress 로 고쳐라 — 사람 화면이 이 목록을 본다.")
+        self.rec.event("todo_nudge", step=step, since=self._todo_since)
+        self.comps.fire("todo_nudge", step, "stale_list", "nudge", since=self._todo_since)
+
+    def _todo_final(self, content: str, step: int) -> bool:
+        """답(물음 포함)을 내기 전: 이번 차례에 도구를 썼는데 목록이 그 뒤로 안 바뀌었거나, 답에 "단계 N 끝" 인데 목록의 N 이 안 끝났으면
+        한 번 갱신 차례를 준다(같은 답을 다시 쓰지 말라고). 해야 하면 True."""
+        if not todo_nudge_on() or self._todo_final_done or "todo_write" not in self.tool_names:
+            return False
+        todos = list(getattr(self.env, "todos", None) or [])
+        if not todos or not self._todo_open():
+            return False
+        why = []
+        if self._todo_since > 0 and self._turn_calls:
+            why.append(f"이 차례에 도구를 {self._todo_since}번 쓴 뒤로 목록이 그대로다")
+        for m in _STEP_DONE.finditer(content or ""):
+            k = int(m.group(1) or m.group(2))
+            if 1 <= k <= len(todos) and todos[k - 1].get("status") != "done":
+                why.append(f"답에는 단계 {k} 를 끝냈다고 했는데 목록의 {k}번('{todos[k - 1]['content'][:40]}')은 아직 {todos[k - 1].get('status')}")
+                break
+        if not why:
+            return False
+        self._todo_final_done = True
+        RF.append_user(self.messages, "[엔진] 사람에게 보이기 전에 할 일 목록을 지금 상태로 맞춰라: " + "; ".join(why)
+                       + ". todo_write 로 끝낸 항목은 done, 지금 항목은 in_progress 로 고치고, 앞 답은 이미 사람에게 갔으니 다시 쓰지 말고 짧게 끝낸다.")
+        self.rec.event("todo_final_nudge", step=step, why=why)
+        self.comps.fire("todo_nudge", step, "before_answer", "nudge", reasons=len(why))
+        return True
 
     def _exec(self, rc: dict, step: int) -> dict:
         fn = rc.get("function") or {}
@@ -1071,6 +1125,7 @@ class ChatSession:
         self._fail_steps, self._recent_fail = [], []
         self._cut, self._continued = False, 0
         self._intent_nudged = False
+        self._todo_since, self._todo_nudged_at, self._todo_final_done = 0, 0, False   # 할 일 갱신 장치(판 85) — 차례마다
         budget, n = self.max_steps, 0
         try:
             while True:
@@ -1194,6 +1249,7 @@ class ChatSession:
                             self._narrate_nudged = True
                             RF.append_user(self.messages, NARRATE_NOTE)
                             self.rec.event("narrate_nudge", step=step, silent=self._silent)
+                    self._todo_watch(step, srec["tool_calls"])   # 할 일 목록이 걸음을 따라오는지(판 85)
                     self._attach_viewed()
                     if any_ok:
                         self._fail_steps.clear()
@@ -1289,6 +1345,10 @@ class ChatSession:
                     self.rec.md_step(step, srec)
                     self.rec.event("intent_nudge", step=step)
                     self.ui.dim("  (할 일을 말로만 하고 끝내 도구로 하게 되돌린다)")
+                    continue
+                if self._todo_final(content, step):   # 사람에게 답·물음 전에 할 일 목록을 지금 상태로(판 85, 차례당 한 번)
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
                     continue
                 why = (self.hk.stop(content, step) if self.hk.has("Stop")
                        and self._hook_stops < self.profile.check_on_stop_max else None)

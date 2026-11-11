@@ -236,11 +236,12 @@ def plan(user_dir: Path) -> list[dict]:
     return out
 
 
-def table(rows: list[dict]) -> str:
+def table(rows: list[dict], dry: bool = False) -> str:
     n = {k: sum(1 for r in rows if r["kind"] == k) for k in KINDS}
-    lines = [f"# 기억 옮기기 — {datetime.now().isoformat(timespec='seconds')}", "",
+    lines = [f"# 기억 옮기기{' 미리 보기' if dry else ''} — {datetime.now().isoformat(timespec='seconds')}", "",
              f"옛 기억 {len(rows)}건 → 방침 {n['policy']} · 프로필 {n['profile']} · 자료 {n['knowledge']}. "
-             "옛 파일 remember.jsonl 은 그대로 두었다. 되돌리기: `stewart memory migrate --revert`.", "",
+             + ("미리 보기라 아무것도 바꾸지 않았다. 허브·chat 을 처음 켜면 이대로 옮긴다(옛 파일은 남는다, 끄기 STEWART_MEMORY_MIGRATE=0)."
+                if dry else "옛 파일 remember.jsonl 은 그대로 두었다. 되돌리기: `stewart memory migrate --revert`."), "",
              "| 옛 id | 옛 종류 | 새 갈래 | 범위 | 글 |", "|---|---|---|---|---|"]
     for r in rows:
         sc = "이 프로젝트" + (f"({r['where']})" if r.get("where") else "") if r["scope"] == "project" else "모든 프로젝트"
@@ -255,7 +256,7 @@ def migrate(user_dir: Path, dry_run: bool = False) -> dict:
     rows = plan(d)
     counts = {k: sum(1 for r in rows if r["kind"] == k) for k in KINDS}
     if dry_run:
-        return {"rows": rows, "counts": counts, "table": table(rows)}
+        return {"rows": rows, "counts": counts, "table": table(rows, dry=True)}
     if st.active():
         return {"rows": [], "counts": counts, "skipped": "이미 세 갈래로 옮겼다"}
     day = datetime.now().strftime("%Y%m%d-%H%M%S")

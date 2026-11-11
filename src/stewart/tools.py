@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -58,6 +59,7 @@ class ToolEnv:
     scans: dict = field(default_factory=dict)        # scan id → {path, root, fold}
     plan: object = None                              # organize.plan.Plan(그 실행의 plan.json)
     todos: list = field(default_factory=list)       # [{content, status}] — todo_write 가 통째로 바꾼다
+    todos_at: float | None = None                    # 마지막 todo_write 시각(판 85)
     secret_globs: tuple = fswalk.SECRET_GLOBS     # 비밀 파일 이름 패턴(프로필로 덮어씀). 도구는 읽지도 쓰지도 않는다
     secret_allow: tuple = fswalk.SECRET_ALLOW     # 패턴에 맞아도 허용하는 견본 파일(.env.example 등)
     component_notes: list = field(default_factory=list)   # 도구 안 구성 요소 사건(엔진이 호출마다 가져간다)
@@ -650,6 +652,7 @@ def todo_write(env: ToolEnv, items: list) -> tuple[bool, str]:
     if sum(t["status"] == "in_progress" for t in new) > 1:
         return False, "in_progress 는 한 번에 하나만(지금 하는 일 하나)"
     env.todos = new
+    env.todos_at = time.time()   # 마지막 갱신 시각(판 85 — 허브가 "목록 갱신 HH:MM" 으로 보인다)
     return True, _todo_text(env)
 
 

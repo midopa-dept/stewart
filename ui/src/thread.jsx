@@ -98,7 +98,7 @@ function Step({ s, running }) {
           {name === 'run_shell' ? '$ ' + rest.replace(/^\$\s*/, '') : <><span class="text-mute">{name}</span> {rest}</>}
         </button>
         <div class="text-xs text-mute flex gap-2 flex-wrap">
-          {s.elapsed != null && <span>{s.elapsed < 1 ? s.elapsed.toFixed(1) : Math.round(s.elapsed)}초</span>}
+          {s.elapsed != null && s.elapsed >= 0.05 && <span>{s.elapsed < 1 ? s.elapsed.toFixed(1) : Math.round(s.elapsed)}초</span>}
           {(full || s.out).length > 0 && !shown.length && <button class="underline-offset-2 hover:underline" onClick={toggle}>출력 {(full || s.out).length}줄 ▾</button>}
           {open && full && <span title="모델에게 간 결과 그대로">모델이 받은 결과 그대로</span>}
           {code != null && code !== 0 && <span class="text-bad font-semibold" title="셸 끝 코드">exit {code}</span>}
@@ -310,7 +310,9 @@ function TodoCard({ todos, latest, ts }) {
   return (
     <div class="border border-line rounded-xl bg-panel my-2.5 px-3.5 py-2.5 shadow-card">
       <div class="flex items-center text-[13px] text-mute mb-1"><span class="font-semibold text-fg mr-1.5">할 일</span>{todoCount(todos)}
-        {!latest && <button class="ml-auto hover:underline" onClick={toggle}>접기 ▴</button>}</div>
+        {!latest && <button class="ml-auto hover:underline" onClick={toggle}>접기 ▴</button>}
+        {latest && hub.value?.todos_at && <span class="ml-auto text-xs" title="모델이 목록을 마지막으로 고친 때 — 목록은 모델이 고칠 때만 바뀐다">
+          목록 갱신 {new Date(hub.value.todos_at * 1000).toTimeString().slice(0, 5)}</span>}</div>
       <TodoItems todos={todos} />
     </div>
   )
