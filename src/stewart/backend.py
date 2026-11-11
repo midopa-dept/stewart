@@ -17,10 +17,50 @@ from .config import Backend
 
 
 class BackendError(Exception):
-    def __init__(self, msg: str, status: int | None = None, body: str = ""):
+    def __init__(self, msg: str, status: int | None = None, body: str = "", chain: list | None = None):
         super().__init__(msg)
         self.status = status
         self.body = body
+        self.chain = chain or []   # 연결·TLS·프록시 오류의 예외 사슬 [{type, msg}] (비밀 가림) — 단계 기록에 그대로
+
+
+# 오류 글에 섞일 수 있는 비밀: 키·토큰 꼴, Bearer 머리, 주소 안 사용자:비밀번호, 쿼리의 key=·token= 값
+_SECRET_RX = re.compile(r"(sk-ant-[A-Za-z0-9_\-]{6,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}"
+                        r"|xox[abpr]-[A-Za-z0-9\-]{8,}|AKIA[0-9A-Z]{16})")
+_BEARER_RX = re.compile(r"(?i)(bearer|authorization:?|x-api-key:?)\s+[^\s'\",]+")
+_USERINFO_RX = re.compile(r"(\w+://)[^/\s:@]+:[^/\s@]+@")
+_QUERY_RX = re.compile(r"(?i)([?&](?:api[_-]?key|key|token|access_token|password|secret)=)[^&\s'\"]+")
+
+
+def redact(text: str) -> str:
+    t = _SECRET_RX.sub("[가림]", str(text))
+    t = _BEARER_RX.sub(lambda m: m.group(1) + " [가림]", t)
+    t = _USERINFO_RX.sub(r"\1[가림]@", t)
+    return _QUERY_RX.sub(r"\1[가림]", t)
+
+
+def exc_chain(e: BaseException, limit: int = 8) -> list[dict]:
+    """예외와 그 원인 사슬(__cause__, 없으면 __context__)을 [{type, msg}] 로. SDK 가 진짜 원인을 사슬 안에 숨길 때 쓴다."""
+    out, seen = [], set()
+    while e is not None and id(e) not in seen and len(out) < limit:
+        seen.add(id(e))
+        t = type(e)
+        mod = t.__module__ if t.__module__ not in ("builtins", "__main__") else ""
+        msg = str(e)
+        if not msg and getattr(e, "args", None):
+            msg = " ".join(map(str, e.args))
+        if getattr(e, "reason", None) is not None and str(e.reason) not in msg:   # urllib URLError 의 까닭
+            msg = (msg + " " + str(e.reason)).strip()
+        out.append({"type": (mod + "." if mod else "") + t.__qualname__, "msg": redact(msg)[:300]})
+        e = e.__cause__ if e.__cause__ is not None else (None if e.__suppress_context__ else e.__context__)
+    return out
+
+
+def conn_error(prefix: str, e: BaseException) -> "BackendError":
+    """연결 실패 BackendError: 글에 사슬 요약(겉 → 속), .chain 에 전체."""
+    ch = exc_chain(e)
+    text = " ← ".join(f"{c['type']}: {c['msg']}" if c["msg"] else c["type"] for c in ch)
+    return BackendError(f"{prefix}: {text}", chain=ch)
 
 
 # 백엔드가 "문맥(최대 길이) 초과"로 요청을 거부한 응답 글. vLLM·OpenAI·llama.cpp 의 문구를 모았다.
@@ -134,12 +174,24 @@ def _sock_of(r):
 
 
 _ABORT_GEN = [0]   # abort_streams 를 부를 때마다 늘린다 — 응답 머리를 기다리는 중인 요청도 이 값이 바뀌면 끊는다(U2-8)
+_SCOPE = threading.local()   # 끊기 범위(허브의 대화 하나 = 차례를 도는 스레드). 없으면 None
+_SCOPE_GEN: dict = {}        # 범위별 끊기 횟수
+
+
+def set_abort_scope(name: str | None) -> None:
+    """이 스레드가 보내는 요청의 끊기 범위. 허브는 대화마다 다른 이름을 붙여 [멈춤]이 그 대화만 끊게 한다."""
+    _SCOPE.name = name
+
+
+def _scope() -> str | None:
+    return getattr(_SCOPE, "name", None)
 
 
 def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
     """_send 를 작은 스레드로 돌리고 기다린다. 기다리는 동안(긴 프롬프트를 서버가 읽는 중 등) abort_streams 가 불리면
     곧바로 KeyboardInterrupt — 남은 요청은 응답이 오는 즉시 닫는다(서버 쪽 생성도 끊긴다)."""
-    gen = _ABORT_GEN[0]
+    scope = _scope()
+    gen = (_ABORT_GEN[0], _SCOPE_GEN.get(scope, 0))
     box: dict = {}
     done = threading.Event()
 
@@ -154,7 +206,7 @@ def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
                 _close(box["r"])
     threading.Thread(target=run, daemon=True).start()
     while not done.wait(0.2):
-        if _ABORT_GEN[0] != gen:
+        if (_ABORT_GEN[0], _SCOPE_GEN.get(scope, 0)) != gen:
             box["orphan"] = True
             if done.is_set() and box.get("r") is not None:
                 _close(box["r"])
@@ -166,12 +218,16 @@ def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
     return box["r"]
 
 
-def abort_streams() -> int:
-    """받는 중인 응답을 모두 끊는다(다른 스레드에서 부른다). 끊은 개수. 응답 머리를 기다리는 요청도 끊긴다(_send_abortable)."""
+def abort_streams(scope: str | None = None) -> int:
+    """받는 중인 응답을 끊는다(다른 스레드에서 부른다). 끊은 개수. 응답 머리를 기다리는 요청도 끊긴다(_send_abortable).
+    scope 를 주면 그 범위(set_abort_scope)의 요청만, 없으면 모두."""
     import socket
-    _ABORT_GEN[0] += 1
+    if scope is None:
+        _ABORT_GEN[0] += 1
+    else:
+        _SCOPE_GEN[scope] = _SCOPE_GEN.get(scope, 0) + 1
     with _LIVE_LOCK:
-        live = list(_LIVE)
+        live = [r for r in _LIVE if scope is None or getattr(r, "_stewart_scope", None) == scope]
     for r in live:
         r._stewart_aborted = True
         sk = _sock_of(r)
@@ -202,6 +258,10 @@ class _live:
         self.r = r
 
     def __enter__(self):
+        try:
+            self.r._stewart_scope = _scope()
+        except AttributeError:
+            pass
         with _LIVE_LOCK:
             _LIVE.add(self.r)
         return self.r
@@ -321,7 +381,7 @@ def _open(backend: Backend, path: str, body: dict | None, timeout: float):
         text = e.read().decode("utf-8", "replace")
         raise BackendError(f"HTTP {e.code}", e.code, text[:4000]) from None
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-        raise BackendError(f"연결 실패: {e}") from None
+        raise conn_error("연결 실패", e) from None
 
 
 def _send(backend: Backend, body: dict, overrides: dict | None):
@@ -378,7 +438,7 @@ def chat(
         except (TimeoutError, ConnectionError, OSError) as e:
             if isinstance(e, BackendError):
                 raise
-            raise BackendError(f"연결 실패: {e}") from None
+            raise conn_error("연결 실패", e) from None
         return data, time.monotonic() - t0
 
 
@@ -635,5 +695,5 @@ def chat_stream(
         except (TimeoutError, ConnectionError, OSError) as e:
             if isinstance(e, BackendError):
                 raise
-            raise BackendError(f"연결 실패: {e}") from None
+            raise conn_error("연결 실패", e) from None
         return asm.response(), time.monotonic() - t0

@@ -1,7 +1,7 @@
-// 왼쪽 사이드바(폰은 서랍): 현황판 자리 · 새 작업자 · 지금 세션 · 지난 세션 · 바닥(연결·알림·옛 화면)
+// 왼쪽 사이드바(폰은 서랍): 현황판 자리 · ＋새 대화(새로·갈래·작업자 맡기기) · 대화 · 작업자 · 지난 대화 · 바닥(연결·알림·옛 화면)
 import { useState, useEffect } from 'preact/hooks'
 import { get, post, store, USER } from './lib.js'
-import { hub, sessions, queue, view, drawer, refresh, toast, tick, clockSkew, conn, setPanel } from './state.js'
+import { hub, sessions, queue, view, drawer, refresh, toast, tick, clockSkew, conn, setPanel, chat, cpost, openChat } from './state.js'
 import { NotifToggle } from './notify.jsx'
 
 export const STATUS = {
@@ -29,6 +29,32 @@ function Board() {
 }
 
 const MODES = ['plan', 'ask', 'edits', 'auto']
+// ＋새 대화: 새로(빈 문맥, 격리) · 갈래(지금 보는 대화를 복사해 갈라짐) · 작업자 맡기기(메인이 일을 맡긴 것처럼 따로 프로세스)
+function NewChooser({ onClose }) {
+  const [worker, setWorker] = useState(false)
+  const [err, setErr] = useState('')
+  const cur = (hub.value?.chats || []).find(c => c.name === chat.value)
+  async function go(how) {
+    try { const r = await cpost('/api/chat/new', { how, from: chat.value }); onClose(); openChat(r.chat); refresh() } catch (e) { setErr(e.message) }
+  }
+  if (worker) return <NewSession onClose={onClose} />
+  return (
+    <div class="fixed inset-0 z-50 bg-black/45 grid place-items-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div class="w-full max-w-md bg-panel rounded-2xl p-4 space-y-2 shadow-card">
+        <div class="font-semibold text-base mb-1">새 대화</div>
+        <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => go('fresh')}>
+          <div class="font-semibold">새로 — 빈 문맥</div><div class="text-xs text-mute">같은 프로젝트·기억·현황판, 앞 대화는 모른다(서로 격리)</div></button>
+        <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft disabled:opacity-50" disabled={!!cur?.busy} onClick={() => go('fork')}>
+          <div class="font-semibold">이어서(갈래) — {cur?.title || '메인'} 을 복사</div><div class="text-xs text-mute">지금까지의 대화를 가지고 갈라진다. 이후로는 서로 독립{cur?.busy ? ' · 일하는 중이라 끝난 뒤' : ''}</div></button>
+        <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => setWorker(true)}>
+          <div class="font-semibold">작업자 맡기기</div><div class="text-xs text-mute">따로 도는 작업자에게 일 하나를 맡긴다(메인에 보고, 대화 칸과 다르다)</div></button>
+        {err && <div class="text-bad text-sm">안 됨: {err}</div>}
+        <div class="flex justify-end pt-1"><button class="btn" onClick={onClose}>닫기</button></div>
+      </div>
+    </div>
+  )
+}
+
 function NewSession({ onClose }) {
   const main = sessions.value.find(s => s.role === 'main')
   const top = main ? Math.max(0, MODES.indexOf(main.mode)) : 2
@@ -45,7 +71,7 @@ function NewSession({ onClose }) {
   return (
     <div class="fixed inset-0 z-50 bg-black/45 grid place-items-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div class="w-full max-w-md bg-panel rounded-2xl p-4 space-y-2 shadow-card">
-        <div class="font-semibold text-base mb-1">새 작업자</div>
+        <div class="font-semibold text-base mb-1">작업자 맡기기 <span class="text-xs text-mute font-normal">— 따로 도는 작업자, 보고는 메인에</span></div>
         <input class="field" placeholder="이름(영숫자·-), 예: w-docs" value={f.name} onInput={set('name')} autoFocus />
         <textarea class="field min-h-24" placeholder="첫 말(이 작업자가 할 일)" value={f.task} onInput={set('task')} />
         <input class="field" placeholder="작업 폴더(비우면 프로젝트 폴더, 프로젝트 안만)" value={f.workdir} onInput={set('workdir')} />
@@ -64,21 +90,22 @@ function SessionItem({ s }) {
   const [label, dot] = STATUS[s.status] || [s.status, '']
   const asks = queue.value.filter(x => x.session === s.name).length
   tick.value
-  const isMain0 = s.role === 'main'
-  let now = isMain0 ? (hub.value?.busy ? hub.value?.now : null) : s.now   // 메인은 허브 상태의 지금 하는 일(등록부 값은 늦다)
+  const conv = s.role === 'main' || s.role === 'chat'   // 대화(메인·사람이 연 대화) — 바쁨은 허브 상태의 대화 목록에서
+  const cinfo = (hub.value?.chats || []).find(c => c.name === s.name)
+  const isMain0 = conv && chat.value === s.name
+  let now = isMain0 ? (hub.value?.busy ? hub.value?.now : null) : conv ? null : s.now   // 보는 대화는 허브 상태의 지금 하는 일(등록부 값은 늦다)
   if (now && now.what.startsWith('사람 승인') && !asks) now = null    // 승인 글은 대기열에 실제 건이 있을 때만(같은 출처로 맞춘다)
   const secs = now ? Math.max(0, Math.round(Date.now() / 1000 - clockSkew.value - now.since)) : 0
   const on = view.value === s.name || (s.role === 'main' && view.value === 'main')
-  const isMain = s.role === 'main'
-  const st = hub.value
-  const mainBusy = isMain && st?.busy
+  const name = s.role === 'main' ? '메인' : s.role === 'chat' ? (cinfo?.title || s.title || s.name) : s.name
+  const mainBusy = conv && !!cinfo?.busy
   return (
     <button class={'mx-2 my-px px-2.5 py-2 rounded-[9px] flex flex-col gap-px text-left w-[calc(100%-16px)] hover:bg-soft ' + (on ? 'bg-soft' : '')}
-      onClick={() => { view.value = isMain ? 'main' : s.name; drawer.value = false }}>
-      <span class="font-[560] truncate w-full">{isMain ? '메인' : s.name}{asks ? <span class="chip ml-1.5 !text-warn">승인 {asks}</span> : null}</span>
+      onClick={() => { if (conv) openChat(s.role === 'main' ? 'main' : s.name); else { view.value = s.name; drawer.value = false } }}>
+      <span class="font-[560] truncate w-full">{name}{asks ? <span class="chip ml-1.5 !text-warn">승인 {asks}</span> : null}</span>
       <span class="text-xs text-mute flex gap-1.5 items-center w-full min-w-0">
         <span class={'dot ' + (mainBusy ? 'dot-run' : dot ? 'dot-' + dot : '')} />
-        <span class="truncate">{isMain ? (mainBusy ? '일하는 중' : '기다리는 중') : label}{now ? ` · ${now.what.slice(0, 40)} · ${secs}초` : ''}</span>
+        <span class="truncate">{conv ? (mainBusy ? '일하는 중' : '기다리는 중') + (s.role === 'chat' && cinfo?.origin === 'fork' ? ' · 갈래' : '') : label}{now ? ` · ${now.what.slice(0, 40)} · ${secs}초` : ''}</span>
       </span>
     </button>
   )
@@ -103,7 +130,8 @@ function PastRow({ x, sel, onSel, picking, reload }) {
         <button class="truncate font-[560] text-[14px] flex-1 min-w-0 text-left" title={x.kind === 'worker' ? label + ' — 대화 보기' : label}
           onClick={() => { if (x.kind === 'worker' && !picking) { view.value = x.name; drawer.value = false } else if (picking) onSel() }}>{label}</button>
         {!picking && x.kind === 'worker' && x.can_reopen && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" onClick={() => act(() => post('/api/session/control', { name: x.name, action: 'resume' }))}>{x.status === 'paused' ? '이어 가기' : '다시 열기'}</button>}
-        {!picking && x.kind === 'main' && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" onClick={() => act(() => post('/api/main/reopen', { run_dir: x.run_dir }).then(() => { view.value = 'main' }))}>메인으로</button>}
+        {!picking && x.kind === 'main' && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" title="메인 칸을 이 대화로 바꾼다(지금 메인 대화는 기록에 남는다)" onClick={() => act(() => post('/api/main/reopen', { run_dir: x.run_dir }).then(() => openChat('main')))}>메인으로</button>}
+        {!picking && x.kind === 'main' && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" title="새 대화 칸으로 연다(메인은 그대로)" onClick={() => act(() => post('/api/chat/new', { how: 'reopen', run_dir: x.run_dir }).then(r => openChat(r.chat)))}>새 칸</button>}
         {!picking && <button class="btn btn-ghost !px-1.5 !py-0.5 text-xs flex-none" aria-label="메뉴" onClick={() => setMenu(!menu)}>⋯</button>}
       </div>
       <div class="text-xs text-mute truncate">{sub}</div>
@@ -196,7 +224,8 @@ export function Sidebar() {
   const [newOpen, setNewOpen] = useState(false)
   const ss = sessions.value
   const main = ss.find(s => s.role === 'main')
-  const now = ss.filter(s => s.role !== 'main' && !['paused', 'stopped', 'failed'].includes(s.status))
+  const chats = ss.filter(s => s.role === 'chat')
+  const now = ss.filter(s => s.role !== 'main' && s.role !== 'chat' && !['paused', 'stopped', 'failed'].includes(s.status))
   const st = hub.value
   return (
     <aside class="bg-panel border-r border-line flex flex-col min-w-0 h-full">
@@ -205,10 +234,12 @@ export function Sidebar() {
         <button class="btn btn-ghost !px-2 ml-auto md:hidden" onClick={() => { drawer.value = false }}>✕</button>
       </div>
       <Board />
-      <button class="mx-3 mb-2 px-3 py-2 border border-line rounded-[10px] bg-soft font-semibold text-left" onClick={() => setNewOpen(true)}>＋ 새 작업자</button>
+      <button class="mx-3 mb-2 px-3 py-2 border border-line rounded-[10px] bg-soft font-semibold text-left" onClick={() => setNewOpen(true)}>＋ 새 대화</button>
       <div class="flex-1 overflow-auto scroll-thin pb-2">
-        <div class="px-4 pt-2.5 pb-1 text-xs text-mute font-semibold tracking-wide">지금</div>
+        <div class="px-4 pt-2.5 pb-1 text-xs text-mute font-semibold tracking-wide" title="메인과 같은 채팅(사진·/명령·압축·승인 모두). 기억·현황판은 함께 쓰고 문맥은 따로">대화</div>
         {main && <SessionItem s={main} />}
+        {chats.map(s => <SessionItem key={s.name} s={s} />)}
+        {now.length > 0 && <div class="px-4 pt-2.5 pb-1 text-xs text-mute font-semibold tracking-wide" title="메인(또는 사람)이 일을 맡긴 작업자 — 보고를 메인에 낸다">작업자 · 맡긴 일</div>}
         {now.map(s => <SessionItem key={s.name} s={s} />)}
         <Past />
       </div>
@@ -222,7 +253,7 @@ export function Sidebar() {
           <button class="underline-offset-2 hover:underline" onClick={() => post('/logout', {}).then(() => { location.href = '/login' })}>나가기</button></>}
         <a class="underline-offset-2 hover:underline" href="/?ui=old" title="예전 화면(되돌릴 길)">옛 화면</a>
       </div>
-      {newOpen && <NewSession onClose={() => setNewOpen(false)} />}
+      {newOpen && <NewChooser onClose={() => setNewOpen(false)} />}
     </aside>
   )
 }

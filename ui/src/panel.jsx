@@ -1,7 +1,7 @@
 // 오른쪽 패널(데스크톱, 기본 닫힘) / 아래 시트(폰): 단계 · 계획 · 늘 허용 · 토큰
 import { useState, useEffect } from 'preact/hooks'
 import { get, post, fmtK, fmtSecs } from './lib.js'
-import { hub, panel, setPanel, sessions, toast, refresh, busy } from './state.js'
+import { hub, panel, setPanel, sessions, toast, refresh, busy, cpost } from './state.js'
 import { STATUS } from './side.jsx'
 
 const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰']]
@@ -188,7 +188,7 @@ function MemoryTab() {
 }
 
 async function compactNow(mode) {
-  try { await post('/api/main/compact', { mode }); refresh() } catch (e) { toast('못 줄임: ' + e.message) }
+  try { await cpost('/api/main/compact', { mode }); refresh() } catch (e) { toast('못 줄임: ' + e.message) }
 }
 
 function Tokens() {

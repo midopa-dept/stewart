@@ -44,8 +44,8 @@ THINK_KEEP = 4000   # 생각 블록에 남기는 끝 글자 수(판 56)
 class HubMainUI(HubUI):
     """메인 세션 화면: 글은 웹 화면용 기록에 쌓고, 묻기는 대기열 + 메모리 안 큐."""
 
-    def __init__(self, hub: Hub):
-        super().__init__(hub.sdir("main"), "main", None)
+    def __init__(self, hub: Hub, name: str = "main"):
+        super().__init__(hub.sdir(name), name, None)
         self.log: deque = deque(maxlen=LOG_MAX)
         self._answers: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
@@ -249,6 +249,10 @@ class HubMainUI(HubUI):
         return out
 
 
+HUB_COMMANDS = (("clear", "지금 대화를 기록에 남기고 빈 문맥으로 새 대화"), ("reset", "/clear 와 같다"),
+                ("compact", "오래된 도구 결과 줄이기('/compact 요약' 은 앞 대화를 요약해 접기)"), ("help", "이 목록"))
+
+
 class HubMain:
     def __init__(self, hub: Hub, profile, backend, rec, mode: str = "edits", worker_profile: str = "chat",
                  worker_backend: str | None = None, history: list | None = None, resumed_from: str | None = None):
@@ -259,6 +263,12 @@ class HubMain:
             from .board import NOTE as BOARD_NOTE
             profile = dataclasses.replace(profile, system=(profile.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
         hub.register_main(profile.workdir, mode)
+        self.name = "main"
+        self.chats: dict = {}                 # 사람이 연 대화(메인과 같은 채팅): 이름 → HubChat
+        self._chat_n = 0
+        for n, e in list(hub.registry()["sessions"].items()):   # 앞 허브의 대화는 이어 붙지 않는다(기록은 지난 세션에서 다시 연다)
+            if e.get("role") == "chat":
+                hub.drop_chat(n)
         from .board import Board
         hub.board = Board(hub.dir, notify=hub._notify if hub._notify_on else None)   # 현황판(판 49): 새 사용자 할 일은 폰으로
         # 앞 허브의 메인이 묻다가 끝났으면 그 승인 건은 답할 데가 없다(새 메인은 그 차례를 잇지 않는다) — 취소로 닫는다
@@ -273,6 +283,7 @@ class HubMain:
         hub.main_answer = self.ui.put_answer
         self.tools = HT.MainTools(hub, main_mode=mode, default_profile=worker_profile, default_backend=worker_backend)
         self._profile, self._backend, self._mode, self._runs_dir = profile, backend, mode, Path(rec.dir).parent
+        self._worker_profile, self._worker_backend = worker_profile, worker_backend
         self.sess = ChatSession(profile, backend, rec, ui=self.ui, stream=True, mode=mode, default_mode="edits",
                                 extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
         if history:
@@ -329,6 +340,17 @@ class HubMain:
                 except RuntimeError as e:
                     self.ui._add("warn", f"/compact: {e}")
                 return "compacted"
+            elif text.split()[0] in ("/clear", "/reset"):   # 새 대화(Claude Code 와 같은 이름) — 지금 대화는 기록에 남는다
+                try:
+                    self.new_main()
+                except RuntimeError as e:
+                    self.ui._add("warn", f"{text.split()[0]}: {e}")
+                    return "busy"
+                return "cleared"
+            elif text.split()[0] == "/help":
+                self.ui._add("info", "허브 메인 칸 명령: " + " · ".join(f"/{n} — {d}" for n, d in HUB_COMMANDS)
+                             + " · 그 밖 /이름 은 프로젝트·사용자 명령(.stewart/commands)")
+                return "help"
             elif text.split()[0] in COMMANDS:
                 self.ui._add("warn", f"{text.split()[0]} 는 stewart chat 의 내장 명령이다. 허브 메인 칸에서는 쓰지 않는다.")
                 return "builtin_ignored"
@@ -341,6 +363,8 @@ class HubMain:
         return "started"
 
     def _run_turn(self, text: str, images: list | None = None) -> None:
+        from .backend import set_abort_scope
+        set_abort_scope(self.name)   # [멈춤]은 이 대화의 응답만 끊는다(다른 대화는 그대로)
         try:
             self.ui.sd.set_status(status="working")
             st = self.sess.st
@@ -439,38 +463,64 @@ class HubMain:
     def past_mains(self, limit: int = 10) -> list[dict]:
         """이 프로젝트의 지난 허브 메인 대화(지금 것 빼고, 새것부터): {run_dir, started, first, turns}."""
         from .trash import past_mains
-        return past_mains(self._runs_dir, Path(self._profile.workdir), str(self.sess.rec.dir), limit=limit)
+        root = self._root()
+        open_runs = {str(root.sess.rec.dir)} | {str(c.sess.rec.dir) for c in root.chats.values()}   # 지금 열린 대화는 빼고
+        return [x for x in past_mains(self._runs_dir, Path(self._profile.workdir), str(self.sess.rec.dir), limit=limit + len(open_runs))
+                if x["run_dir"] not in open_runs][:limit]
 
     def manager(self):
         """지난 세션 정리(지우기·되돌리기·이름·보관, trash.py)."""
         from .trash import Manager
         return Manager(self.hub, self._runs_dir, Path(self._profile.workdir), current_main=str(self.sess.rec.dir))
 
+    def _swap_session(self, history: list | None, resumed_from: str | None) -> str:
+        """메인 대화를 새 ChatSession 으로 바꾼다(지금 대화는 기록에 그대로). 부르는 쪽이 _busy 를 잡고 있어야 한다."""
+        from .record import Recorder
+        old = self.sess
+        rec = Recorder(self._runs_dir, "hub-main")
+        self.sess = ChatSession(self._profile, self._backend, rec, ui=self.ui, stream=True, mode=self._mode,
+                                default_mode="edits", extra_tools=(HT.DEFINITIONS, self.tools.execute),
+                                history=history, resumed_from=resumed_from)
+        self.ui.env = self.sess.env
+        self.sess.env.on_quota = self._quota_alert
+        self._resumed, self._turn0 = bool(history), None
+        self.ui.sd.set_status(run_dir=str(rec.dir))
+        try:
+            old.close()
+        except Exception:
+            pass
+        return str(rec.dir)
+
     def reopen_main(self, run_dir: str) -> str:
         """지난 메인 대화 하나로 메인을 바꿔 연다(지금 메인 대화는 기록에 그대로 남는다). 일하는 중이면 거절."""
-        from .record import Recorder
         from .resume import load_messages
         if run_dir not in {x["run_dir"] for x in self.past_mains(50)}:
             raise ValueError("지난 메인 대화 목록에 없는 기록")
         if not self._busy.acquire(blocking=False):
             raise RuntimeError("메인이 일하는 중이다. 멈추거나 끝난 뒤 다시 연다")
         try:
-            history = load_messages(Path(run_dir))
-            old = self.sess
-            rec = Recorder(self._runs_dir, "hub-main")
-            self.sess = ChatSession(self._profile, self._backend, rec, ui=self.ui, stream=True, mode=self._mode,
-                                    default_mode="edits", extra_tools=(HT.DEFINITIONS, self.tools.execute),
-                                    history=history, resumed_from=run_dir)
-            self.ui.env = self.sess.env
-            self.sess.env.on_quota = self._quota_alert
-            self._resumed, self._turn0 = True, None
-            self.ui.sd.set_status(run_dir=str(rec.dir))
-            try:
-                old.close()
-            except Exception:
-                pass
+            new = self._swap_session(load_messages(Path(run_dir)), run_dir)
             self.ui._add("info", f"지난 메인 대화를 다시 열었다({run_dir}).")
-            return str(rec.dir)
+            return new
+        finally:
+            self._busy.release()
+
+    def new_main(self) -> str:
+        """/clear·/reset·화면 [새 대화]: 지금 대화는 기록에 남기고(지난 세션 목록에서 다시 열 수 있다) 빈 문맥으로 새로 시작.
+        기억·현황판·허용 규칙은 그대로, 압축 상태·문맥 % 는 새 대화 것(0). 일하는 중이면 거절."""
+        if not self._busy.acquire(blocking=False):
+            raise RuntimeError("메인이 일하는 중이다. 멈추거나 끝난 뒤 새로 시작한다")
+        try:
+            old = str(self.sess.rec.dir)
+            new = self._swap_session(None, None)
+            with self.ui._lock:
+                self.ui.log.clear()
+                self.ui.pending = []
+            self.ui.err_count = {}
+            self.ui.last_user = ""
+            self.ui._add("info", f"새 대화를 시작했다. 앞 대화는 기록에 남았다 — 지난 세션 목록에서 다시 열 수 있다({old}).")
+            self.hub.event("main_new", previous=old, run_dir=new)
+            return new
         finally:
             self._busy.release()
 
@@ -539,7 +589,7 @@ class HubMain:
         # 받는 중인 모델 응답(긴 프롬프트 읽기·생성 포함)을 바로 끊는다 — 전에는 응답이 끝날 때까지 기다려 몇 분 늦었다(U2-8)
         from .backend import abort_streams
         try:
-            abort_streams()
+            abort_streams(self.name)
         except Exception:
             pass
         return "stopping"
@@ -555,6 +605,67 @@ class HubMain:
                 return True
             time.sleep(0.05)
         return False
+
+    # ── 대화 여럿(SW-29): 메인과 같은 채팅을 사람이 더 연다 ──
+    def _root(self) -> "HubMain":
+        return getattr(self, "main", None) or self
+
+    def _chat_list(self) -> list[dict]:
+        root = self._root()
+        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir)}]
+        for c in root.chats.values():
+            out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir)})
+        return out
+
+    def conv(self, name: str | None) -> "HubMain":
+        """대화 하나: 'main'(또는 없음)이면 메인, 아니면 사람이 연 대화. 없으면 KeyError."""
+        root = self._root()
+        if not name or name == "main":
+            return root
+        return root.chats[name]
+
+    def new_chat(self, how: str = "fresh", source: str = "main", run_dir: str = "", title: str = "") -> "HubChat":
+        """새 대화. fresh = 빈 문맥(격리), fork = source 대화를 지금까지 복사해 갈라짐(이후 서로 독립),
+        reopen = 지난 대화 기록(run_dir)을 새 칸으로. 같은 프로젝트·기억·현황판·허용 규칙을 쓰고, 기록 폴더·압축·문맥 % 는 따로."""
+        root = self._root()
+        history, resumed = None, None
+        if how == "fork":
+            src = root.conv(source)
+            if src.busy:
+                raise RuntimeError(f"{'메인' if src.name == 'main' else src.title} 이 일하는 중이다 — 차례가 끝난 뒤 가른다")
+            history = json.loads(json.dumps(src.sess.messages, ensure_ascii=False))
+            resumed = str(src.sess.rec.dir)
+        elif how == "reopen":
+            from .resume import load_messages
+            if run_dir not in {x["run_dir"] for x in root.past_mains(50)}:
+                raise ValueError("지난 대화 목록에 없는 기록")
+            history, resumed = load_messages(Path(run_dir)), run_dir
+        elif how != "fresh":
+            raise ValueError("how 는 fresh·fork·reopen")
+        root._chat_n += 1
+        while f"chat-{root._chat_n}" in root.chats:
+            root._chat_n += 1
+        name = f"chat-{root._chat_n}"
+        if not title:
+            title = {"fresh": f"대화 {root._chat_n}", "fork": f"갈래 {root._chat_n}", "reopen": f"다시 연 대화 {root._chat_n}"}[how]
+        c = HubChat(root, name, title=title, origin=how, history=history, resumed_from=resumed)
+        root.chats[name] = c
+        root.hub.event("chat_new", chat=name, how=how, source=source if how == "fork" else None, run_dir=str(c.sess.rec.dir))
+        return c
+
+    def close_chat(self, name: str) -> str:
+        """대화 닫기(기록은 runs 에 남아 지난 세션에서 다시 연다). 일하는 중이면 거절. 메인은 닫지 않는다."""
+        root = self._root()
+        c = root.chats.get(name)
+        if c is None:
+            raise KeyError(name)
+        if c.busy:
+            raise RuntimeError("일하는 중이다 — 멈춘 뒤 닫는다")
+        run = str(c.sess.rec.dir)
+        c.close()
+        root.chats.pop(name, None)
+        root.hub.event("chat_close", chat=name, run_dir=run)
+        return run
 
     # ── 허브 고리 ──
     def tick(self) -> dict:
@@ -587,6 +698,11 @@ class HubMain:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        for c in list(self.chats.values()):
+            try:
+                c.close()
+            except Exception:
+                pass
         self._stop.set()
         try:   # 닫을 때 꿈꾸기(새 메모가 N개 넘고 모델 서버가 준비됐을 때만)
             self.maybe_dream(closing=True)
@@ -606,7 +722,7 @@ class HubMain:
         log = list(self.ui.log)[-200:]
         keep = {id(m) for m in [x for x in log if x.get("kind") == "tool"][-RESULT_KEEP:]}
         log = [m if "result" not in m or id(m) in keep else {k: v for k, v in m.items() if k != "result"} for m in log]   # 상태 크기
-        return {"ts": now(), "busy": self.busy, "sessions": self.hub.list(), "queue": self.hub.queue(),
+        return {"ts": now(), "chat": self.name, "busy": self.busy, "sessions": self.hub.list(), "queue": self.hub.queue(),
                 "main_log": log, "stopping": self.ui.halt_req.is_set(),
                 "live": {"text": live["text"][-4000:], "think": live["think"], "think_text": live.get("think_text", "")[-4000:],
                          "think_since": live.get("think_since")} if self.busy else None,
@@ -616,7 +732,8 @@ class HubMain:
                 "backend": {"name": self.sess.backend.name, "model": self.sess.backend.model},
                 "tokens": self.tokens(), "resume_note": self.resume_note(), "model": self.watch.status,
                 "web": getattr(self.sess, "web_status", None),
-                "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view()}
+                "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view(),
+                "chats": self._chat_list()}
 
     def tokens(self) -> dict:
         """화면 문맥 막대·토큰 줄: 지난 단계 입력(= 지금 문맥), 창, 줄이기 선, 누계, 이번(마지막) 차례 몫."""
@@ -649,6 +766,63 @@ class HubMain:
             return None
         return (f"앞 대화가 길다(≈{n // 1000}k 토큰). 첫 차례는 모델 서버가 이것을 처음부터 읽어 몇 분 걸릴 수 있다 — "
                 "멈춘 것이 아니다. 그다음 차례부터는 빨라진다.")
+
+
+class HubChat(HubMain):
+    """사람이 연 대화 하나: 메인과 같은 채팅(같은 도구·명령·사진·압축·승인·생각), 허브 안에서 돈다.
+    현황판·기억·모델 감시·허용 규칙은 메인 것을 함께 쓰고, ChatSession·기록 폴더·화면 기록·바쁨은 따로."""
+
+    def __init__(self, main: HubMain, name: str, title: str = "", origin: str = "fresh",
+                 history: list | None = None, resumed_from: str | None = None):
+        from .record import Recorder
+        hub = main.hub
+        self.hub, self.main, self.name, self.title, self.origin = hub, main, name, title, origin
+        self.chats = {}
+        hub.register_chat(name, main._profile.workdir, main._mode, title=title, origin=origin)
+        self.ui = HubMainUI(hub, name)
+        self.ui.hub_rules = hub.allow_rules
+        hub.chat_answers[name] = self.ui.put_answer
+        self.tools = HT.MainTools(hub, main_mode=main._mode, default_profile=main._worker_profile,
+                                  default_backend=main._worker_backend)
+        self._profile, self._backend, self._mode, self._runs_dir = main._profile, main._backend, main._mode, main._runs_dir
+        self._worker_profile, self._worker_backend = main._worker_profile, main._worker_backend
+        rec = Recorder(self._runs_dir, "hub-main")
+        self.sess = ChatSession(self._profile, self._backend, rec, ui=self.ui, stream=True, mode=self._mode, default_mode="edits",
+                                extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
+        if history:
+            self.ui._add("info", f"{'갈라 온' if origin == 'fork' else '다시 연'} 대화다 — 앞 문맥을 이어 받았다({resumed_from}). "
+                                 "이제부터는 원래 대화와 서로 독립이다.")
+        self.ui.env = self.sess.env
+        self.sess.env.on_quota = main._quota_alert
+        self.watch = main.watch
+        self.ui.on_backend_error = main.ui.on_backend_error
+        self.ui.sd.set_status(status="idle", run_dir=str(rec.dir))
+        self._idle_since = time.monotonic()
+        self._busy = threading.Lock()
+        self._stop = threading.Event()
+        self._loop = None
+        self._turn = None
+        self._turn0 = None
+        self._hist_est = (None, 0)
+        self._resumed = bool(history)
+
+    def _notify_turn_end(self, reason: str, secs: float, stopped: bool = False) -> str | None:
+        return None   # 폰 알림은 메인 차례만(대화가 여럿이면 시끄럽다) — 승인 대기 알림은 허브 고리가 그대로 보낸다
+
+    def maybe_dream(self, closing: bool = False, ask_model=None) -> dict | None:
+        return None   # 꿈꾸기는 메인 고리만
+
+    def start_loop(self) -> None:
+        return None
+
+    def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        try:
+            self.sess.close()
+        finally:
+            self.hub.drop_chat(self.name)
 
 
 DEFAULT_PORT = 8765
@@ -923,6 +1097,8 @@ def run_hub_user(a) -> int:
         if not a.name:
             raise AccountError("사용자 이름을 준다")
         if a.action in ("add", "passwd"):
+            if a.action == "passwd" and a.name not in st.users():   # 없는 사용자면 비밀번호를 읽지 않는다(입력을 기다리며 멈추지 않게)
+                raise AccountError(f"없는 사용자: {a.name}")
             if a.password_stdin:
                 pw = sys.stdin.readline().rstrip("\r\n")
             else:

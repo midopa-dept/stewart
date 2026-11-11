@@ -4,8 +4,8 @@ import { useState, useRef, useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { post, get, store } from './lib.js'
 import { copyText, flash } from './copy.js'
-import { prepImage } from './imgprep.js'
-import { hub, queue, busy, refresh, toast, view, sessions } from './state.js'
+import { prepImage, pastedFiles } from './imgprep.js'
+import { hub, queue, busy, refresh, toast, view, sessions, chat, cpost } from './state.js'
 
 const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
 export const sheetAsk = signal(null)      // 폰: 승인 전문 시트에 띄운 건(session#seq)
@@ -217,12 +217,12 @@ export function Composer({ target }) {
     try {
       if (m && isMain) {
         const q = m[2]
-        const r = await get('/api/files?q=' + encodeURIComponent(q))
+        const r = await get('/api/files?q=' + encodeURIComponent(q) + '&chat=' + encodeURIComponent(chat.value))
         if (t.selectionStart !== caret) return
         return setSug({ items: (r.files || []).map(f => ({ label: '@' + f, insert: '@' + f + ' ' })), on: 0, range: [caret - q.length - 1, caret] })
       }
       if (/^\/[^\s]*$/.test(before) && isMain) {
-        if (!cmdCache.current) cmdCache.current = (await get('/api/commands')).commands || []
+        if (!cmdCache.current) cmdCache.current = (await get('/api/commands?chat=' + encodeURIComponent(chat.value))).commands || []
         const q = before.toLowerCase()
         return setSug({ items: cmdCache.current.filter(c => c.name.toLowerCase().startsWith(q)).map(c => ({ label: c.name, hint: c.description || '', insert: c.name + ' ' })), on: 0, range: [0, caret] })
       }
@@ -236,14 +236,16 @@ export function Composer({ target }) {
     setText(v); hideSug()
     requestAnimationFrame(() => { const t = ta.current; const p = a + it.insert.length; t.focus(); t.setSelectionRange(p, p) })
   }
-  async function addFiles(files) {   // 큰 폰 사진·HEIC 는 줄여 JPEG 로(imgprep.js, 판 70)
-    if (!vision) return
-    for (const f of [...files]) {
-      if (!/^image\//.test(f.type) && !/\.(heic|heif)$/i.test(f.name || '')) continue
+  async function addFiles(files) {   // 큰 폰 사진·HEIC 는 줄여 JPEG 로(imgprep.js). 건너뛸 때는 늘 까닭을 토스트로(판 74)
+    const list = [...(files || [])]
+    if (!list.length) return
+    if (!vision) { toast(isMain ? '이 백엔드는 이미지를 받지 않는다(backends 표 vision = false)' : '이 칸에서는 아직 사진을 붙이지 못한다(메인 칸에서)'); return }
+    for (const f of list) {
       try {
         const x = await prepImage(f)
-        if (!x) { toast(`${f.name || '사진'}: 이 브라우저가 열 수 없는 꼴이다(HEIC 면 사진 앱에서 JPEG 로 보내기)`); continue }
-        setImgs(xs => xs.length >= IMG_MAX ? xs : [...xs, { name: x.name, size: x.size, data: x.data }])
+        if (!x.ok) { toast(x.why); continue }
+        if (x.note) toast(`${x.name}: ${x.note}`)
+        setImgs(xs => { if (xs.length >= IMG_MAX) { toast(`사진은 한 번에 ${IMG_MAX}장까지`); return xs } return [...xs, { name: x.name, size: x.size, data: x.data }] })
       } catch (e) { toast('사진을 못 읽었다: ' + (e?.message || e)) }
     }
   }
@@ -256,18 +258,19 @@ export function Composer({ target }) {
       if (isMain) {
         const body = { text: v }
         if (imgs.length) body.images = imgs.map(x => ({ name: x.name, data: x.data }))
-        await post('/api/main', body)
+        await cpost('/api/main', body)
       } else {
         await post('/api/session/send', { name: target, text: v, kind: kind || '지시' })
       }
       setText(''); setImgs([]); refresh()
     } catch (e) {
+      if (imgs.length) toast('사진과 함께 보내지 못했다: ' + (e?.detail || e?.message || e))   // 서버 거절 문구 그대로(판 74)
       setFailed(e)   // 글은 칸에 남긴다 → [다시 보내기]
     } finally { setSending(false) }
   }
   async function stop() {
     try {
-      if (isMain) await post('/api/main/stop', {})
+      if (isMain) await cpost('/api/main/stop', {})
       else await post('/api/session/control', { name: target, action: 'pause' })
       refresh()
     } catch (e) { toast('멈춤을 못 보냈다: ' + e.message) }
@@ -292,7 +295,7 @@ export function Composer({ target }) {
   const stopping = isMain && st?.stopping
   const pending = isMain ? (st?.pending || []) : []
   return (
-    <div class="relative" onDragOver={e => { if (vision) e.preventDefault() }} onDrop={e => { if (vision) { e.preventDefault(); addFiles([...e.dataTransfer.files]) } }}>
+    <div class="relative" onDragOver={e => { if (vision) e.preventDefault() }} onDrop={e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]) } }}>
       {pending.length > 0 && <div class="text-xs text-mute mx-1 mb-1.5 truncate">대기 줄 {pending.length}: “{pending[pending.length - 1].slice(0, 80)}” — 이번 단계가 끝나면 메인이 받는다</div>}
       {failed && (
         <div class="flex items-center gap-2 text-[13px] text-bad mx-1 mb-1.5">
@@ -316,12 +319,12 @@ export function Composer({ target }) {
           <button key={i} class="chip" onClick={() => setImgs(xs => xs.filter((_, j) => j !== i))}>🖼 {im.name} ({Math.round(im.size / 1024)}KB) ✕</button>
         ))}</div>}
         <textarea ref={ta} rows={2} value={text} class="w-full resize-none bg-transparent outline-none text-[15px] leading-relaxed placeholder:text-mute"
-          placeholder={isMain ? '메인에게 할 말 — /명령 · @파일' + (vision ? ' · 이미지 붙여넣기' : '') + ' · ⌘/Ctrl+Enter 보내기' : `${target} 에게 직접 할 말(메인에게도 알림이 간다)`}
+          placeholder={isMain ? (chat.value === 'main' ? '메인에게' : '이 대화에') + ' 할 말 — /명령 · @파일' + (vision ? ' · 이미지 붙여넣기' : '') + ' · ⌘/Ctrl+Enter 보내기' : `${target} 에게 직접 할 말(메인에게도 알림이 간다)`}
           onInput={e => { setText(e.currentTarget.value); hist.current.pos = null; clearTimeout(timer.current); timer.current = setTimeout(suggest, 150) }}
           onKeyDown={onKey} onBlur={() => setTimeout(hideSug, 150)}
-          onPaste={e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length && vision) { e.preventDefault(); addFiles(fs) } }} />
+          onPaste={e => { const fs = pastedFiles(e.clipboardData); if (fs.length) { e.preventDefault(); addFiles(fs) } }} />
         <div class="flex items-center gap-1.5 mt-1">
-          {vision && <label class="btn btn-ghost px-2.5" title="이미지 붙이기(붙여넣기·끌어다 놓기도 됨)">＋<input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { addFiles(e.currentTarget.files); e.currentTarget.value = '' }} /></label>}
+          {vision && <label class="btn btn-ghost px-2.5" title="이미지 붙이기(붙여넣기·끌어다 놓기도 됨)">＋<input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; addFiles(fs) }} /></label>}
           {isMain && main?.mode && <span class="chip" title="메인 권한 모드">{main.mode}</span>}
           <span class="flex-1" />
           {working && isMain && <span class="chip max-md:hidden">Esc 멈춤</span>}
@@ -339,5 +342,5 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || e.defaultPrevented) return
   if (sheetAsk.value) { sheetAsk.value = null; return }
   const st = hub.value
-  if (view.value === 'main' && st?.busy && !st.stopping) post('/api/main/stop', {}).then(refresh).catch(err => toast('멈춤을 못 보냈다: ' + err.message))
+  if (view.value === chat.value && st?.busy && !st.stopping) cpost('/api/main/stop', {}).then(refresh).catch(err => toast('멈춤을 못 보냈다: ' + err.message))
 })

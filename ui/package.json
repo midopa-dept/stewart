@@ -5,7 +5,8 @@
   "description": "stewart 허브 웹 화면(빌드 결과는 src/stewart/web_ui 에 커밋, 받는 쪽은 Python 만)",
   "scripts": {
     "build": "vite build && node stamp.mjs",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "node --test test/"
   },
   "dependencies": {
     "@preact/signals": "2.11.4",

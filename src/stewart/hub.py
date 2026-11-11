@@ -251,6 +251,7 @@ class Hub:
         self._lock = threading.RLock()
         self.worktree_root = worktree_root   # "{repo}" 자리 글을 받는다. 없으면 default_worktree_dir
         self.main_answer = None              # 메인 세션의 답 받기(허브 프로세스 안 큐). HubMain 이 붙인다
+        self.chat_answers: dict = {}         # 허브 안 대화(메인 말고 사람이 연 대화)의 답 받기: 이름 → 고리
         self.runs_dir = Path(runs_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.reg_file = self.dir / "sessions.json"
@@ -368,6 +369,28 @@ class Hub:
                                    "noticed_reports": 0}
         self._save(reg)
 
+    @_locked
+    def register_chat(self, name: str, workdir: Path, mode: str, title: str = "", origin: str = "fresh") -> None:
+        """사람이 연 대화(메인과 같은 채팅, 허브 안에서 돈다 — 프로세스 없음). 승인은 같은 대기열에 session=이름 으로 온다."""
+        reg = self.registry()
+        self.sdir(name).make()
+        reg["sessions"][name] = {"name": name, "role": "chat", "title": title, "origin": origin,
+                                 "workdir": str(Path(workdir).resolve()), "worktree": None, "profile": None,
+                                 "backend": None, "mode": mode, "executor": {"kind": "local"}, "status": "idle",
+                                 "pid": os.getpid(), "started": now(), "last_event": None, "run_dir": None,
+                                 "inbox_seq": 0, "outbox_seq": 0, "read_reports": [], "notified_asks": [],
+                                 "noticed_reports": 0}
+        self._save(reg)
+
+    @_locked
+    def drop_chat(self, name: str) -> None:
+        """닫은 대화를 등록부에서 뺀다(기록 runs 는 그대로 — 지난 세션에서 다시 연다)."""
+        reg = self.registry()
+        if reg["sessions"].get(name, {}).get("role") == "chat":
+            reg["sessions"].pop(name)
+            self._save(reg)
+        self.chat_answers.pop(name, None)
+
     def _start(self, name: str, resume: str | None = None) -> None:
         sd = self.sdir(name)
         sd.set_control(None)
@@ -481,6 +504,8 @@ class Hub:
             if self.main_answer is None:
                 raise RuntimeError("메인 세션이 붙어 있지 않다")
             self.main_answer(seq, text)
+        elif name in self.chat_answers:
+            self.chat_answers[name](seq, text)
         else:
             w = self.pipes.get(name)
             if w is None:
@@ -499,7 +524,7 @@ class Hub:
                 if st.get(k) is not None:
                     e[k] = st[k]
             e["now"] = st.get("now") if st.get("status") in ("working", "waiting_approval") else None   # 화면의 "지금 하는 일" 한 줄
-            if e.get("role") == "main":
+            if e.get("role") in ("main", "chat"):
                 continue
             proc = self.procs.get(name)
             alive = proc.poll() is None if proc is not None else _alive(e.get("pid"))
@@ -631,7 +656,7 @@ class Hub:
         reg = self.registry()
         resumed = []
         for name, e in reg["sessions"].items():
-            if e.get("role") == "main" or name in self.procs:
+            if e.get("role") in ("main", "chat") or name in self.procs:
                 continue
             if e["status"] == "paused" and e.get("resume_on_start"):   # 허브를 끌 때 허브가 멈춘 것은 이어 간다
                 self._update(name, resume_on_start=False)

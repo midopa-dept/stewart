@@ -204,7 +204,8 @@ class WebApp:
         # no-referrer 이면 브라우저가 폼 POST 에 Origin: null 을 실어 로그인이 막힌다. same-origin 은 같은 곳에만 보낸다
         h.send_header("Referrer-Policy", "same-origin")
         h.send_header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline' 'self'; "
-                                                 "style-src 'unsafe-inline' 'self'; connect-src 'self'; frame-ancestors 'none'")
+                                                 "style-src 'unsafe-inline' 'self'; connect-src 'self'; img-src 'self' data: blob:; "
+                                                 "frame-ancestors 'none'")   # img-src: 사진 붙이기 전처리가 data: 그림을 디코드한다(판 74)
         for k, v in (headers or {}).items():
             h.send_header(k, v)
         h.end_headers()
@@ -342,21 +343,47 @@ class WebApp:
                 self._notice(f"사람이 현황판 {t['id']}({t['title']})을 {'했다' if st == 'done' else '안 하기로 했다'}" +
                              (f": {t['outcome']}" if t.get("outcome") else ""))
                 return self._json(h, 200, {"ok": True})
+            if path in ("/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/chat/new", "/api/chat/close", "/api/main/unban"):
+                try:   # 어느 대화인가(SW-29): body 의 chat(없으면 메인)
+                    cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
+                except KeyError:
+                    return self._json(h, 404, {"error": "no_chat", "detail": "닫혔거나 없는 대화다 — 화면을 새로 고친다"})
+            if path == "/api/chat/new":   # 새 대화: fresh(격리)·fork(지금 대화 복사해 갈라짐)·reopen(지난 기록을 새 칸으로)
+                try:
+                    c = self.main.new_chat(str(data.get("how") or "fresh"), source=str(data.get("from") or "main"),
+                                           run_dir=str(data.get("run_dir") or ""), title=str(data.get("title") or "")[:80])
+                except (ValueError, KeyError) as e:
+                    return self._json(h, 400, {"error": "chat", "detail": str(e)})
+                except RuntimeError as e:
+                    return self._json(h, 409, {"error": "chat", "detail": str(e)})
+                return self._json(h, 200, {"ok": True, "chat": c.name, "title": c.title})
+            if path == "/api/chat/close":
+                try:
+                    return self._json(h, 200, {"ok": True, "run_dir": self.main.close_chat(str(data.get("chat") or ""))})
+                except KeyError:
+                    return self._json(h, 404, {"error": "no_chat"})
+                except RuntimeError as e:
+                    return self._json(h, 409, {"error": "chat", "detail": str(e)})
             if path == "/api/main/unban":   # 되짚기가 건 금지를 사람이 푼다
-                ok = isinstance(data.get("id"), str) and self.main.sess.unban(data["id"])
+                ok = isinstance(data.get("id"), str) and cv.sess.unban(data["id"])
                 if ok:
                     self._notice("사람이 되짚기 금지 하나를 풀었다 — 그 호출을 다시 할 수 있다")
                 return self._json(h, 200 if ok else 404, {"ok": ok})
             if path == "/api/main/compact":   # 화면 [줄이기]·[요약해 접기](판 65) — 일하는 중이면 409
                 try:
-                    return self._json(h, 200, self.main.compact_now(str(data.get("mode") or "clip")))
+                    return self._json(h, 200, cv.compact_now(str(data.get("mode") or "clip")))
                 except (ValueError, RuntimeError) as e:
                     return self._json(h, 409, {"error": "compact", "detail": str(e)})
             if path == "/api/main/stop":   # 화면 [멈춤]: 메인 차례 끊기
-                return self._json(h, 200, {"result": self.main.stop_turn()})
+                return self._json(h, 200, {"result": cv.stop_turn()})
+            if path == "/api/main/new":   # 화면 [새 대화]·/clear: 지금 대화는 기록에 남기고 새로(일하는 중이면 409)
+                try:
+                    return self._json(h, 200, {"ok": True, "run_dir": cv.new_main()})
+                except RuntimeError as e:
+                    return self._json(h, 409, {"error": "new_main", "detail": str(e)})
             if path == "/api/main/reopen":   # 지난 메인 대화로 다시 열기(목록에 든 기록만)
                 try:
-                    return self._json(h, 200, {"ok": True, "run_dir": self.main.reopen_main(str(data.get("run_dir") or ""))})
+                    return self._json(h, 200, {"ok": True, "run_dir": cv.reopen_main(str(data.get("run_dir") or ""))})
                 except (ValueError, RuntimeError) as e:
                     return self._json(h, 409, {"error": "reopen", "detail": str(e)})
             if path == "/api/answer":
@@ -404,7 +431,10 @@ class WebApp:
                 return self._json(h, 404, {"error": "not_found"})
             return self._send(h, 200, data, UI_ASSETS[name])
         if path == "/api/state":
-            return self._json(h, 200, self.main.state())
+            try:
+                return self._json(h, 200, self.main.conv(self._chat_q(url)).state())
+            except KeyError:
+                return self._json(h, 200, {**self.main.state(), "chat_gone": True})
         if path == "/sw.js":
             return self._send(h, 200, SW_JS, "text/javascript; charset=utf-8", headers={"Service-Worker-Allowed": "/"})
         if path == "/api/session":
@@ -417,13 +447,15 @@ class WebApp:
             return self._json(h, 200, self.session_conversation(name, before=num("before"), limit=num("limit"),
                                                                  prior=(q.get("prior") or ["0"])[0] == "1"))
         if path == "/api/stream":
-            return self.stream(h)
+            return self.stream(h, self._chat_q(url))
         if path == "/api/commands":   # 입력 칸 /명령 자동완성: 프로젝트·사용자 명령(.stewart/commands 등)
-            return self._json(h, 200, {"commands": [{"name": c.name, "description": c.description}
-                                                    for c in getattr(self.main.sess, "commands", [])]})
+            from .hubmain import HUB_COMMANDS
+            return self._json(h, 200, {"commands": [{"name": "/" + n, "description": d, "builtin": True} for n, d in HUB_COMMANDS]
+                                       + [{"name": c.name, "description": c.description}
+                                          for c in getattr(self._conv_q(url).sess, "commands", [])]})
         if path == "/api/files":      # 입력 칸 @파일: 작업 폴더 안 파일 이름(비밀 파일·.gitignore 빼고)
             q = (parse_qs(url.query).get("q") or [""])[0]
-            return self._json(h, 200, {"files": self.file_names(q)})
+            return self._json(h, 200, {"files": self.file_names(q, self._conv_q(url))})
         if path == "/api/past_sessions":
             return self._json(h, 200, self.past_sessions(archived=(parse_qs(url.query).get("archived") or ["0"])[0] == "1"))
         if path == "/api/test_commands":
@@ -445,7 +477,7 @@ class WebApp:
             return self._json(h, 200, {"rules": [{"id": r.id, "pattern": r.pattern, "warn": broad_note(r.pattern),
                                                   "scope": "session" if r.origin == "session" else "project"}
                                                  for r in self.hub.allow_rules()]})
-        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
+        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
                     "/api/session/control"):
             return self._json(h, 405, {"error": "method"})
         return self._json(h, 404, {"error": "not_found"})
@@ -533,7 +565,11 @@ class WebApp:
             except (ValueError, AttributeError):
                 return self._json(h, 400, {"error": "images", "detail": "이미지 자료가 base64 가 아니다"})
         try:
-            r = self.main.send(str(data.get("text") or ""), images=got or None)
+            try:
+                cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
+            except KeyError:
+                return self._json(h, 404, {"error": "no_chat", "detail": "닫혔거나 없는 대화다 — 화면을 새로 고친다"})
+            r = cv.send(str(data.get("text") or ""), images=got or None)
         except ImageError as e:
             return self._json(h, 400, {"error": "images", "detail": str(e)})
         if r == "no_vision":
@@ -548,11 +584,21 @@ class WebApp:
     FILES_MAX = 30
     FILES_SCAN = 20000
 
-    def file_names(self, q: str) -> list[str]:
+    @staticmethod
+    def _chat_q(url) -> str | None:
+        return (parse_qs(url.query).get("chat") or [None])[0]
+
+    def _conv_q(self, url):
+        try:
+            return self.main.conv(self._chat_q(url))
+        except KeyError:
+            return self.main
+
+    def file_names(self, q: str, conv=None) -> list[str]:
         """@파일 고르기 후보: 작업 폴더 안 파일의 상대 경로 가운데 q 가 든 것(대소문자 무시). 비밀 파일 이름·.gitignore·
         .git 등은 빼고(읽기 판정과 같은 is_secret), 작업 폴더 밖(링크로 밖)은 뺀다. 내용은 읽지 않는다."""
         from . import fswalk
-        env = self.main.sess.env
+        env = (conv or self.main).sess.env
         root = Path(env.workdir).resolve()
         ql = q.strip().lower()
         out, n = [], 0
@@ -707,8 +753,8 @@ class WebApp:
         reg = self.hub.registry()["sessions"]
         if name not in reg:
             return self._json(h, 404, {"error": "no_session"})
-        if reg[name].get("role") == "main":
-            return self._json(h, 200, {"result": self.main.send(text)})
+        if reg[name].get("role") in ("main", "chat"):
+            return self._json(h, 200, {"result": self.main.conv(name).send(text)})
         if reg[name]["status"] in ("stopped", "failed"):
             return self._json(h, 409, {"error": "not_running", "detail": f"{name} 은 {reg[name]['status']}"})
         n = self.hub.send(name, text, kind, sender="human")
@@ -721,8 +767,8 @@ class WebApp:
         reg = self.hub.registry()["sessions"]
         if not isinstance(name, str) or name not in reg or action not in ("pause", "resume", "stop"):
             return self._json(h, 400, {"error": "fields"})
-        if reg[name].get("role") == "main":
-            return self._json(h, 400, {"error": "main", "detail": "메인은 허브를 끄고 켜서 다룬다"})
+        if reg[name].get("role") in ("main", "chat"):
+            return self._json(h, 400, {"error": "main", "detail": "대화는 [새 대화]·[닫기]로 다룬다(작업자만 멈춤·이어 가기)"})
         try:
             e = {"pause": self.hub.pause, "resume": self.hub.resume, "stop": self.hub.stop}[action](name)
         except (ValueError, RuntimeError, KeyError) as ex:
@@ -865,12 +911,12 @@ class WebApp:
             head, body = sd.read_report(n)
             reports.append({"seq": n, "kind": head.get("report_kind"), "reason": head.get("reason"), "text": body[:4000]})
         todos = []
-        if e.get("role") == "main":
-            todos = list(getattr(self.main.sess.env, "todos", []) or [])
+        if e.get("role") in ("main", "chat"):
+            todos = list(getattr(self.main.conv(name).sess.env, "todos", []) or [])
         return {"session": e, "events": events, "diff_stat": diff, "reports": reports, "todos": todos, "live": live,
                 "server_time": time.time()}
 
-    def stream(self, h) -> None:
+    def stream(self, h, chat: str | None = None) -> None:
         h.send_response(200)
         h.send_header("Content-Type", "text/event-stream")
         h.send_header("Cache-Control", "no-store")
@@ -878,7 +924,13 @@ class WebApp:
         last = None
         try:
             for _ in range(3600):
-                st = json.dumps(self.main.state(), ensure_ascii=False)
+                try:
+                    cv = self.main.conv(chat)
+                except KeyError:   # 대화가 닫혔다: 표시 하나 보내고 닫는다(화면이 메인으로 돌아가 다시 붙는다)
+                    h.wfile.write(b'data: {"chat_gone": true}\n\n')
+                    h.wfile.flush()
+                    return
+                st = json.dumps(cv.state(), ensure_ascii=False)
                 if st != last:
                     h.wfile.write(f"data: {st}\n\n".encode())
                     h.wfile.flush()

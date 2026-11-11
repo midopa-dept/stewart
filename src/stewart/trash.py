@@ -99,7 +99,7 @@ class Manager:
         meta = self.meta()["workers"]
         out = []
         for name, e in self.hub.registry()["sessions"].items():
-            if e.get("role") == "main" or e.get("status") not in ("paused", "stopped", "failed"):
+            if e.get("role") in ("main", "chat") or e.get("status") not in ("paused", "stopped", "failed"):
                 continue
             m = meta.get(name, {})
             out.append({"kind": "worker", "key": name, "name": name, "status": e["status"], "title": m.get("title", ""),
@@ -139,7 +139,7 @@ class Manager:
     def _check(self, kind: str, key: str) -> None:
         if kind == "worker":
             e = self.hub.registry()["sessions"].get(key)
-            if e is None or e.get("role") == "main":
+            if e is None or e.get("role") in ("main", "chat"):
                 raise ValueError(f"없는 작업자: {key}")
             if e.get("status") in LIVE:
                 raise RuntimeError(f"{key} 는 도는 중이다({e['status']}) — 먼저 멈추거나 끝낸 뒤 지운다")

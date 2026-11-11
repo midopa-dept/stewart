@@ -125,7 +125,10 @@ class TCli(unittest.TestCase):
         self.assertTrue(A.Store(tmp).verify("dana", "good-password"))
         self.assertEqual(cli.main(base[:1] + ["disable", "dana"] + base[1:]), 0)
         self.assertFalse(A.Store(tmp).verify("dana", "good-password"))
-        self.assertEqual(cli.main(base[:1] + ["passwd", "nope"] + base[1:] + ["--password-stdin"]), 2)
+        read = mock.Mock(return_value="x-password\n")
+        with mock.patch.object(sys, "stdin", types.SimpleNamespace(readline=read)):   # 물려받은 stdin 을 기다리지 않게
+            self.assertEqual(cli.main(base[:1] + ["passwd", "nope"] + base[1:] + ["--password-stdin"]), 2)
+        read.assert_not_called()                                         # 없는 사용자면 비밀번호를 읽지 않는다
 
 
 class TAccountsWeb(MainBase):

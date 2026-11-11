@@ -5,7 +5,7 @@ import { render, Component } from 'preact'
 import { useEffect, useRef, useState, useLayoutEffect } from 'preact/hooks'
 import './app.css'
 import { get, post, fmtK, estTokens } from './lib.js'
-import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast } from './state.js'
+import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
 import { Thread, Md, TodoItems } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
 import { Sidebar, ConnDot, ModelDot } from './side.jsx'
@@ -43,18 +43,29 @@ function CtxBar() {
   )
 }
 
+// [새 대화]: 지금 대화는 기록에 남기고(지난 세션에서 다시 연다) 빈 문맥으로 — /clear·/reset 과 같다. 확인은 단추에만
+async function newMain() {
+  if (!confirm('지금 대화를 닫고 새로 시작할까요?\n(지금 대화는 기록에 남아 지난 세션 목록에서 다시 열 수 있다)')) return
+  try { await cpost('/api/main/new', {}); toast('새 대화를 시작했다'); refresh() } catch (e) { toast('새로 못 함: ' + e.message) }
+}
+function NewMain() {
+  const busy = hub.value?.busy
+  return <button class="btn btn-ghost !px-2.5 text-xs flex-none" disabled={busy} onClick={newMain}
+    title={busy ? '메인이 일하는 중 — 멈춘 뒤' : '새 대화(/clear): 지금 대화는 기록에 남는다'}>새 대화</button>
+}
+
 function Prior() {
   // 이어 받은(다시 연) 메인의 앞 대화: 접힌 채로, 펼치면 뒤에서부터 80줄씩
   const run = hub.value?.main_run
   const [p, setP] = useState(null), [open, setOpen] = useState(false)
   useEffect(() => {
     setP(null); setOpen(false)
-    if (run) get('/api/session/conversation?name=main&prior=1&limit=80').then(r => setP(r.total ? r : null)).catch(() => {})
+    if (run) get('/api/session/conversation?name=' + encodeURIComponent(chat.value) + '&prior=1&limit=80').then(r => setP(r.total ? r : null)).catch(() => {})
   }, [run])
   const note = hub.value?.resume_note
   if (!p && !note) return null
   async function more() {
-    const r = await get(`/api/session/conversation?name=main&prior=1&before=${p.start}&limit=80`)
+    const r = await get(`/api/session/conversation?name=${encodeURIComponent(chat.value)}&prior=1&before=${p.start}&limit=80`)
     setP({ ...p, start: r.start, items: [...r.items, ...p.items] })
   }
   return (
@@ -78,13 +89,24 @@ function useStick(dep) {
   return [ref, onScroll]
 }
 
+// 갈래(지금 대화를 복사해 새 대화로, 이후 서로 독립)·닫기(사람이 연 대화만, 기록은 지난 대화에)
+async function forkChat() {
+  try { const r = await cpost('/api/chat/new', { how: 'fork', from: chat.value }); openChat(r.chat); toast(`갈래를 열었다: ${r.title}`, 'ok', 4000) } catch (e) { toast('갈래 못 엶: ' + e.message) }
+}
+async function closeChat(name) {
+  if (!confirm('이 대화를 닫을까요?\n(기록은 남아 지난 대화에서 다시 열 수 있다)')) return
+  try { await post('/api/chat/close', { chat: name }); openChat('main') } catch (e) { toast('못 닫음: ' + e.message) }
+}
+
 function Center() {
   const v = view.value
-  const isMain = v === 'main'
+  const conv = (hub.value?.chats || []).find(c => c.name === v)
+  const isMain = v === 'main' || !!conv          // 대화(메인·사람이 연 대화)는 모두 같은 채팅 칸
   const st = hub.value
   const w = useWorker(isMain ? '' : v)
   const [ref, onScroll] = useStick()
-  const title = isMain ? '메인' : v
+  useEffect(() => { if (isMain && chat.value !== v) openChat(v) }, [v])
+  const title = v === 'main' ? '메인' : conv ? conv.title : `작업자 ${v}`
   const main = sessions.value.find(s => s.role === 'main')
   return (
     <main class="flex flex-col min-w-0 h-full relative">
@@ -97,6 +119,9 @@ function Center() {
         <span class="md:hidden flex gap-1"><ConnDot withText={false} /><ModelDot withText={false} /></span>
         {!isMain && <WorkerControls name={v} />}
         {isMain ? <CtxBar /> : <span class="ml-auto" />}
+        {isMain && <NewMain />}
+        {isMain && <button class="btn btn-ghost !px-2.5 text-xs flex-none max-md:hidden" disabled={st?.busy} onClick={forkChat} title="지금 대화를 복사해 새 대화로(이후 서로 독립)">갈래</button>}
+        {conv && v !== 'main' && <button class="btn btn-ghost !px-2.5 text-xs flex-none" onClick={() => closeChat(v)} title="이 대화 닫기(기록은 남는다)">닫기</button>}
         <button class={'btn btn-ghost !px-2.5 ' + (hub.value?.tokens?.window ? '' : 'ml-auto')} onClick={() => setPanel(panel.value ? null : (isMain ? 'steps' : 'session'))}
           title="작업 내역 패널">{panel.value ? '내역 ▸' : '◂ 내역'}</button>
       </div>
@@ -162,7 +187,7 @@ function BanStrip() {
   const bans = hub.value?.bans || []
   const [open, setOpen] = useState(false)
   if (!bans.length) return null
-  async function unban(id) { try { await post('/api/main/unban', { id }); refresh() } catch (e) { toast('못 풂: ' + e.message) } }
+  async function unban(id) { try { await cpost('/api/main/unban', { id }); refresh() } catch (e) { toast('못 풂: ' + e.message) } }
   return (
     <div class="mb-2 border border-bad/30 rounded-xl bg-panel text-[13px]">
       <button class="w-full flex items-center gap-2 px-3 py-1.5 text-left" onClick={() => setOpen(!open)}>

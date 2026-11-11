@@ -219,8 +219,9 @@ def _error(e):
         except (TypeError, ValueError):
             body = str(e.body)[:4000]
         return BackendError(f"Anthropic API 오류 {e.status_code}: {getattr(e, 'message', e)}", e.status_code, body)
-    if isinstance(e, a.APIConnectionError):
-        return BackendError(f"연결 실패: {e}")
+    if isinstance(e, a.APIConnectionError):   # SDK 는 "Connection error." 한 줄만 — 진짜 원인(TLS·프록시)은 사슬 안
+        from .backend import conn_error
+        return conn_error("연결 실패", e)
     return BackendError(f"Anthropic 오류: {type(e).__name__}: {e}")
 
 

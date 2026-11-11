@@ -58,8 +58,11 @@ class MainTools:
         self.default_profile, self.default_backend = default_profile, default_backend
 
     def _known(self, name) -> str | None:
-        if not isinstance(name, str) or name not in self.hub.registry()["sessions"]:
+        reg = self.hub.registry()["sessions"]
+        if not isinstance(name, str) or name not in reg:
             return f"없는 세션: {name}"
+        if reg[name].get("role") in ("main", "chat"):   # 사람이 연 대화·메인은 작업자 도구로 다루지 않는다
+            return f"{name} 은 작업자가 아니라 대화다(사람이 화면에서 쓰는 칸) — 작업자 도구로는 다루지 않는다"
         return None
 
     def execute(self, name: str, args: dict) -> tuple[bool, str]:
@@ -121,6 +124,8 @@ class MainTools:
         rows = []
         q = self.hub.queue()
         for e in self.hub.list():
+            if e.get("role") == "chat":   # 사람이 연 대화는 작업자 목록에 넣지 않는다
+                continue
             waiting = sum(1 for x in q if x["session"] == e["name"])
             unread = [n for n in range(1, (e.get("outbox_seq") or 0) + 1) if n not in (e.get("read_reports") or [])]
             rows.append({"name": e["name"], "status": e["status"], "mode": e["mode"], "waiting_approvals": waiting,

@@ -4,7 +4,7 @@ import { mdHtml, fmtK, fmtSecs, estTokens, post } from './lib.js'
 import { diffRows } from './diffrows.js'
 import { copyText, flash } from './copy.js'
 import { ThinkBlock } from './think.jsx'
-import { hub, tick, clockSkew, busy, refresh, toast } from './state.js'
+import { hub, tick, clockSkew, busy, refresh, toast, cpost } from './state.js'
 
 // main_log 줄을 덩어리로: user · assistant · diff · steps(도구·안내 줄 묶음)
 export function groupLog(log) {
@@ -244,7 +244,7 @@ function ErrorCard({ m, last }) {
   const st = hub.value
   async function retry() {
     setSent(true)
-    try { await post('/api/main', { text: m.retry }); refresh() } catch (e) { setSent(false); toast('못 보냈다: ' + e.message) }
+    try { await cpost('/api/main', { text: m.retry }); refresh() } catch (e) { setSent(false); toast('못 보냈다: ' + e.message) }
   }
   const model = st?.model
   return (
@@ -307,7 +307,7 @@ export function Thread({ log, prior }) {
       {prior}
       {!groups.length && !busy.value && (
         <div class="text-center text-mute py-16">
-          <div class="text-lg font-semibold text-fg mb-1">메인에게 할 일을 말하십시오</div>
+          <div class="text-lg font-semibold text-fg mb-1">{(hub.value?.chat || 'main') === 'main' ? '메인에게 할 일을 말하십시오' : '새 대화 — 메인과 같은 채팅입니다'}</div>
           <div class="text-sm">작업자를 맡기고, 승인을 묻고, 보고를 모읍니다.</div>
         </div>
       )}

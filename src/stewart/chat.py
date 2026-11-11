@@ -1032,7 +1032,8 @@ class ChatSession:
                         be(e)
                     else:
                         self.ui.warn(f"백엔드 오류: {e} {(e.body or '')[:300]}")
-                    self.rec.event("step", step=step, error=str(e), status=e.status, body=(e.body or "")[:2000])
+                    self.rec.event("step", step=step, error=str(e), status=e.status, body=(e.body or "")[:2000],
+                                   **({"error_chain": e.chain} if getattr(e, "chain", None) else {}))
                     self.rec.md_step(step, {"elapsed_s": 0.0, "note": f"백엔드 오류 {e}"})
                     if e.status and "parse" in (e.body or "").lower():
                         self.st["parse_failures"] += 1

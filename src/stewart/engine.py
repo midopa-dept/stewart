@@ -623,7 +623,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             if "timed out" in str(e) or "timeout" in str(e).lower():
                 st["backend_timeouts"] = st.get("backend_timeouts", 0) + 1
             st_rec = {"elapsed_s": 0.0, "note": f"백엔드 오류 {e} {body[:300]}"}
-            rec.event("step", step=step, request=req_summary, error=str(e), status=e.status, body=body[:2000])
+            rec.event("step", step=step, request=req_summary, error=str(e), status=e.status, body=body[:2000],
+                      **({"error_chain": e.chain} if getattr(e, "chain", None) else {}))
             if e.status and "parse" in body.lower():  # llama-server가 툴콜 파싱에 실패한 경우
                 st["parse_failures"] += 1
                 _broken(st, rec, step, "server_parse", body)

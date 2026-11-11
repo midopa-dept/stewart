@@ -56,6 +56,7 @@ uv run stewart hub --project ~/my-project
   - Approval bar: allow or deny what the model asks to run. ⌘/Ctrl+Enter allows, ⇧⌘/Ctrl+Backspace denies.
   - Conversation: edits show as diff cards with line numbers, thinking as a folding block, and every code block has a copy button.
   - Hand-off card: when the model reaches something only a person can do (a password, keychain prompt, sudo, a login), it stops retrying and hands it to you.
+  - Several conversations: start a new main conversation, branch the current one, or reopen a closed one. Approvals and stops apply per conversation. `/clear`, `/reset` and `/help` work.
   - Side panel: board, memory, steps, plan, always-allow rules, tokens.
   - Input: `/commands`, `@file`, pasted images. Large phone photos and HEIC are shrunk in the browser to 1600 px JPEG.
   - Model server status dot: ready, starting, unreachable, auth refused.
@@ -78,7 +79,7 @@ uv run stewart hub --project ~/my-project
 
 - `web_fetch` refuses private, loopback, link-local and CGNAT addresses and re-checks redirects. Fetched text reaches the model wrapped in outside-content markers.
 - In chat and the hub, `web_fetch` and `doc_search` are on even without a search address. `run` uses only what the profile and environment variables turn on.
-- Eight built-in skills (step plans, error diagnosis, git work, code review, fixing tests, web research, hand-off notes, reporting a blocker) are on in chat and the hub. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
+- Sixteen built-in skills are on in chat and the hub: step plans, error diagnosis, git work, code review, security review, simplify, fixing tests, run-and-check, web research, deep research, document files (PDF, Word, Excel, PowerPoint), project init, skill creator, stewart config, hand-off notes, reporting a blocker. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
 
 ## Safety
 
@@ -100,6 +101,36 @@ stewart runs shell commands the model chooses on your machine. The guards below 
 - `stewart dream` gathers notes into a proposed `MEMORY.md` per subject. Nothing changes until you take it with `--accept`. The hub makes proposals by itself when idle (`STEWART_DREAM_AUTO=0` turns that off).
 - Hand-written rule files (`AGENTS.md`, `STEWART.md`) win over memory when they conflict.
 - The memory folder is `~/.local/share/stewart/memory` (`STEWART_MEMORY_DIR`).
+
+## Same model, different runner
+
+We attached the same Claude models to stewart and to Claude Code (2.1.311), gave both the same coding tasks, and compared cost, time and tokens. This is an exploratory measurement outside our pre-registered study.
+
+| Model | stewart | Wall-clock ratio | Cost per run ratio | Billed tokens ratio |
+|---|---|---|---|---|
+| `claude-sonnet-5-5` | dev build 72 | 0.80 [0.71, 0.91] | 0.73 [0.62, 0.83] | 0.29 [0.24, 0.34] |
+| `claude-sonnet-5-5` | dev build 10 + Anthropic backend | 0.77 [0.71, 0.84] | 0.69 [0.57, 0.80] | 0.26 [0.22, 0.30] |
+| `claude-opus-5-5` | dev build 72 | 0.72 [0.65, 0.78] | 0.77 [0.64, 0.90] | 0.25 [0.20, 0.29] |
+| `claude-opus-5-5` | dev build 10 + Anthropic backend | 0.72 [0.67, 0.77] | 0.76 [0.64, 0.89] | 0.25 [0.20, 0.30] |
+
+- Ratio = stewart ÷ Claude Code (ratio of per-task means). Below 1 means stewart used less. Brackets are 95% intervals from a task-level bootstrap.
+- Median per run: Sonnet, stewart 15–17 s and $0.05–0.06 vs Claude Code 20 s and $0.08; Opus, stewart 22 s and $0.09–0.10 vs Claude Code 29 s and $0.14.
+- Most of the token difference comes from the size of the system instructions and tool definitions sent with every request.
+- Success rates (hidden tests pass and instructions followed) showed no meaningful difference between the two runners, so they are not reported here.
+
+Conditions
+- Tasks: 16 of our own unpublished tasks (part of the v2 development set). The held-out evaluation set was not used. Each task ran 1–2 times with stewart and 5–22 times with Claude Code.
+- Dates: stewart 2026-11-11, Claude Code 2026-11-10. Same evaluator, tasks and grading code.
+- stewart: adaptive thinking (default effort), `code` profile, web off, prompt caching on. Claude Code: product defaults, acceptEdits, one added line of evaluation rules, auto memory off.
+- Cost: for both runners, the tokens reported by the API (input, output, cache reads, cache writes) times the same public price table.
+
+Limits
+- The tasks, evaluator and hidden tests are not public yet (planned with the study), so others cannot rerun this today.
+- Claude Code was measured a day earlier. API latency varies by day and hour, which affects the wall-clock comparison; cost and token comparisons do not depend on the day.
+- The 16 tasks were chosen to show success-rate differences between models and runners; they are not a random sample. The efficiency ratios may differ on other tasks.
+- Each runner used its own default thinking settings; they are not guaranteed to be equivalent.
+- The cost Claude Code reported for itself was higher than the price-table cost of the same tokens (1.47× for Opus). The table uses the price-table cost, not actual billing.
+- One person measured this on one Mac.
 
 ## Install and first run
 
