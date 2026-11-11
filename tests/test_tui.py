@@ -149,6 +149,17 @@ class TState(unittest.TestCase):
         self.assertFalse(s.eof())                   # working 에서는 Ctrl-D 무시
 
 
+class TIdleRace(unittest.TestCase):
+    def test_queued_text_is_taken_by_idle_wait(self):
+        """read_line 이 줄을 비운 뒤 기다리기 전에 Enter 가 오면(working 중 submit → 줄) idle 기다리기가 그 글을 바로 가져간다."""
+        s = U.InputState()
+        self.assertEqual(s.submit("사이에 친 글"), "queued")
+        t0 = time.monotonic()
+        self.assertEqual(s.wait("idle"), "사이에 친 글")
+        self.assertLess(time.monotonic() - t0, 1)
+        self.assertEqual(s.inbox, [])
+
+
 class TApp(unittest.TestCase):
     """실제 prompt_toolkit Application 을 pipe 입력으로 돌린다."""
 
@@ -186,9 +197,16 @@ class TApp(unittest.TestCase):
         self.assertEqual(ui.read_line("› "), "안녕 하세요")
         self.pipe.send_text("첫 줄\x1b\r둘째 줄\r")      # Alt-Enter = 줄바꿈
         self.assertEqual(ui.read_line("› "), "첫 줄\n둘째 줄")
-        self.pipe.send_text("\x04")
+        got = []
+
+        def eof_later():   # Ctrl-D 는 기다리는 중(idle)에만 뜻이 있다 — 일하는 중 Ctrl-D 는 무시(설계)
+            until(lambda: ui.state.mode == "idle")
+            self.pipe.send_text("\x04")
+        t = threading.Thread(target=eof_later, daemon=True)
+        t.start()
         with self.assertRaises(EOFError):
-            ui.read_line("› ")
+            got.append(ui.read_line("› "))
+        t.join(5)
 
     def test_interject_after_tool_step(self):
         ui = self.ui()

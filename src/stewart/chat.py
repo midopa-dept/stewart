@@ -213,6 +213,8 @@ class ChatSession:
         self.profile, self.backend, self.rec = profile, backend, rec
         from .shell import hide_env
         hide_env(backend.api_key_env)          # 백엔드 키 변수는 모델 셸 환경에서 뺀다(판 69)
+        from .backend import set_default_retries
+        set_default_retries(4)                 # 실사용: 429·5xx·연결 끊김에 다시 보냄(평가 run 은 0 그대로, SW-34 ①)
         # 더 여는 도구(허브의 메인 세션 도구 등): (정의 목록, execute(name, args) -> (ok, 글)). delegate 처럼 확인 없이 돈다
         self.extra_defs, self.extra_exec = (list(extra_tools[0]), extra_tools[1]) if extra_tools else ([], None)
         self.ui = ui or UI()
@@ -1058,6 +1060,12 @@ class ChatSession:
                 msg = choice.get("message") or {}
                 usage = resp.get("usage") or {}
                 tim = resp.get("timings") or {}
+                from .backend import take_retries
+                rts = take_retries()
+                if rts:   # 429·5xx·끊김에 다시 보내 받은 응답(SW-34 ①) — 화면에 한 줄
+                    self.st["backend_retries"] = self.st.get("backend_retries", 0) + len(rts)
+                    self.rec.event("backend_retry", step=step, attempts=rts)
+                    self.ui.dim(f"  (모델 서버가 {rts[-1].get('status') or '연결 끊김'} — {len(rts)}번 다시 보내 받았다)")
                 self.st["completion_tokens"] += usage.get("completion_tokens") or 0
                 self.st["prompt_tokens_total"] += usage.get("prompt_tokens") or 0
                 if usage.get("cost_usd"):   # Messages API 백엔드(판 69)·가격표를 단 OpenAI 호환 API

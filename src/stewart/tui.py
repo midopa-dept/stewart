@@ -265,8 +265,12 @@ class InputState:
             return out
 
     def wait(self, mode: str, label: str = "") -> str:
-        """답이 올 때까지(사이에 SIGINT 가 오면 KeyboardInterrupt 가 여기서 난다). EOF 면 EOFError."""
+        """답이 올 때까지(사이에 SIGINT 가 오면 KeyboardInterrupt 가 여기서 난다). EOF 면 EOFError.
+        idle 은 잠금 안에서 줄 선 글부터 본다 — 꺼내기와 기다리기 사이에 Enter 가 오면 글이 줄에 남은 채 멈추던 틈(공개 시험 u76-4)."""
         with self.cv:
+            if mode == "idle" and self.inbox:
+                out, self.inbox = self.inbox, []
+                return "\n\n".join(out)
             self.mode, self.label, self._answer = mode, label, None
             try:
                 while self._answer is None:

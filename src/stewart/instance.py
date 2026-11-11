@@ -185,18 +185,71 @@ def run(name: str) -> int:
     return 0   # 닿지 않음
 
 
+START_WAIT_S = 20           # start 가 허브의 첫 줄("접속: …")을 기다리는 시간
+READY_MARK = "접속: "
+DEAD_MARK = "[stewart instance] 허브가 끝났다"
+
+
+def run_log(cfg: dict) -> Path:
+    return cfg["_dirs"]["state"] / "hub-run.log"
+
+
+def tmux_cmd(name: str, log: Path) -> str:
+    """tmux 안에서 돌릴 줄: 허브 출력을 화면과 기록 파일에 함께, 끝나면 까닭을 남기고 창을 닫지 않는다(attach 로 볼 수 있게)."""
+    run_cmd = " ".join(shlex.quote(x) for x in [sys.executable, "-m", "stewart", "instance", name, "run"])
+    lq = shlex.quote(str(log))
+    inner = (f"set -o pipefail; {run_cmd} 2>&1 | tee -a {lq}; rc=$?; "
+             f"echo \"{DEAD_MARK}(exit $rc) — 기록 {log}\" | tee -a {lq}; read -r _")
+    return "bash -c " + shlex.quote(inner)
+
+
+def watch_start(log: Path, offset: int, wait_s: float = START_WAIT_S, sleep=None) -> tuple[str, str]:
+    """기록 파일의 offset 뒤를 지켜본다 → ("ready"|"dead"|"slow", 새로 쓰인 글)."""
+    import time
+    sleep = sleep or time.sleep
+    end = time.monotonic() + wait_s
+    text = ""
+    while time.monotonic() < end:
+        try:
+            with open(log, "rb") as f:
+                f.seek(offset)
+                text = f.read().decode("utf-8", "replace")
+        except OSError:
+            text = ""
+        if DEAD_MARK in text:
+            return "dead", text
+        if READY_MARK in text:
+            return "ready", text
+        sleep(0.5)
+    return "slow", text
+
+
 def start(name: str) -> int:
-    """tmux 세션 stewart-<이름> 안에 run 을 띄운다(이미 있으면 그대로)."""
-    load(name)
+    """tmux 세션 stewart-<이름> 안에 run 을 띄우고, 허브가 "접속:" 줄을 낼 때까지 지켜본다(죽으면 마지막 줄과 기록 자리를 보인다)."""
+    cfg = load(name)
     sess = f"stewart-{name}"
     if not shutil.which("tmux"):
         raise InstanceError("tmux 가 없다")
     if subprocess.run(["tmux", "has-session", "-t", sess], capture_output=True).returncode == 0:
         print(f"이미 떠 있다: tmux attach -t {sess}")
         return 0
-    cmd = " ".join(shlex.quote(x) for x in [sys.executable, "-m", "stewart", "instance", name, "run"])
-    subprocess.run(["tmux", "new-session", "-d", "-s", sess, cmd], check=True)
-    print(f"켰다: tmux 세션 {sess} — 보기 tmux attach -t {sess}")
+    log = run_log(cfg)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if not log.exists():   # 허브가 로그인 토큰을 찍으므로 나만 읽게
+        os.close(os.open(log, os.O_CREAT | os.O_WRONLY, 0o600))
+    offset = log.stat().st_size
+    subprocess.run(["tmux", "new-session", "-d", "-s", sess, tmux_cmd(name, log)], check=True)
+    state, text = watch_start(log, offset)
+    tail = "\n".join(text.strip().splitlines()[-20:])
+    if state == "dead":
+        print(f"허브가 켜지자마자 끝났다 — 기록 {log}\n{tail}", file=sys.stderr)
+        subprocess.run(["tmux", "kill-session", "-t", sess], capture_output=True)
+        return 1
+    if state == "slow":
+        print(f"{START_WAIT_S}초 안에 '접속:' 줄이 안 보였다(아직 뜨는 중일 수 있다). 보기: tmux attach -t {sess} · 기록 {log}")
+        return 0
+    url = next((ln for ln in text.splitlines() if READY_MARK in ln), "").strip()
+    print(f"켰다: tmux 세션 {sess} — {url} · 보기 tmux attach -t {sess} · 기록 {log}")
     return 0
 
 

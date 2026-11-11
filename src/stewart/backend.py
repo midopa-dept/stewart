@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import os
+import random
 import re
 import threading
 import time
@@ -224,11 +226,13 @@ def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
     done = threading.Event()
 
     def run():
+        set_abort_scope(scope)   # 다시 보내기 대기도 같은 범위의 [멈춤]으로 끊긴다
         try:
             box["r"] = _send(backend, body, overrides)
         except BaseException as e:   # noqa: BLE001 — 기다리는 쪽으로 그대로 넘긴다
             box["e"] = e
         finally:
+            box["retries"] = getattr(_RETRY, "log", None) or []
             done.set()
             if box.get("orphan") and box.get("r") is not None:
                 _close(box["r"])
@@ -241,6 +245,7 @@ def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
             e = KeyboardInterrupt()
             e.partial = {"content": ""}
             raise e
+    _RETRY.log = box.get("retries") or []   # 다시 보낸 기록을 부른 스레드로(take_retries)
     if "e" in box:
         raise box["e"]
     return box["r"]
@@ -407,9 +412,63 @@ def _open(backend: Backend, path: str, body: dict | None, timeout: float):
         return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         text = e.read().decode("utf-8", "replace")
-        raise BackendError(f"HTTP {e.code}", e.code, text[:4000]) from None
+        err = BackendError(f"HTTP {e.code}", e.code, text[:4000])
+        err.retry_after = _retry_after(e.headers.get("Retry-After") if e.headers else None)
+        raise err from None
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         raise conn_error("연결 실패", e) from None
+
+
+# ── 다시 보내기(SW-34 ①): 429·5xx·연결 끊김. 평가 길은 기본 0(평가 규칙 "백엔드 오류만 다시 돎"을 바꾸지 않게) ──
+RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+RETRY_CAP_S = 60.0
+_RETRY = threading.local()
+_DEFAULT_RETRIES = [0]
+
+
+def set_default_retries(n: int) -> None:
+    """이 프로세스의 기본 다시 보내기 횟수(chat·허브가 켤 때 4 로). 백엔드 retries·STEWART_BACKEND_RETRIES 가 이긴다."""
+    _DEFAULT_RETRIES[0] = max(0, int(n))
+
+
+def retries_for(backend) -> int:
+    v = os.environ.get("STEWART_BACKEND_RETRIES", "")
+    if v.isdigit():
+        return int(v)
+    r = getattr(backend, "retries", None)
+    return int(r) if r is not None else _DEFAULT_RETRIES[0]
+
+
+def _retry_after(v) -> float | None:
+    try:
+        return max(0.0, min(RETRY_CAP_S, float(v))) if v not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def _retryable(e: "BackendError") -> bool:
+    if e.status in RETRY_STATUS:
+        return True
+    if e.status is None and getattr(e, "chain", None):   # 연결 거부·끊김은 다시, 시간 초과는 다시 안 함(긴 프롬프트를 또 기다리게 된다)
+        text = " ".join(f"{c['type']} {c['msg']}" for c in e.chain).lower()
+        return not ("timeout" in text or "timed out" in text) and any(
+            w in text for w in ("refused", "reset", "remotedisconnected", "broken pipe", "connection aborted", "eof occurred"))
+    return False
+
+
+def _sleep_abortable(secs: float, gen: tuple) -> None:
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        if (_ABORT_GEN[0], _SCOPE_GEN.get(_scope(), 0)) != gen:
+            raise KeyboardInterrupt
+        time.sleep(min(0.2, max(0.0, end - time.monotonic())))
+
+
+def take_retries() -> list:
+    """방금 요청에서 다시 보낸 기록 [{status, wait_s}] 을 꺼낸다(엔진·chat 이 기록에 남긴다)."""
+    out = getattr(_RETRY, "log", None) or []
+    _RETRY.log = []
+    return out
 
 
 def _send(backend: Backend, body: dict, overrides: dict | None):
@@ -422,6 +481,25 @@ def _send(backend: Backend, body: dict, overrides: dict | None):
         raise BackendError(f"API 키가 없다: {where}", 401, "")
     for k in backend.dropped_params:
         body.pop(k, None)
+    n = retries_for(backend)
+    gen = (_ABORT_GEN[0], _SCOPE_GEN.get(_scope(), 0))
+    _RETRY.log = []
+    for attempt in range(n + 1):
+        try:
+            return _send_once(backend, body, overrides)
+        except BackendError as e:
+            if attempt >= n or not _retryable(e):
+                raise
+            wait = getattr(e, "retry_after", None)
+            if wait is None:
+                wait = min(RETRY_CAP_S, 2.0 * (2 ** attempt)) * (0.75 + 0.5 * random.random())
+            _RETRY.log.append({"status": e.status, "wait_s": round(wait, 2), "error": str(e)[:200]})
+            _sleep_abortable(wait, gen)
+    raise AssertionError("닿지 않음")
+
+
+def _send_once(backend: Backend, body: dict, overrides: dict | None):
+    from .think import SAMPLING_KEYS
     try:
         return _open(backend, "/chat/completions", body, backend.timeout_s)
     except BackendError as e:

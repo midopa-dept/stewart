@@ -107,6 +107,56 @@ class TInstance(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
 
 
+HUB_TOML = """# EXAONE 허브 설정(사용자 자리 예시와 같은 꼴)
+[hub]
+port = 8766
+label = "EXAONE"
+color = "#d97706"
+# ntfy_url = "…"
+"""
+
+
+class TStartAndConfig(unittest.TestCase):
+    def test_example_hub_toml_loads(self):
+        from stewart.hubmain import hub_config
+        d = Path(tempfile.mkdtemp())
+        (d / "hub.toml").write_text(HUB_TOML, encoding="utf-8")
+        cfg = hub_config(str(d / "hub.toml"))
+        self.assertEqual((cfg["label"], cfg["color"], cfg["port"]), ("EXAONE", "#d97706", 8766))
+        (d / "hub2.toml").write_text('[hub]\nnotify_tag = "EX"\n', encoding="utf-8")
+        self.assertEqual(hub_config(str(d / "hub2.toml"))["notify_tag"], "EX")
+
+    def test_user_example_if_given(self):
+        p = Path(os.environ.get("STEWART_TEST_INSTANCE_HUB_TOML", ""))   # 사용자 자리 설정 본으로도 시험할 때만(없으면 건너뜀)
+        if not os.environ.get("STEWART_TEST_INSTANCE_HUB_TOML") or not p.is_file():
+            self.skipTest("STEWART_TEST_INSTANCE_HUB_TOML 없음")
+        from stewart.hubmain import hub_config
+        self.assertEqual(hub_config(str(p))["label"], "EXAONE")
+
+    def test_watch_start(self):
+        log = Path(tempfile.mkdtemp()) / "hub-run.log"
+        log.write_text("앞 회차\n", encoding="utf-8")
+        off = log.stat().st_size
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("ConfigError: 모르는 키\n" + I.DEAD_MARK + "(exit 2) — 기록 x\n")
+        st, text = I.watch_start(log, off, wait_s=2, sleep=lambda s: None)
+        self.assertEqual(st, "dead")
+        self.assertIn("ConfigError", text)
+        self.assertNotIn("앞 회차", text)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("접속: http://127.0.0.1:8766/\n")
+        self.assertEqual(I.watch_start(log, log.stat().st_size - 40, wait_s=1, sleep=lambda s: None)[0], "ready")
+        self.assertEqual(I.watch_start(log, log.stat().st_size, wait_s=0.2, sleep=lambda s: None)[0], "slow")
+
+    def test_tmux_cmd_shape(self):
+        c = I.tmux_cmd("ex", Path("/x/hub-run.log"))
+        self.assertTrue(c.startswith("bash -c "))
+        self.assertIn("pipefail", c)
+        self.assertIn("tee -a", c)
+        self.assertIn("instance ex run", c)
+        self.assertIn("허브가 끝났다", c)
+
+
 class TLabelAndUse(unittest.TestCase):
     def test_ntfy_tag(self):
         n = notify.from_config({"ntfy_url": "https://ntfy.example/topic", "label": "EXAONE"}, "proj")

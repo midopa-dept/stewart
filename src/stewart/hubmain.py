@@ -844,7 +844,8 @@ def hub_config(path: str | None = None) -> dict:
         return {}
     d = tomllib.loads(p.read_text(encoding="utf-8")).get("hub") or {}
     known = {"notify_url", "state_dir", "worktree_root", "port", "hosts", "ntfy_url", "ntfy_token_file", "hub_url", "ntfy_priority", "ui",
-             "accounts", "listen", "user_root"}
+             "accounts", "listen", "user_root",
+             "label", "color", "notify_tag"}   # 판 77: 허브가 여럿일 때 이름표·색 띠·알림 꼬리표
     bad = sorted(set(d) - known)
     if bad:
         from .config import ConfigError

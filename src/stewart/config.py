@@ -59,6 +59,7 @@ class Backend:
     thinking_control: str = "chat_template"   # 생각 켜고 끄기를 보내는 꼴: chat_template(vLLM·llama.cpp) | none(보내지 않음 — 생각 고정 API)
     price: dict = field(default_factory=dict)  # {input, output, cache_read?} 달러/1M 토큰 — 있으면 응답 usage 에 cost_usd
     used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0})   # 이 프로세스 누계(화면)
+    retries: int | None = None  # 429·5xx·연결 끊김에 다시 보낼 횟수. None 이면 실사용(chat·허브) 4·평가(run) 0. STEWART_BACKEND_RETRIES 가 이긴다
 
     def external(self) -> bool:
         """작업 내용이 바깥 회사로 나가는 백엔드인가: provider 를 적었거나, 주소가 이 기계·사설망·tailnet 이 아니면."""
@@ -181,6 +182,7 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 api_key_keychain=b.get("api_key_keychain"),
                 thinking_control=str(b.get("thinking_control") or "chat_template"),
                 price=dict(b.get("price") or {}),
+                retries=(int(b["retries"]) if b.get("retries") is not None else None),
             )
             if out[name].kind not in ("openai", "anthropic"):
                 raise ConfigError(f"{path}: backends.{name}.kind 는 openai 또는 anthropic")

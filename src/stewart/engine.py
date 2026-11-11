@@ -623,7 +623,12 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             if "timed out" in str(e) or "timeout" in str(e).lower():
                 st["backend_timeouts"] = st.get("backend_timeouts", 0) + 1
             st_rec = {"elapsed_s": 0.0, "note": f"백엔드 오류 {e} {body[:300]}"}
+            from .backend import take_retries
+            rts = take_retries()
+            if rts:
+                st["backend_retries"] = st.get("backend_retries", 0) + len(rts)
             rec.event("step", step=step, request=req_summary, error=str(e), status=e.status, body=body[:2000],
+                      **({"retries": rts} if rts else {}),
                       **({"error_chain": e.chain} if getattr(e, "chain", None) else {}))
             if e.status and "parse" in body.lower():  # llama-server가 툴콜 파싱에 실패한 경우
                 st["parse_failures"] += 1
@@ -646,6 +651,12 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             break
 
         st["model_time_s"] += dt
+        from .backend import take_retries
+        rts = take_retries()
+        if rts:   # 429·5xx·끊김에 다시 보내 받은 응답(SW-34 ①)
+            st["backend_retries"] = st.get("backend_retries", 0) + len(rts)
+            rec.event("backend_retry", step=step, attempts=rts)
+            comps.fire("backend_retry", step, "backend_error", "retry", attempts=len(rts), last_status=rts[-1].get("status"))
         choice = (resp.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         usage = resp.get("usage") or {}
@@ -1168,6 +1179,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "shell": shell_end,
         "web_result_urls": sorted({u for e in env.search_log for u in e["urls"]}),  # 나중 web_fetch 허용 목록
         "completion_tokens": st["completion_tokens"], "prompt_tokens_total": st["prompt_tokens_total"],
+        **({"backend_retries": st["backend_retries"]} if st.get("backend_retries") else {}),
         **({"anthropic_usage": st["anthropic_usage"], "cost_usd": st["anthropic_usage"]["cost_usd"]} if st.get("anthropic_usage") else {}),
         **({"cost_usd": st["cost_usd"]} if st.get("cost_usd") and not st.get("anthropic_usage") else {}),
         "last_prompt_tokens": st["last_prompt_tokens"],

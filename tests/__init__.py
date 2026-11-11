@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("STEWART_SERVED_CONTEXT", "0")
 # 기억: chat·허브 기본 켬(판 50)이지만 시험 묶음은 끈다(지시문·도구 목록이 그대로이게). 기억 시험은 직접 켠다
 os.environ.setdefault("STEWART_MEMORY", "0")
+os.environ.setdefault("STEWART_BACKEND_RETRIES", "0")   # 백엔드 다시 보내기 대기가 시험을 늦추지 않게(test_u59 만 푼다)
 os.environ.setdefault("STEWART_BOARD_QUIET", "0")
 os.environ.setdefault("STEWART_WEB_FETCH", "0")
 os.environ.setdefault("STEWART_DOC_SEARCH", "0")
