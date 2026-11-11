@@ -54,8 +54,9 @@ def split_topic(url: str) -> tuple[str, str]:
 
 class Ntfy:
     def __init__(self, url: str, token_file: str | None = None, click: str | None = None, project: str = "",
-                 hub=None, opener=None, priority: int = 3):
+                 hub=None, opener=None, priority: int = 3, tag: str = ""):
         self.base, self.topic = split_topic(url)
+        self.tag = tag                      # 알림 제목 앞 꼬리표(예: "[EXAONE]") — 허브가 여럿일 때 가름
         self.token_file, self.click, self.project = token_file, click, project
         self.priority = priority
         self.hub = hub                      # 세션·명령 앞 줄을 찾으려고(허브가 만든 뒤 붙인다)
@@ -84,7 +85,7 @@ class Ntfy:
                 body += "\n$ " + scrub(cmd[0])[:CMD_CHARS]
             elif paths:
                 body += "\n" + scrub(", ".join(paths))[:CMD_CHARS]
-        msg = {"topic": self.topic, "title": f"stewart {self.project} · {session}".strip(), "message": body,
+        msg = {"topic": self.topic, "title": (f"[{self.tag}] " if self.tag else "") + f"stewart {self.project} · {session}".strip(), "message": body,
                "priority": self.priority, "tags": ["bell"]}
         if self.click:
             msg["click"] = self.click
@@ -122,4 +123,5 @@ def from_config(cfg: dict, project: str) -> Ntfy | None:
     if isinstance(pr, bool) or not isinstance(pr, int) or not 1 <= pr <= 5:
         from .config import ConfigError
         raise ConfigError("[hub] ntfy_priority 는 1~5 정수(기본 3)")
-    return Ntfy(str(url), cfg.get("ntfy_token_file"), cfg.get("hub_url"), project, priority=pr)
+    return Ntfy(str(url), cfg.get("ntfy_token_file"), cfg.get("hub_url"), project, priority=pr,
+                tag=str(cfg.get("notify_tag") or cfg.get("label") or ""))

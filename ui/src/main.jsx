@@ -98,7 +98,15 @@ async function closeChat(name) {
   try { await post('/api/chat/close', { chat: name }); openChat('main') } catch (e) { toast('못 닫음: ' + e.message) }
 }
 
+const safeColor = c => (/^#?[0-9a-fA-F]{3,8}$/.test(c) || /^[a-z]+$/.test(c)) ? (c.match(/^[0-9a-fA-F]{3,8}$/) ? '#' + c : c) : 'var(--c-warn)'
+// 허브가 여럿일 때 가름: 머리 이름표·색 띠·창 제목([hub] label·color)
+function useTitle() {
+  const lab = hub.value?.hub_label
+  useEffect(() => { document.title = lab ? `${lab} — stewart hub` : 'stewart hub' }, [lab])
+}
+
 function Center() {
+  useTitle()
   const v = view.value
   const conv = (hub.value?.chats || []).find(c => c.name === v)
   const isMain = v === 'main' || !!conv          // 대화(메인·사람이 연 대화)는 모두 같은 채팅 칸
@@ -110,9 +118,11 @@ function Center() {
   const main = sessions.value.find(s => s.role === 'main')
   return (
     <main class="flex flex-col min-w-0 h-full relative">
+      {st?.hub_color && <div class="h-1.5 w-full flex-none" style={`background:${safeColor(st.hub_color)}`} title={st.hub_label || ''} />}
       <div class="flex items-center gap-2.5 px-5 max-md:px-3 py-2.5 border-b border-line bg-bg/85 backdrop-blur">
         <button class="btn btn-ghost !px-2 md:hidden" onClick={() => { drawer.value = true }} aria-label="세션 서랍">☰</button>
         <button class="btn btn-ghost !px-2 max-md:hidden" onClick={toggleSide} title="사이드바 접기·펴기">☰</button>
+        {st?.hub_label && <span class="chip font-semibold flex-none" style={st.hub_color ? `border-color:${safeColor(st.hub_color)}` : ''}>{st.hub_label}</span>}
         <span class="font-[650] truncate">{title}</span>
         {isMain && main?.workdir && <span class="chip max-lg:hidden truncate max-w-64" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span>}
         <span class="max-md:hidden flex gap-1.5"><ConnDot /><ModelDot /><ExternalChip /></span>

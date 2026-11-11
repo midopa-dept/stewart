@@ -146,6 +146,18 @@ def _body(backend: Backend, messages, tools=None, response_format=None, **extra)
     return body
 
 
+def count_use(backend: Backend, data: dict) -> None:
+    """이 프로세스에서 이 백엔드로 보낸 호출 수·토큰 누계(허브 화면 — 바깥 API 의 무료 한도·과금 대비)."""
+    u = (data.get("usage") if isinstance(data, dict) else None) or {}
+    used = getattr(backend, "used", None)
+    if used is None:
+        return
+    used["calls"] += 1
+    used["prompt"] += int(u.get("prompt_tokens") or 0)
+    used["completion"] += int(u.get("completion_tokens") or 0)
+    used["cost_usd"] = round(used["cost_usd"] + float(u.get("cost_usd") or 0), 6)
+
+
 def add_cost(backend: Backend, data: dict) -> None:
     """백엔드에 price({input, output, cache_read?} 달러/1M)가 있으면 응답 usage 에 cost_usd 를 단다(OpenAI 꼴 usage)."""
     pr = getattr(backend, "price", None) or {}
@@ -438,7 +450,9 @@ def chat(
     if getattr(backend, "kind", "openai") == "anthropic":   # Messages API(판 69)
         from . import anthropic_backend as AB
         with slot(backend):
-            return AB.chat(backend, messages, tools, max_tokens, thinking)
+            out = AB.chat(backend, messages, tools, max_tokens, thinking)
+        count_use(backend, out[0])
+        return out
     messages = _openai_only(messages)
     text_mode = getattr(backend, "tool_mode", "native") == "text" and tools
     if text_mode:   # 함수 호출 칸이 없는 API: 도구를 글로(texttools.py)
@@ -467,6 +481,7 @@ def chat(
         if text_mode:
             data = TT.apply_response(data, len(messages))
         add_cost(backend, data)
+        count_use(backend, data)
         return data, time.monotonic() - t0
 
 
@@ -678,7 +693,9 @@ def chat_stream(
     if getattr(backend, "kind", "openai") == "anthropic":   # Messages API(판 69)
         from . import anthropic_backend as AB
         with slot(backend):
-            return AB.chat(backend, messages, tools, max_tokens, thinking, on_delta=on_delta, on_first=on_first)
+            out = AB.chat(backend, messages, tools, max_tokens, thinking, on_delta=on_delta, on_first=on_first)
+        count_use(backend, out[0])
+        return out
     messages = _openai_only(messages)
     text_mode = getattr(backend, "tool_mode", "native") == "text" and tools
     if text_mode:   # 함수 호출 칸이 없는 API: 도구를 글로(texttools.py)
@@ -732,4 +749,5 @@ def chat_stream(
         if text_mode:
             data = TT.apply_response(data, len(messages))
         add_cost(backend, data)
+        count_use(backend, data)
         return data, time.monotonic() - t0

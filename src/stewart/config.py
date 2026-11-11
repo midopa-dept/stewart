@@ -58,6 +58,7 @@ class Backend:
     api_key_keychain: str | None = None   # macOS 키체인 항목 이름(service). 환경 변수보다 뒤, 파일보다 앞(값은 기록·출력하지 않는다)
     thinking_control: str = "chat_template"   # 생각 켜고 끄기를 보내는 꼴: chat_template(vLLM·llama.cpp) | none(보내지 않음 — 생각 고정 API)
     price: dict = field(default_factory=dict)  # {input, output, cache_read?} 달러/1M 토큰 — 있으면 응답 usage 에 cost_usd
+    used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0})   # 이 프로세스 누계(화면)
 
     def external(self) -> bool:
         """작업 내용이 바깥 회사로 나가는 백엔드인가: provider 를 적었거나, 주소가 이 기계·사설망·tailnet 이 아니면."""

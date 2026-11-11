@@ -415,7 +415,8 @@ class HubMain:
         mins = f"{int(secs // 60)}분 {int(secs % 60)}초" if secs >= 60 else f"{int(secs)}초"
         text = {"끝": f"stewart: 차례 끝({mins})", "질문": f"stewart: 묻는 것이 있다({mins}) — 화면에서 답", 
                 "막힘": f"stewart: 막혀서 멈춤({mins}, {reason}) — 화면에서 확인"}[kind]
-        self.hub._notify(text)
+        lab = getattr(self._root(), "label", "")
+        self.hub._notify((f"[{lab}] " if lab else "") + text)
         return kind
 
     def _quota_alert(self, text: str) -> None:
@@ -722,7 +723,9 @@ class HubMain:
         log = list(self.ui.log)[-200:]
         keep = {id(m) for m in [x for x in log if x.get("kind") == "tool"][-RESULT_KEEP:]}
         log = [m if "result" not in m or id(m) in keep else {k: v for k, v in m.items() if k != "result"} for m in log]   # 상태 크기
-        return {"ts": now(), "chat": self.name, "busy": self.busy, "sessions": self.hub.list(), "queue": self.hub.queue(),
+        root = self._root()
+        return {"ts": now(), "chat": self.name, "hub_label": getattr(root, "label", ""), "hub_color": getattr(root, "color", ""),
+                "busy": self.busy, "sessions": self.hub.list(), "queue": self.hub.queue(),
                 "main_log": log, "stopping": self.ui.halt_req.is_set(),
                 "live": {"text": live["text"][-4000:], "think": live["think"], "think_text": live.get("think_text", "")[-4000:],
                          "think_since": live.get("think_since")} if self.busy else None,
@@ -730,7 +733,8 @@ class HubMain:
                 "todos": list(getattr(self.sess.env, "todos", None) or []), "main_run": str(self.sess.rec.dir),
                 "vision": bool(self.sess.backend.vision), "pending": list(self.ui.pending),
                 "backend": {"name": self.sess.backend.name, "model": self.sess.backend.model,
-                            **({"external": self.sess.backend.provider_label()} if self.sess.backend.external() else {})},
+                            **({"external": self.sess.backend.provider_label(), "used": dict(self.sess.backend.used)}
+                               if self.sess.backend.external() else {})},
                 "tokens": self.tokens(), "resume_note": self.resume_note(), "model": self.watch.status,
                 "web": getattr(self.sess, "web_status", None),
                 "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view(),
@@ -1147,6 +1151,7 @@ def run_hub(a) -> int:
     rec = Recorder(Path(a.runs_dir), "hub-main")
     main = HubMain(hub, profile, backend, rec, mode=a.mode, worker_profile=a.worker_profile or a.profile,
                    worker_backend=a.backend, history=history, resumed_from=prev)
+    main.label, main.color = str(cfg.get("label") or ""), str(cfg.get("color") or "")   # 허브가 여럿일 때 가름(머리 이름·색 띠)
     resumed = hub.recover()
     token = make_token(state_dir, reuse=not getattr(a, "new_token", False))   # 다시 켜도 같은 토큰·로그인 유지(--new-token 이면 새로)
     web = WebApp(main, hub, token, port=a.port or int(cfg.get("port") or DEFAULT_PORT), extra_hosts=cfg.get("hosts") or (),

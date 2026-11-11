@@ -170,6 +170,15 @@ export ANTHROPIC_API_KEY=...   # 키는 환경 변수에만 둡니다
 
 `backends.toml` 에 `kind = "anthropic"` 백엔드를 더합니다. 예시는 `backends.example.toml` 끝에 있습니다. 키 변수는 모델의 셸 환경에 넘어가지 않습니다.
 
+### 다른 API
+
+`backends.providers.example.toml` 에 EXAONE·OpenAI·Gemini·OpenRouter 같은 제공자 예시가 있습니다. 복사해 쓸 항목만 켜고 `STEWART_BACKENDS=<복사한 파일>` 로 씁니다.
+
+- 키는 `api_key_env`(환경 변수 이름)나 macOS 키체인 항목 이름(`api_key_keychain`)으로 줍니다. 어느 쪽이든 키 값은 모델의 셸에 넘어가지 않습니다.
+- 함수 호출 칸이 없는 API 는 `tool_mode = "text"` 로 글 꼴 도구 호출을 씁니다.
+- `provider` 를 적으면 허브 화면에 작업 내용이 바깥 회사로 나간다는 표시가 붙습니다. 약관과 가격은 제공자 문서에서 확인하십시오.
+- 바깥 API 로 도는 허브를 따로 띄우려면 `stewart instance <이름> start` 를 씁니다. 설정·상태·기억 폴더가 `stewart-<이름>` 으로 갈리고, macOS 샌드박스 안에서 돌며 그 안에서는 키체인 조회를 막습니다.
+
 ### 빌린 GPU
 
 더 큰 모델은 빌린 GPU 에서 [stewart-cloud](https://github.com/midopa-dept/stewart-cloud) 로 띄울 수 있습니다. vLLM 을 직접 쓴다면 `--enable-auto-tool-choice --tool-call-parser <모델에 맞는 파서>` 를 켜고, 포트는 인터넷에 열지 말고 SSH 터널이나 사설망으로만 닿게 둡니다.

@@ -168,6 +168,15 @@ export ANTHROPIC_API_KEY=...   # keep the key in the environment only
 
 Add a backend with `kind = "anthropic"` to `backends.toml`; there is an example at the end of `backends.example.toml`. The key variable is not passed to the model's shell.
 
+### Other APIs
+
+`backends.providers.example.toml` has examples for providers such as EXAONE, OpenAI, Gemini and OpenRouter. Copy it, enable only the entries you want, and point `STEWART_BACKENDS=<copy>` at it.
+
+- Give the key as an environment variable name (`api_key_env`) or a macOS keychain item name (`api_key_keychain`). Either way the key is not passed to the model's shell.
+- APIs without a function-calling field can use `tool_mode = "text"` for text-form tool calls.
+- With `provider` set, the hub shows that your work is sent to an outside company. Check each provider's terms and prices.
+- To run a separate hub on an outside API, use `stewart instance <name> start`. It gets its own config, state and memory folders (`stewart-<name>`), runs inside the macOS sandbox, and cannot read the keychain from inside.
+
 ### Rented GPU
 
 For bigger models on a rented GPU, see [stewart-cloud](https://github.com/midopa-dept/stewart-cloud). If you run vLLM yourself, turn on `--enable-auto-tool-choice --tool-call-parser <parser for your model>` and keep the port off the internet: reach it through an SSH tunnel or a private network.

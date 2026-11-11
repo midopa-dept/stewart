@@ -13,6 +13,7 @@
   stewart hub   [--project 폴더] [-b 이름] [--mode edits] [--port 8765]  메인 + 작업자 세션을 웹 화면(127.0.0.1) 하나로
   stewart hub url [--project 폴더]            떠 있는 허브의 접속 주소·로그인 토큰 다시 보기
   stewart sessions list|delete|restore|trash|empty|rename|archive [--project 폴더]  허브 지난 세션 정리(휴지통)
+  stewart instance <이름> start|run|check|profile|dirs   따로 도는 허브(바깥 API 등)를 OS 샌드박스 안에 — instance.py
   stewart backends | profiles
 """
 
@@ -244,6 +245,10 @@ def _history(a, workdir: Path | None, chat: bool) -> tuple[list[dict] | None, st
 
 
 def main(argv: list[str] | None = None) -> int:
+    args0 = list(sys.argv[1:] if argv is None else argv)
+    if args0[:1] == ["instance"]:   # stewart instance <이름> start|run|check|profile|dirs — 따로 도는 허브(instance.py)
+        from .instance import main as instance_main
+        return instance_main(args0[1:])
     ap = argparse.ArgumentParser(prog="stewart")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="프로필로 과제 하나를 실행")
