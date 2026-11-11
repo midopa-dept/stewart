@@ -103,13 +103,22 @@ class TPickStart(unittest.TestCase):
 
     def _pick(self, choice, why):
         seen = {}
+        import builtins
+        import types
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **k):   # 진짜 readline(C 확장·맥은 libedit)을 다시 초기화하지 않는다 — 풀린 TERM 포인터를 읽던 자리
+            if name == "readline":
+                return sys.modules.setdefault("readline", types.ModuleType("readline"))
+            return real_import(name, *a, **k)
 
         def start(ui):
             seen["readline_before_start"] = "readline" in sys.modules
         stops = []
         with mock.patch.dict(sys.modules), mock.patch.object(U, "plain_reason", return_value=None), \
                 mock.patch.object(U.TuiUI, "start", start), mock.patch.object(U.TuiUI, "check_terminal", lambda ui: why), \
-                mock.patch.object(U.TuiUI, "stop", lambda ui: stops.append(1)), mock.patch("sys.stderr", io.StringIO()) as err:
+                mock.patch.object(U.TuiUI, "stop", lambda ui: stops.append(1)), mock.patch("sys.stderr", io.StringIO()) as err, \
+                mock.patch("builtins.__import__", fake_import):
             sys.modules.pop("readline", None)
             ui = U.pick_ui(choice)
         return ui, seen, stops, err.getvalue()

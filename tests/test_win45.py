@@ -46,19 +46,23 @@ class TAbort(unittest.TestCase):
 
     def test_abort_turns_blocked_read_into_keyboardinterrupt_with_partial(self):
         got = []
-        threading.Timer(0.6, lambda: got.append(BK.abort_streams())).start()
+        tm = threading.Timer(0.6, lambda: got.append(BK.abort_streams()))
+        tm.start()
         t0 = time.monotonic()
         with self.assertRaises(KeyboardInterrupt) as cm:
             BK.chat_stream(self.be, [{"role": "user", "content": "x"}])
         self.assertLess(time.monotonic() - t0, 4)             # 서버가 8초 멈춰도 바로 깬다
+        tm.join(5)   # 끊긴 읽기가 먼저 깨어 단언에 닿아도, 타이머가 got 에 넣기를 마칠 때까지(공개 CI macOS 3.13 경합)
         self.assertEqual(got, [1])
         self.assertEqual(cm.exception.partial.get("content"), "반쯤")
         self.assertEqual(BK.abort_streams(), 0)                # 끝난 연결은 등록에서 빠진다
 
     def test_abort_non_stream(self):
-        threading.Timer(0.6, BK.abort_streams).start()
+        tm = threading.Timer(0.6, BK.abort_streams)
+        tm.start()
         with self.assertRaises(KeyboardInterrupt):
             BK.chat(self.be, [{"role": "user", "content": "x"}])
+        tm.join(5)
 
 
 class TAbortThreaded(TAbort):

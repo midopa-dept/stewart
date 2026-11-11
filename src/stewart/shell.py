@@ -203,6 +203,8 @@ class Shell:
 
     def run(self, command: str, timeout_s: float) -> tuple[int | None, str, str]:
         """(종료 코드 | None(시간 초과·셸 끝남), 출력, 알림)"""
+        if self.closed:   # 닫은 뒤의 run: 새 bash 를 띄우지 않는다(닫힌 상태 파일에서 터지고 bash 가 남던 것, 판 87)
+            return None, "", "셸이 이미 닫혔다(세션을 끝내는 중) — 실행하지 않았다"
         if (err := self.syntax_error(command)):
             return 2, err.replace(self.spec.path + ": -c: ", ""), "문법 오류라 보내지 않았다(셸 상태는 그대로)"
         if not self._alive():

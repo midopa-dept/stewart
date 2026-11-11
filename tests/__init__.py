@@ -30,6 +30,46 @@ import atexit as _atexit
 import shutil as _shutil
 
 _atexit.register(_shutil.rmtree, _SANDBOX, True)
+
+
+def _sweep_stale(root: str, me: str, older_s: float = 6 * 3600) -> int:
+    """강제 종료로 남은 앞 시험의 임시 폴더를 지운다(판 87). 이 시험 꾸러미가 만든 것(.pid 표지)만, 그 pid 가 죽었고
+    6시간 넘게 안 바뀐 것만 — 다른 시험이 쓰는 중인 폴더나 표지 없는 폴더는 건드리지 않는다. 지운 수."""
+    import time as _time
+    n = 0
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    for nm in names:
+        d = os.path.join(root, nm)
+        if not nm.startswith("stewart-tests-") or d == me:
+            continue
+        mark = os.path.join(d, ".pid")
+        try:
+            pid = int(open(mark).read().strip())
+            if _time.time() - os.path.getmtime(mark) < older_s:
+                continue
+        except (OSError, ValueError):
+            continue
+        try:
+            os.kill(pid, 0)
+            continue                     # 아직 살아 있다
+        except ProcessLookupError:
+            pass
+        except OSError:
+            continue                     # 살았는지 모른다(권한) — 두기
+        _shutil.rmtree(d, True)
+        n += 1
+    return n
+
+
+try:
+    with open(os.path.join(_SANDBOX, ".pid"), "w") as _f:
+        _f.write(str(os.getpid()))
+    _sweep_stale(os.path.dirname(_SANDBOX), _SANDBOX)
+except OSError:
+    pass
 import urllib.request  # noqa: E402
 
 # 127.0.0.1 시험 서버로 가는 요청: 환경·시스템 프록시를 타지 않는다(macOS urllib 은 시스템 프록시를 따른다)

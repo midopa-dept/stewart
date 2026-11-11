@@ -605,6 +605,17 @@ class HubMain:
         finally:
             self._busy.release()
 
+    def _stop_running_turn(self, wait_s: float = 10.0) -> None:
+        """닫기 전에 도는 차례를 멈추고 기다린다(판 87) — 셸을 닫은 뒤 그 차례가 run_shell 로 새 셸을 띄우지 않게."""
+        t = getattr(self, "_turn", None)
+        if t is None or not t.is_alive():
+            return
+        try:
+            self.stop_turn()
+        except Exception:
+            pass
+        t.join(timeout=wait_s)
+
     def stop_turn(self) -> str:
         """화면 [멈춤]: 메인 차례를 끊는다. 도는 셸 명령은 끝날 때까지 기다린 뒤 다음 단계 앞에서 끊긴다."""
         if not self.busy:
@@ -725,6 +736,7 @@ class HubMain:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        self._stop_running_turn()
         for c in list(self.chats.values()):
             try:
                 c.close()
@@ -853,6 +865,7 @@ class HubChat(HubMain):
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        self._stop_running_turn()
         try:
             self.sess.close()
         finally:

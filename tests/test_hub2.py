@@ -28,7 +28,7 @@ class TKinds(unittest.TestCase):
         wd = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(wd, ignore_errors=True))
         (wd / "a.txt").write_text("one\ntwo\n")
-        (wd / ".env").write_text("TOKEN=zz\n")
+        (wd / ".env").write_text("TOKEN=QZXSECRET\n")   # 임시 경로(소문자)에 나올 수 없는 표지
         env = T.ToolEnv(wd)
         s = args_summary(env, "write_file", {"path": "a.txt", "content": "one\nTWO\n"})
         self.assertEqual(s["paths"], ["a.txt"])
@@ -43,7 +43,7 @@ class TKinds(unittest.TestCase):
         self.assertLessEqual(len(args_summary(env, "write_file", {"path": "b.txt", "content": big})["diff"]), 400)   # 화면이 40줄 뒤를 접는다(U2-5)
         s = args_summary(env, "write_file", {"path": ".env", "content": "TOKEN=new\n"})
         self.assertIsNone(s["diff"])                                        # 비밀 파일은 내용을 읽지도 싣지도 않는다
-        self.assertNotIn("zz", json.dumps(s))
+        self.assertNotIn("QZXSECRET", json.dumps(s))
         cmd = args_summary(env, "run_shell", {"command": "x" * 5000})["command"]
         self.assertTrue(cmd.startswith("x" * 2000) and "명령 5000자 중 앞 2000자만 보임" in cmd)   # 잘린 것을 표시(U2-1)
         self.assertEqual(args_summary(env, "edit_file", {"path": "a.txt", "old": "없음", "new": "y"})["diff"], None)

@@ -261,11 +261,17 @@ def _scope() -> str | None:
     return getattr(_SCOPE, "name", None)
 
 
-def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
+def abort_mark() -> tuple:
+    """지금의 끊기 표지(전체 횟수, 이 범위 횟수) — 동시 요청 자리를 기다리기 전에 잡아 두면 그 사이 [멈춤]도 놓치지 않는다(판 87)."""
+    return (_ABORT_GEN[0], _SCOPE_GEN.get(_scope(), 0))
+
+
+def _send_abortable(backend: Backend, body: dict, overrides: dict | None, gen: tuple | None = None):
     """_send 를 작은 스레드로 돌리고 기다린다. 기다리는 동안(긴 프롬프트를 서버가 읽는 중 등) abort_streams 가 불리면
-    곧바로 KeyboardInterrupt — 남은 요청은 응답이 오는 즉시 닫는다(서버 쪽 생성도 끊긴다)."""
+    곧바로 KeyboardInterrupt — 남은 요청은 응답이 오는 즉시 닫는다(서버 쪽 생성도 끊긴다).
+    gen: 부르는 쪽이 자리 기다리기 전에 잡은 끊기 표지(없으면 지금) — 자리를 기다리는 동안 온 [멈춤]도 여기서 잡힌다."""
     scope = _scope()
-    gen = (_ABORT_GEN[0], _SCOPE_GEN.get(scope, 0))
+    gen = gen if gen is not None else (_ABORT_GEN[0], _SCOPE_GEN.get(scope, 0))
     box: dict = {}
     done = threading.Event()
 
@@ -280,6 +286,10 @@ def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
             done.set()
             if box.get("orphan") and box.get("r") is not None:
                 _close(box["r"])
+    if (_ABORT_GEN[0], _SCOPE_GEN.get(scope, 0)) != gen:   # 자리를 기다리는 동안 이미 [멈춤]이 왔다 — 보내지 않는다
+        e = KeyboardInterrupt()
+        e.partial = {"content": ""}
+        raise e
     threading.Thread(target=run, daemon=True).start()
     while not done.wait(0.2):
         if (_ABORT_GEN[0], _SCOPE_GEN.get(scope, 0)) != gen:
@@ -830,10 +840,11 @@ def chat_stream(
     extra.update(overrides or {})
     body = _body(backend, messages, tools, response_format, **extra)
     asm = StreamAssembler()
+    mark = abort_mark()   # 자리를 기다리는 동안 온 [멈춤]도 놓치지 않게(판 87)
     with slot(backend):
         t0 = time.monotonic()
         try:
-            r = _send_abortable(backend, body, overrides)
+            r = _send_abortable(backend, body, overrides, gen=mark)
             with _Closing(r), _live(r):
                 for raw in _lines(r):
                     line = raw.decode("utf-8", "replace").strip()
