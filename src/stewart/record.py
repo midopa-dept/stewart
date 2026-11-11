@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -31,14 +32,17 @@ class Recorder:
         else:
             raise FileExistsError(f"기록 폴더를 만들 수 없다: {base}")
         self._ev = (self.dir / "events.jsonl").open("a", encoding="utf-8")
+        self._ev_lock = threading.Lock()   # 허브 요청 실(학습 표시 등)과 차례 실이 같이 쓴다
         self._md: list[str] = []
         self.t0 = time.monotonic()
 
     def event(self, kind: str, **data) -> None:
         rec = {"t": round(time.monotonic() - self.t0, 3), "ts": datetime.now().isoformat(timespec="seconds"),
                "kind": kind, **scrub(data)}   # Brave 결과 구간은 기록에 남기지 않는다
-        self._ev.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        self._ev.flush()
+        line = json.dumps(rec, ensure_ascii=False) + "\n"
+        with self._ev_lock:
+            self._ev.write(line)
+            self._ev.flush()
 
     def md(self, text: str) -> None:
         self._md.append(scrub(text))

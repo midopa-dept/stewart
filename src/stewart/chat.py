@@ -52,6 +52,7 @@ from . import config_guard as CG
 from . import projcfg as PC
 from . import allowrules as AR
 from . import components as CM
+from . import train as TRAIN
 from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
@@ -1054,10 +1055,24 @@ class ChatSession:
                 except OSError:
                     pass
 
+    def label(self, turn: int, kind: str, by: str = "human", note: str = "") -> bool:
+        """학습 표시(판 89, SW-39): 기록에 train_label 사건만 남긴다(대화·모델 문맥은 그대로). kind ∈ TRAIN.LABELS."""
+        if kind not in TRAIN.LABELS or not (1 <= int(turn) <= self.st["turns"]):
+            return False
+        self.rec.event("train_label", turn=int(turn), label=kind, by=by, **({"note": note[:300]} if note else {}))
+        hook = getattr(self.ui, "labeled", None)
+        if hook is not None:
+            hook(int(turn), kind, by)
+        return True
+
     def _turn(self, text: str, images: list | None = None) -> str:
         """사람 입력 하나를 처리한다. 종료 사유: answered | asked | length_empty | max_steps | repeated_call | repeated_failure | backend_error | context_overflow | interrupted | consecutive_errors"""
         self.st["turns"] += 1
         self._raw_text = text   # 사람 말 그대로(말만 하고 멈춤 되돌리기 판정용, intent.py)
+        if hasattr(self.ui, "turn_no"):   # 허브 화면: 답 줄에 차례 번호(👍👎 표시가 어느 차례인지)
+            self.ui.turn_no = self.st["turns"]
+        if self.st["turns"] > 1 and TRAIN.is_correction(text):   # 학습 표시(판 89): 교정 꼴 말 → 바로 앞 차례에 "교정됨"
+            self.label(self.st["turns"] - 1, "corrected", by="rule")
         if self.mem is not None and getattr(self.ui, "memory_writes", True):   # 스스로 기억(사용자 전역): 다음에도 지킬 지시·선호
             for kind, sent in MEM.detect(text):
                 how = "save"
@@ -1117,7 +1132,8 @@ class ChatSession:
             self.rec.event("web_nudge", why_kind="recent", why=self.nudge.log[-1]["why"])
             self.comps.fire("web_nudge", self.st.get("steps", 0), "recent", "nudge")
         self.messages.append({"role": "user", "content": IMG.content(text, images or [])})
-        self.rec.event("user", turn=self.st["turns"], content=text, images=len(images or []) or None)
+        self.rec.event("user", turn=self.st["turns"], content=text, images=len(images or []) or None,
+                       **({"raw": self._raw_text} if self._raw_text != text else {}))
         self.rec.md(f"## 사람 (차례 {self.st['turns']})\n\n```\n{text}\n```\n")
         consecutive = 0
         reason = "max_steps"
@@ -1699,6 +1715,8 @@ COMMANDS: dict[str, tuple[str, object]] = {
     "/ledger": ("/ledger 관리자 장부 보기(-p manager)", lambda a: a == ""),
     "/skill": ("/skill [이름 [글]] 스킬 목록·고른 스킬 본문을 다음 입력(또는 글)에 붙이기", lambda a: True),
     "/image": ("/image <파일> 다음 입력에 이미지 붙이기(vision 백엔드만, 작업 폴더 밖도 됨)", lambda a: True),
+    "/good": ("/good [메모] 바로 앞 차례를 좋은 예로 표시(학습 자료 고르기, 내용은 안 바뀜)", lambda a: True),
+    "/bad": ("/bad [메모] 바로 앞 차례를 나쁜 예로 표시", lambda a: True),
 }
 
 HELP = (MODE_HELP + "\n"
@@ -1707,6 +1725,7 @@ HELP = (MODE_HELP + "\n"
         "      /think on|off|default 모델 생각(thinking) 켜고 끄기 · /steps N 차례당 단계 상한(닿으면 계속할지 묻는다) · /compact 오래된 도구 결과 줄이기 · /help\n"
         "      /ledger 관리자 장부 보기(-p manager) · /skill [이름 [글]] 스킬 목록·고른 스킬 본문을 다음 입력(또는 글)에 붙이기\n"
         "      /undo 파일을 바꾼 마지막 차례 되돌리기 · /rewind [N] 체크포인트 목록·N 번 차례 시작 때로 되돌리기 · /facts 한 일\n"
+        "      /good·/bad [메모] 바로 앞 차례를 좋은·나쁜 예로 표시(stewart train export 가 고른다)\n"
         "/ 로 시작해도 첫 낱말이 위 명령 이름과 정확히 같을 때만 명령이다. /srv/… 같은 경로로 시작하는 글은 그대로 모델에게 간다.\n"
         "모델이 일하는 중 Ctrl-C = 그 차례 중단(대화는 이어짐). 입력에서 Ctrl-D = 끝내기.\n"
         "여러 줄: 줄 끝 \\ 로 잇기, 또는 \"\"\" 로 열고 닫기.")
@@ -1879,6 +1898,11 @@ def repl(session: ChatSession, first: str | None = None) -> dict:
                     if rep["skipped"]:
                         ui.warn(f"  너무 커서 보관하지 못해 못 되돌린 파일: {', '.join(rep['skipped'])}")
                     ui.dim("  셸 명령이 바꾼 파일은 되돌리지 않는다.")
+                elif cmd in ("/good", "/bad"):
+                    if session.label(session.st["turns"], cmd[1:], note=arg.strip()):
+                        ui.info(f"차례 {session.st['turns']} 에 '{'좋음' if cmd == '/good' else '나쁨'}' 표시(기록에만, 내보내기: stewart train export)")
+                    else:
+                        ui.warn("표시할 차례가 아직 없다")
                 elif cmd == "/compact":
                     ui.info(f"줄인 도구 결과 {session.compact(force=True)}개")
                 elif cmd == "/facts":

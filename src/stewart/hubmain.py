@@ -57,6 +57,7 @@ class HubMainUI(HubUI):
         self.last_user = ""                   # 마지막 사람 말(오류 칸의 [다시 보내기])
         self.on_backend_error = None          # 허브가 모델 서버 감시를 깨우는 고리
         self.err_count: dict = {}
+        self.turn_no = 0                      # 지금 차례 번호(답 줄의 👍👎 가 어느 차례인지, 판 89)
         self.full_narration = True
         self.goal_notes = True                # 새 사람 말이 앞 목표를 덮는다는 엔진 알림, 같은 결과 두 번째 알림(허브만)            # 도구와 함께 온 모델 글을 한 줄로 자르지 않는다(걸음 사이 말)             # 같은 오류(도구 + 오류 첫 줄) 몇 번째인지 — 화면 "같은 오류 N번째"(U2-8)
 
@@ -69,6 +70,22 @@ class HubMainUI(HubUI):
 
     def assistant(self, s: str) -> None:
         self._add("assistant", s)
+        if self.turn_no:
+            self.log[-1]["turn"] = self.turn_no
+
+    def labeled(self, turn: int, kind: str, by: str) -> None:
+        """학습 표시(판 89)를 화면 기록의 그 차례 답 줄에: good·bad·clear → label, corrected·uncorrect → corrected."""
+        for e in self.log:
+            if e.get("kind") != "assistant" or e.get("turn") != turn:
+                continue
+            if kind in ("good", "bad"):
+                e["label"] = kind
+            elif kind == "clear":
+                e.pop("label", None)
+            elif kind == "corrected":
+                e["corrected"] = by
+            elif kind == "uncorrect":
+                e.pop("corrected", None)
 
     def tool(self, name: str, summary: str) -> None:
         self._add("tool", f"{name} {summary}")
@@ -656,6 +673,13 @@ class HubMain:
             self.ui._add("info", "기억 정리: 받은 것이 없어 바꾸지 않았다")
         self.hub.event("memory_apply", applied=len(r["applied"]))
         return r
+
+    # ---- 학습 표시(판 89, SW-39): 답 줄 👍👎·교정됨 떼기 → 기록 사건 train_label ----
+    def train_label(self, turn: int, label: str) -> dict:
+        if label not in ("good", "bad", "clear", "uncorrect"):
+            return {"ok": False, "error": "label"}
+        ok = self.sess.label(int(turn), label, by="human")
+        return {"ok": ok, **({} if ok else {"error": "turn"})}
 
     def _stop_running_turn(self, wait_s: float = 10.0) -> None:
         """닫기 전에 도는 차례를 멈추고 기다린다(판 87) — 셸을 닫은 뒤 그 차례가 run_shell 로 새 셸을 띄우지 않게."""

@@ -347,10 +347,34 @@ function TodoCard({ todos, latest, ts }) {
   )
 }
 
+// 학습 표시(판 89): 차례의 마지막 답 줄 아래 👍👎 — 터치 기기는 늘 보이고 마우스는 줄 위에 올릴 때(app.css .tbar).
+// "교정됨"은 사람이 다음 말로 고쳤을 때 엔진이 붙인 꼬리표 — 누르면 뗀다. 표시는 기록에만 남고 대화·모델 문맥은 그대로다.
+function TrainBar({ m }) {
+  const send = label => cpost('/api/train/label', { turn: m.turn, label }).then(refresh, e => toast('표시하지 못했다: ' + e.message))
+  const lb = m.label
+  return (
+    <div class={'tbar flex gap-1.5 items-center mt-1 text-[13px]' + (lb || m.corrected ? ' tbar-on' : '')}>
+      <button class={'tb' + (lb === 'good' ? ' tb-sel' : '')} title={lb === 'good' ? '좋음 표시 떼기' : '좋은 예로 표시(학습 자료 고르기)'}
+        aria-pressed={lb === 'good'} onClick={() => send(lb === 'good' ? 'clear' : 'good')}>👍</button>
+      <button class={'tb' + (lb === 'bad' ? ' tb-sel' : '')} title={lb === 'bad' ? '나쁨 표시 떼기' : '나쁜 예로 표시'}
+        aria-pressed={lb === 'bad'} onClick={() => send(lb === 'bad' ? 'clear' : 'bad')}>👎</button>
+      {m.corrected && <button class="text-[11px] px-2 py-px rounded-full font-semibold whitespace-nowrap text-warn bg-warn/15"
+        title="다음 말이 고치는 꼴이라 붙은 꼬리표 — 누르면 뗀다" onClick={() => send('uncorrect')}>교정됨 ✕</button>}
+    </div>
+  )
+}
+
 export function Thread({ log, prior }) {
   const groups = useMemo(() => groupLog(log), [log])
   let lastSteps = -1, lastTodo = -1
   groups.forEach((g, i) => { if (g.type === 'steps') lastSteps = i; if (g.type === 'todo') lastTodo = i })
+  const lastOfTurn = new Set()   // 차례마다 마지막 답 줄(그 아래에만 👍👎)
+  const seenTurn = new Set()
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i]
+    if (g.type === 'assistant' && g.m.turn && !seenTurn.has(g.m.turn)) { seenTurn.add(g.m.turn); lastOfTurn.add(i) }
+  }
+  const curTurn = busy.value ? Math.max(0, ...groups.filter(g => g.type === 'assistant' && g.m.turn).map(g => g.m.turn)) : 0
   const liveTodos = hub.value?.todos || []
   const tail = groups.length - 1
   return (
@@ -364,7 +388,8 @@ export function Thread({ log, prior }) {
       )}
       {groups.map((g, i) => {
         if (g.type === 'user') return <div key={g.key} class="flex justify-end my-4"><div class="bg-soft px-3.5 py-2.5 rounded-[16px_16px_4px_16px] max-w-[78%] max-md:max-w-[88%] whitespace-pre-wrap break-words">{g.m.text}</div></div>
-        if (g.type === 'assistant') return <div key={g.key} class="my-4"><Md text={g.m.text} /></div>
+        if (g.type === 'assistant') return <div key={g.key} class="my-4 tline"><Md text={g.m.text} />
+          {lastOfTurn.has(i) && g.m.turn !== curTurn && <TrainBar m={g.m} />}</div>
         if (g.type === 'diff') return <DiffCard key={g.key} text={g.m.text} stat={g.m.stat} />
         if (g.type === 'think') return <ThinkBlock key={g.key} text={g.m.text} secs={g.m.secs} chars={g.m.chars} cut={g.m.cut} />
         if (g.type === 'steps') return <StepsCard key={g.key} g={g} last={i === lastSteps && i >= tail - 1} />

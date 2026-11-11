@@ -107,3 +107,12 @@ button:disabled { cursor: default; opacity: .55; }
 .cp-btn:hover { background: var(--c-soft); }
 /* 코드 블록 줄 감싸기(판 67, SW-19): 폰에서 가로로 잘리지 않게. 복사는 원문 그대로 */
 .md .cb pre code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+
+/* 학습 표시(판 89): 터치 기기는 늘 보임, 마우스는 답 줄 위에서·표시가 있으면 늘 */
+.tb { padding: 2px 8px; border-radius: 8px; opacity: .55; line-height: 1.4; }
+.tb:hover { background: var(--c-soft); opacity: 1; }
+.tb-sel { background: var(--c-soft); opacity: 1; }
+@media (hover: hover) and (pointer: fine) {
+  .tbar:not(.tbar-on) { visibility: hidden; }
+  .tline:hover .tbar, .tbar:focus-within { visibility: visible; }
+}

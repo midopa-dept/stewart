@@ -57,6 +57,32 @@ def _common(p: argparse.ArgumentParser, task: bool = True) -> None:
     p.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
 
 
+def _train(a) -> int:
+    """stewart train export|show (판 89, SW-39). 화면에는 개수·통계만(내용은 show 로 사람이 고른 만큼)."""
+    from datetime import date, datetime
+    from . import train as TRAIN
+    if a.action == "show":
+        if not a.folder:
+            raise ConfigError("show 에는 내보낸 폴더를 준다: stewart train show <폴더>")
+        print(TRAIN.show(Path(a.folder), a.n))
+        return 0
+    from .config import _xdg
+    out = Path(a.out) if a.out else _xdg("XDG_DATA_HOME", "~/.local/share") / "stewart" / "train-export" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    since = date.fromisoformat(a.since) if a.since else None
+    ex = None
+    if a.exclude_hashes:
+        ex = {ln.strip() for ln in Path(a.exclude_hashes).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+    st = TRAIN.export(Path(a.runs_dir), out, a.select, since, a.keep_engine, ex)
+    lb = " · ".join(f"{k} {v}" for k, v in sorted(st["labels"].items())) or "없음"
+    print(f"기록 {st['runs']}개 · 차례 {st['turns_seen']}개 (표시: {lb})")
+    print(f"고름({a.select}) {st['picked']}개 → 씀 {st['written']}개" + (f" · 평가 과제라 뺌 {st['excluded_eval']}개" if st["excluded_eval"] else ""))
+    print(f"걸러 냄: 엔진 넛지 {st['engine_notes']} · 실패한 도구 호출 {st['failed_calls']} · 큰 결과 줄임 {st['clipped']} · 그림 자리표 {st['images']}")
+    print(f"메시지 {st['messages']}개 · {st['chars']}자 → {out / 'train.jsonl'}  (훑기: stewart train show {out})")
+    if not st["written"] and a.select == "good":
+        print("  (👍·/good 표시가 아직 없다 — 허브 답 줄의 👍 나 chat 의 /good 으로 고르거나 --select after_fix|all)")
+    return 0
+
+
 def _memory_consolidate(a) -> int:
     """stewart memory consolidate [--dry-run] [--yes] [-b 백엔드] [--revert consolidate-<시각>] — 판 88."""
     import tempfile
@@ -381,6 +407,17 @@ def main(argv: list[str] | None = None) -> int:
     mm.add_argument("--dry-run", action="store_true", help="쓰지 않고 옮길 표만")
     mm.add_argument("--revert", nargs="?", const=True, default=False,
                     help="migrate: 세 갈래 파일을 reverted-<날짜>/ 로 옮기고 옛 파일로 / consolidate: --revert consolidate-<시각> 로 그 사본을 되살림")
+    tr = sub.add_parser("train", help="실사용 기록을 학습 자료로: export(표시한 차례를 JSONL 로, 비밀·경로 가림) · show(몇 건 훑기)")
+    tr.add_argument("action", choices=["export", "show"])
+    tr.add_argument("folder", nargs="?", help="show: 내보낸 폴더")
+    tr.add_argument("--out", help="export: 쓸 폴더(없으면 데이터 폴더 아래 train-export/<시각>)")
+    tr.add_argument("--select", choices=["good", "after_fix", "all"], default="good",
+                    help="good = 👍·/good 차례(기본) · after_fix = 교정 뒤 다시 잘 끝난 차례 · all = 전부(분석용)")
+    tr.add_argument("--since", help="export: 이 날(YYYY-MM-DD) 이후 기록만")
+    tr.add_argument("--keep-engine", action="store_true", help="export: 엔진 넛지([엔진] 줄)도 남김")
+    tr.add_argument("--exclude-hashes", help="export: 평가 과제 첫 말 해시(줄마다 하나) 파일 — 같은 차례는 뺀다")
+    tr.add_argument("-n", type=int, default=3, help="show: 몇 건")
+    tr.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
     og = sub.add_parser("organize", help="폴더 정리 계획 검토·실행·되돌리기(review|apply|undo)", add_help=False)
     og.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("backends", help="백엔드 목록")
@@ -453,6 +490,8 @@ def main(argv: list[str] | None = None) -> int:
             r = cloud.wait(backends[a.backend], a.port, Path(a.runs_dir), timeout_s=a.timeout_min * 60)
             print(json.dumps(r, ensure_ascii=False, indent=1))
             return 0 if r["ok"] else 1
+        if a.cmd == "train":
+            return _train(a)
         if a.cmd == "memory" and a.action == "consolidate":
             return _memory_consolidate(a)
         if a.cmd == "memory":
