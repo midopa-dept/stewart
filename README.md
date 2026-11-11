@@ -66,24 +66,7 @@ Claude Code 같은 작업 흐름을, 내가 띄운 작은 공개 모델로도 �
 
 ## 어떻게 도나
 
-```mermaid
-flowchart LR
-    U["사람"] -->|터미널| C["stewart chat"]
-    U -->|브라우저| H["stewart hub<br/>(127.0.0.1:8765)"]
-    U -->|과제 파일| R["stewart run"]
-    C --> L
-    H --> L
-    R --> L
-    subgraph L["도구 호출 루프"]
-        direction TB
-        M["모델 호출"] -->|도구 호출| G{"모드 · 폴더 경계<br/>· 비밀 파일 · 승인"}
-        G -->|허용| T["도구 실행"]
-        T -->|결과| M
-        G -->|거부| M
-    end
-    M <-->|"/v1/chat/completions"| S[("내가 띄운 모델 서버<br/>llama.cpp · vLLM")]
-    L --> K["실행 기록<br/>events · transcript · facts"]
-```
+![도구 호출 흐름: 사람 → chat·hub·run → 모델 호출과 검사·도구 실행 루프 → 모델 서버·실행 기록](docs/images/how-it-works.svg)
 
 vLLM·llama.cpp 같은 OpenAI 호환 서버(또는 Anthropic Messages API)에 붙어, 모델이 도구로 파일을 읽고 고치고 셸 명령을 돌리게 합니다. 모델은 들어 있지 않습니다. 서버는 직접 띄우고 stewart 는 거기에 연결합니다.
 

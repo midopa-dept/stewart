@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 604" width="400" height="604">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker></defs>
+<rect x="0" y="0" width="400" height="604" rx="12" fill="#ffffff"/>
+<rect x="150" y="16" width="100" height="38" rx="8" fill="#f6f8fa" stroke="#57606a" stroke-width="1.5"/>
+<text x="200.0" y="40.2" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1f2328">사람</text>
+<path d="M200 54 L70 104" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<rect x="12" y="106" width="116" height="48" rx="8" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+<text x="70.0" y="134.9" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f2328">stewart chat</text>
+<path d="M70 154 L70 192" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<path d="M200 54 L200 104" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<rect x="142" y="106" width="116" height="48" rx="8" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+<text x="200.0" y="125.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f2328">stewart hub</text>
+<text x="200.0" y="144.4" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#57606a">127.0.0.1:8765</text>
+<path d="M200 154 L200 192" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<path d="M200 54 L330 104" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<rect x="272" y="106" width="116" height="48" rx="8" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+<text x="330.0" y="134.9" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f2328">stewart run</text>
+<path d="M330 154 L330 192" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="96" y="84" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">터미널</text>
+<text x="206" y="84" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">브라우저</text>
+<text x="304" y="84" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">과제 파일</text>
+<rect x="12" y="194" width="376" height="276" rx="10" fill="#f6f8fa" stroke="#57606a" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="26" y="216" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#57606a">도구 호출 루프</text>
+<rect x="100" y="230" width="200" height="40" rx="8" fill="#ddf4ff" stroke="#57606a" stroke-width="1.5"/>
+<text x="200.0" y="255.2" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1f2328">모델 호출</text>
+<path d="M200 270 L200 306" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="208" y="293" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">도구 호출</text>
+<rect x="100" y="308" width="200" height="54" rx="8" fill="#fff8c5" stroke="#57606a" stroke-width="1.5"/>
+<text x="200.0" y="330.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f2328">모드 · 폴더 경계</text>
+<text x="200.0" y="349.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#57606a">비밀 파일 · 승인</text>
+<path d="M200 362 L200 398" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="208" y="385" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">허용</text>
+<rect x="100" y="400" width="200" height="40" rx="8" fill="#dafbe1" stroke="#57606a" stroke-width="1.5"/>
+<text x="200.0" y="425.2" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1f2328">도구 실행</text>
+<path d="M100 420 L40 420 L40 250 L98 250" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="46" y="340" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">결과</text>
+<path d="M300 335 L356 335 L356 258 L302 258" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="328" y="300" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">거부</text>
+<path d="M106 470 L106 524" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<text x="114" y="501" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" fill="#57606a">/v1/chat/completions</text>
+<rect x="12" y="526" width="188" height="62" rx="8" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+<text x="106.0" y="552.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f2328">내가 띄운 모델 서버</text>
+<text x="106.0" y="571.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#57606a">llama.cpp · vLLM</text>
+<path d="M296 470 L296 524" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah)"/>
+<rect x="204" y="526" width="184" height="62" rx="8" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+<text x="296.0" y="552.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f2328">실행 기록</text>
+<text x="296.0" y="571.4" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#57606a">events · transcript · facts</text>
+</svg>

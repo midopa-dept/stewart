@@ -64,24 +64,7 @@ Each run records when each guard fired, so you can measure which ones actually h
 
 ## How it works
 
-```mermaid
-flowchart LR
-    U["You"] -->|terminal| C["stewart chat"]
-    U -->|browser| H["stewart hub<br/>(127.0.0.1:8765)"]
-    U -->|task file| R["stewart run"]
-    C --> L
-    H --> L
-    R --> L
-    subgraph L["Tool-call loop"]
-        direction TB
-        M["Model call"] -->|tool call| G{"Mode · folder boundary<br/>· secret files · approval"}
-        G -->|allowed| T["Run tool"]
-        T -->|result| M
-        G -->|denied| M
-    end
-    M <-->|"/v1/chat/completions"| S[("Your model server<br/>llama.cpp · vLLM")]
-    L --> K["Run record<br/>events · transcript · facts"]
-```
+![Flow: you → chat, hub or run → loop of model call, checks and tool runs → your model server and the run record](docs/images/how-it-works.en.svg)
 
 stewart connects to an OpenAI-compatible server such as vLLM or llama.cpp (or the Anthropic Messages API) and lets the model read and edit files, run shell commands and search the web through tools. No model is included. You start the server and stewart connects to it.
 
