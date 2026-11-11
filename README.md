@@ -33,7 +33,7 @@ flowchart LR
     L --> K["실행 기록<br/>events · transcript · facts"]
 ```
 
-vLLM·llama.cpp 같은 OpenAI 호환 서버에 붙어, 모델이 도구로 파일을 읽고 고치고 셸 명령을 돌리게 합니다. 모델은 들어 있지 않습니다. 서버는 직접 띄우고 stewart 는 거기에 연결합니다.
+vLLM·llama.cpp 같은 OpenAI 호환 서버(또는 Anthropic Messages API)에 붙어, 모델이 도구로 파일을 읽고 고치고 셸 명령을 돌리게 합니다. 모델은 들어 있지 않습니다. 서버는 직접 띄우고 stewart 는 거기에 연결합니다.
 
 실행마다 기록이 남아, 모델이 했다고 말한 일과 실제로 바꾼 파일·돌린 명령을 맞대어 볼 수 있습니다. 프롬프트와 도구 메시지는 한국어입니다.
 
@@ -59,7 +59,7 @@ uv run stewart hub --project ~/my-project
   - 대화: 파일 고침은 줄 번호가 붙은 diff 카드로, 생각(thinking)은 접히는 블록으로 보입니다. 코드 블록마다 복사 단추가 있습니다.
   - 사람 손 카드: 비밀번호·키체인·sudo·로그인처럼 사람만 풀 수 있는 곳에 닿으면, 모델이 같은 시도를 되풀이하지 않고 사람에게 넘깁니다.
   - 오른쪽 패널: 현황판, 기억, 단계, 계획, 늘 허용 규칙, 토큰.
-  - 입력 칸: `/명령`, `@파일`, 이미지 붙여넣기.
+  - 입력 칸: `/명령`, `@파일`, 이미지 붙여넣기. 큰 폰 사진·HEIC 는 브라우저에서 긴 변 1600px JPEG 로 줄여 붙입니다.
   - 모델 서버 상태 점: 준비됨, 올라오는 중, 닿지 않음, 인증 거부.
 - 새 승인 대기는 브라우저 알림으로 알립니다. `[hub] ntfy_url` 을 적으면 [ntfy](https://ntfy.sh) 로 폰에도 보냅니다.
 - 듣는 주소는 기본으로 loopback(`127.0.0.1`·`::1`)뿐입니다. 다른 기기에서 쓰려면 앞단(SSH 터널 등)을 두거나 계정 모드를 켭니다.
@@ -80,6 +80,7 @@ uv run stewart hub --project ~/my-project
 
 - `web_fetch` 는 사설·루프백·링크 로컬·CGNAT 주소로 가지 않고, 리다이렉트도 다시 검사합니다. 가져온 글은 바깥 자료 표시로 감싸 모델에게 줍니다.
 - chat 과 허브에서는 검색 주소가 없어도 `web_fetch` 와 `doc_search` 가 켜집니다. `run` 은 프로필과 환경 변수에 적은 것만 씁니다.
+- 내장 스킬 8개(단계 계획, 오류 진단, git 작업, 코드 리뷰, 시험 고치기, 웹 조사, 인계 문서, 막힘 보고)가 chat·허브에서 켜집니다. 사용자·프로젝트에 같은 이름의 스킬이 있으면 그쪽이 이깁니다(`STEWART_BUILTIN_SKILLS=0` 이면 끔).
 
 ## 안전 장치
 
@@ -128,6 +129,17 @@ uv run stewart chat --backend local --workdir ~/my-project
 uv run stewart hub --project ~/my-project
 uv run stewart run -p code --backend local --workdir ~/my-project --task "실패하는 시험을 고쳐 주세요"
 ```
+
+### Anthropic API
+
+```bash
+uv sync --extra anthropic
+export ANTHROPIC_API_KEY=...   # 키는 환경 변수에만 둡니다
+```
+
+`backends.toml` 에 `kind = "anthropic"` 백엔드를 더합니다. 예시는 `backends.example.toml` 끝에 있습니다. 키 변수는 모델의 셸 환경에 넘어가지 않습니다.
+
+### 빌린 GPU
 
 더 큰 모델은 빌린 GPU 에서 [stewart-cloud](https://github.com/midopa-dept/stewart-cloud) 로 띄울 수 있습니다. vLLM 을 직접 쓴다면 `--enable-auto-tool-choice --tool-call-parser <모델에 맞는 파서>` 를 켜고, 포트는 인터넷에 열지 말고 SSH 터널이나 사설망으로만 닿게 둡니다.
 

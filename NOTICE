@@ -7,6 +7,9 @@ Runtime dependencies (installed by the package manager, not bundled here):
 - prompt_toolkit (BSD-3-Clause)
 - rich (MIT)
 
+Optional dependency (only with the extra stewart[anthropic]):
+- anthropic, the Anthropic Python SDK (MIT)
+
 Optional external tools used only when present (not bundled):
 - ripgrep (rg) for the search tool
 - a SearXNG instance for the web_search tool

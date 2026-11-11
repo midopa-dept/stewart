@@ -31,7 +31,7 @@ flowchart LR
     L --> K["Run record<br/>events · transcript · facts"]
 ```
 
-stewart connects to an OpenAI-compatible server such as vLLM or llama.cpp and lets the model read and edit files, run shell commands and search the web through tools. No model is included. You start the server and stewart connects to it.
+stewart connects to an OpenAI-compatible server such as vLLM or llama.cpp (or the Anthropic Messages API) and lets the model read and edit files, run shell commands and search the web through tools. No model is included. You start the server and stewart connects to it.
 
 Every run leaves a record, so you can check what the model said it did against the files it actually changed and the commands it actually ran. Prompts and tool messages are in Korean.
 
@@ -57,7 +57,7 @@ uv run stewart hub --project ~/my-project
   - Conversation: edits show as diff cards with line numbers, thinking as a folding block, and every code block has a copy button.
   - Hand-off card: when the model reaches something only a person can do (a password, keychain prompt, sudo, a login), it stops retrying and hands it to you.
   - Side panel: board, memory, steps, plan, always-allow rules, tokens.
-  - Input: `/commands`, `@file`, pasted images.
+  - Input: `/commands`, `@file`, pasted images. Large phone photos and HEIC are shrunk in the browser to 1600 px JPEG.
   - Model server status dot: ready, starting, unreachable, auth refused.
 - New approvals raise a browser notification. Set `[hub] ntfy_url` to also send them to your phone with [ntfy](https://ntfy.sh).
 - By default the hub listens on loopback only (`127.0.0.1`, `::1`). To use it from another device, put something in front (an SSH tunnel, for example) or turn on account mode.
@@ -78,6 +78,7 @@ uv run stewart hub --project ~/my-project
 
 - `web_fetch` refuses private, loopback, link-local and CGNAT addresses and re-checks redirects. Fetched text reaches the model wrapped in outside-content markers.
 - In chat and the hub, `web_fetch` and `doc_search` are on even without a search address. `run` uses only what the profile and environment variables turn on.
+- Eight built-in skills (step plans, error diagnosis, git work, code review, fixing tests, web research, hand-off notes, reporting a blocker) are on in chat and the hub. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
 
 ## Safety
 
@@ -126,6 +127,17 @@ uv run stewart chat --backend local --workdir ~/my-project
 uv run stewart hub --project ~/my-project
 uv run stewart run -p code --backend local --workdir ~/my-project --task "Fix the failing test"
 ```
+
+### Anthropic API
+
+```bash
+uv sync --extra anthropic
+export ANTHROPIC_API_KEY=...   # keep the key in the environment only
+```
+
+Add a backend with `kind = "anthropic"` to `backends.toml`; there is an example at the end of `backends.example.toml`. The key variable is not passed to the model's shell.
+
+### Rented GPU
 
 For bigger models on a rented GPU, see [stewart-cloud](https://github.com/midopa-dept/stewart-cloud). If you run vLLM yourself, turn on `--enable-auto-tool-choice --tool-call-parser <parser for your model>` and keep the port off the internet: reach it through an SSH tunnel or a private network.
 
