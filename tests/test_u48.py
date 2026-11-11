@@ -43,7 +43,7 @@ class THubCompact(MainBase):
             self.main.send(f"질문 {i}")
             self.assertTrue(self.main.wait_idle())
         self.assertGreaterEqual(s.st["compactions"], 1, self.lines())
-        self.assertTrue(any("문맥 줄임" in x for x in self.lines()), self.lines())
+        self.assertTrue(any(x.startswith("압축함(오래된 도구 결과") for x in self.lines()), self.lines())
         # 차례 4·5: 줄인 뒤에도 80% — 요약 접기(요약 호출은 시스템이 MAIN 이 아니라 WORKER 대본으로 간다)
         self.r.scripts["WORKER"] = [msg("## 목표·사람 요구\n- a.txt 를 읽는다")]
         for i in range(2):
@@ -51,7 +51,7 @@ class THubCompact(MainBase):
             self.main.send(f"더 {i}")
             self.assertTrue(self.main.wait_idle())
         self.assertGreaterEqual(s.st.get("summaries", 0), 1, self.lines())
-        self.assertTrue(any("요약으로 접음" in x for x in self.lines()), self.lines())
+        self.assertTrue(any(x.startswith("압축함(앞 대화") for x in self.lines()), self.lines())
         self.assertTrue(s.messages[1]["content"].startswith("[엔진] 앞 대화 요약"))
 
     def test_summary_fail_is_visible(self):
@@ -75,8 +75,10 @@ class THubCompact(MainBase):
         from stewart.resume import load_messages
         self.main.sess.messages = load_messages(rd)
         self.r.scripts["MAIN"] = [big("이어 답", prompt=int(WIN * 0.6)), big("또 답", prompt=int(WIN * 0.6))]
-        self.main.send("이어서")                      # 첫 차례: 아직 잰 값이 없다(0) — 이 차례 끝 뒤 다음 차례 시작에 판정
+        self.main.sess.comp.next_at = 1000           # 이 시험의 옛 대화(약 5천 토큰)가 문턱을 넘게
+        self.main.send("이어서")                      # 이어 받은 첫 차례(도구 없는 답): 잰 값이 없어도 어림으로 판정(SW-19)
         self.assertTrue(self.main.wait_idle())
+        self.assertGreaterEqual(self.main.sess.st["compactions"], 1, self.lines())
         self.main.send("또")
         self.assertTrue(self.main.wait_idle())
         self.assertGreaterEqual(self.main.sess.st["compactions"], 1, self.lines())
@@ -99,3 +101,22 @@ class TLongTurn(MainBase):
         self.assertEqual(sum(1 for m in s.messages if m["role"] == "assistant"), 10)
         ids = {m["tool_call_id"] for m in s.messages if m["role"] == "tool"}
         self.assertEqual(ids, {tc["id"] for m in s.messages for tc in m.get("tool_calls") or []})
+
+
+class TCompactingLine(MainBase):
+    def test_spinner_then_result(self):
+        s = self.main.sess
+        s.messages += [m for i in range(5) for m in ({"role": "user", "content": f"사람 {i}"}, {"role": "assistant", "content": f"답 {i}"})]
+        seen = []
+
+        def fake(*a, **k):
+            seen.append(self.main.state()["now"])
+            return {"choices": [{"message": {"content": "요약"}}]}, 0.1
+        with mock.patch("stewart.chat.chat", fake):
+            self.main.compact_now("summary")
+        self.assertTrue(seen[0]["what"].startswith("문맥 압축 중"))     # 접는 동안 돌기 줄
+        self.assertTrue(any(x.startswith("압축함(앞 대화") and "→" in x for x in self.lines()), self.lines())
+        self.assertNotEqual((self.main.ui.now or {}).get("what", ""), seen[0]["what"])
+
+    def lines(self):
+        return [m["text"] for m in self.main.state()["main_log"] if m["kind"] in ("compact", "warn")]

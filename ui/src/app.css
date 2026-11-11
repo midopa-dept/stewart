@@ -105,3 +105,5 @@ button:disabled { cursor: default; opacity: .55; }
 .cb-head span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cp-btn { flex: none; font-size: 11.5px; padding: .1rem .55rem; border: 1px solid var(--c-line); border-radius: .4rem; background: var(--c-panel); color: var(--c-fg); cursor: pointer; }
 .cp-btn:hover { background: var(--c-soft); }
+/* 코드 블록 줄 감싸기(판 67, SW-19): 폰에서 가로로 잘리지 않게. 복사는 원문 그대로 */
+.md .cb pre code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }

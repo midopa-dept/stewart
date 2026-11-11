@@ -694,10 +694,12 @@ class ChatSession:
         return tc
 
     # ---- 문맥 줄이기 -----------------------------------------------------
-    def compact(self, force: bool = False) -> int:
+    def compact(self, force: bool = False, estimate: bool = False) -> int:
         """문턱을 넘었으면(또는 /compact) 아직 안 줄인 앞쪽 덩어리를 한 번에 줄인다(compact.Compactor). 줄인 메시지 수.
         줄인 뒤 새로 잰 문맥이 아직 SUMMARY_RATIO 를 넘으면(실사용) 앞 대화를 요약으로 접는다(summarize)."""
         last = self.st["last_prompt_tokens"]
+        if estimate and not last:   # 이어 받은 대화의 첫 차례처럼 아직 잰 값이 없으면 어림으로 판정(SW-19)
+            last = est_tokens(json.dumps(self.messages, ensure_ascii=False))
         c = self.comp.maybe(self.messages, last, self.st["steps"], force=force)
         if not c:
             win = getattr(self.comp, "full_context", None) or self.backend.max_context
@@ -714,6 +716,7 @@ class ChatSession:
             return 0
         self.st["compactions"] += 1
         self._clip_step = self.st["steps"]
+        c = {**c, "tokens_after": est_tokens(json.dumps(self.messages, ensure_ascii=False))}
         self.rec.event("compact", **c)
         hook = getattr(self.ui, "compacted", None)
         if hook is not None:
@@ -750,6 +753,9 @@ class ChatSession:
         if len(span) < 3:
             return None
         text = summary_text(span)
+        hook = getattr(self.ui, "compacting", None)
+        if hook is not None:
+            hook()
         try:
             summ = ask_summary(chat, self.backend, text)
         except Exception as e:
@@ -779,7 +785,9 @@ class ChatSession:
         self.comp = self._new_compactor()
         self.st["last_prompt_tokens"], self._pmark = 0, 0
         self.st["summaries"] = self.st.get("summaries", 0) + 1
-        info = {"reason": reason, "folded_messages": cut - 1, "before": before, "after": len(self.messages), "summary_chars": len(summ)}
+        info = {"reason": reason, "folded_messages": cut - 1, "before": before, "after": len(self.messages), "summary_chars": len(summ),
+                "tokens_before": est_tokens(json.dumps(self.messages[:1] + span + rest, ensure_ascii=False)),
+                "tokens_after": est_tokens(json.dumps(self.messages, ensure_ascii=False))}
         self.rec.event("summarize", **info)
         save_messages(self.rec.dir, self.messages)
         hook = getattr(self.ui, "compacted", None)
@@ -885,7 +893,7 @@ class ChatSession:
             how = ("허브에서는 board add_todo(type=손작업, title 은 짧게, detail 에 기기·셸·한 줄·하는 일)로 올리고 그 U-번호로 말한 뒤 차례를 마친다."
                    if "board" in self.tool_names + [d["function"]["name"] for d in self.extra_defs]
                    else "ask_user 로 그 카드를 보이고 멈춘다.")
-            note += ST.HUMAN_NOTE.format(what=hb, how=how)
+            note += ST.HUMAN_NOTE.format(what=hb, how=how, hint=ST.human_hint(hb))
             tc["human_boundary"] = hb
             self.rec.event("human_boundary", what=hb)
         sig = ST.err_sig(result)
@@ -992,7 +1000,7 @@ class ChatSession:
         self._last_reflect = ""
         self._asked = None
         self._err_sigs, self._human_noted, self._samerr_hit = {}, set(), None   # 같은 오류·사람 경계(판 62), 차례마다
-        self.compact()                # 차례 시작에도 문턱을 본다(판 65): 도구 없이 답만 하는 차례가 이어지면 단계 뒤 판정이 돌지 않았다
+        self.compact(estimate=True)   # 차례 시작에도 문턱을 본다(판 65): 도구 없이 답만 하는 차례가 이어지면 단계 뒤 판정이 돌지 않았다
         self._rstate = RF.State()     # 되짚기 횟수는 차례마다(사람이 "계속" 하면 다시 한 번 쓸 수 있다)
         self._fail_steps, self._recent_fail = [], []
         self._cut, self._continued = False, 0

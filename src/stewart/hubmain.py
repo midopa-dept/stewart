@@ -32,7 +32,8 @@ HUB_MAIN_NOTE = """허브 메인으로서 일을 나눠 맡긴다:
 - 일하며 말한다(사람이 대화하는 느낌을 받게, 걸음 단위로 — 도구마다 말하지는 않는다):
   ① 사람 말을 받으면 첫 도구 호출 전에 한두 문장으로 알아들은 것과 먼저 할 일("알겠습니다. 우선 …부터 보겠습니다").
   ② 걸음이 바뀔 때(조사 → 고침 → 확인), 뜻밖의 것을 찾았을 때, 방향을 바꿀 때 한 문장. 그 글은 도구 호출과 같은 답에 같이 쓴다.
-  ③ 끝낼 때 무엇을 했고 무엇이 남았는지 짧게. 사람이 쓰는 말(한국어)로."""
+  ③ 끝낼 때 무엇을 했고 무엇이 남았는지 짧게. 사람이 쓰는 말(한국어)로.
+- 단계 세우고 묻기(판 67): 큰 일(파일 셋 넘게 고침·걸음 다섯 넘음·되돌리기 어려움)은 먼저 todo_write 로 단계 계획을 내고, 단계 묶음(한두 항목)을 끝낼 때마다 무엇을 했고 무엇이 나왔는지 짧게 요약한 뒤 "다음은 …입니다. 진행할까요?"로 차례를 마친다. 사람이 "끝까지"·"쭉 해"·"멈추지 말고"라고 하면 그 차례는 묻지 않고 끝까지 간다. 작은 일·물음·한두 걸음 일은 계획 없이 바로 한다."""
 TICK_S = 0.5
 RESULT_KEEP = 20   # 화면 상태에 결과 전문을 싣는 최근 도구 수(그 앞은 끝 15줄 화면 줄만 — SSE 크기)
 
@@ -142,14 +143,25 @@ class HubMainUI(HubUI):
                                  "계속 차면 [토큰] 탭의 [요약해 접기] 또는 새 메인")
             return
         if kind == "summary_fail":
+            if self.now and str(self.now.get("what", "")).startswith("문맥 압축 중"):
+                self.now = getattr(self, "_now_before_compact", None)
             self._add("warn", f"문맥이 차서 앞 대화를 요약해 접기를 못 했다({info.get('error')}) — 다음 차례에 다시 해 본다. "
                               "급하면 작업 내역 [토큰] 탭의 [요약해 접기]")
             return
+        k = lambda n: f"{round(n / 1000, 1)}k" if isinstance(n, (int, float)) and n >= 1000 else str(n)   # noqa: E731
+        if self.now and str(self.now.get("what", "")).startswith("문맥 압축 중"):
+            self.now = self._now_before_compact
         if kind == "clip":
-            self._add("compact", f"문맥 줄임: 오래된 도구 결과 {info.get('clipped', 0)}개를 줄였다(원문은 기록에, 필요하면 다시 읽는다)")
+            self._add("compact", f"압축함(오래된 도구 결과 {info.get('clipped', 0)}개 줄임): {k(info.get('before_tokens'))} → 약 {k(info.get('tokens_after'))} 토큰"
+                                 " — 원문은 기록에, 필요하면 다시 읽는다")
         else:
-            self._add("compact", f"앞 대화를 요약으로 접음: 메시지 {info.get('folded_messages', 0)}개 → 요약 한 쪽"
-                                 f"({'자동 — 문맥이 문턱을 넘음' if info.get('reason') == 'auto' else '사람이 누름'}, 원문은 기록에)")
+            self._add("compact", f"압축함(앞 대화 메시지 {info.get('folded_messages', 0)}개 → 요약 한 쪽, "
+                                 f"{'자동' if info.get('reason') == 'auto' else '사람이 누름'}): 약 {k(info.get('tokens_before'))} → {k(info.get('tokens_after'))} 토큰 — 원문은 기록에")
+
+    def compacting(self) -> None:
+        """요약 접기를 시작할 때(모델 한 번이라 수십 초): 화면 맨 아래 돌기 줄 '문맥 압축 중…'."""
+        self._now_before_compact = self.now
+        self.now = {"what": "문맥 압축 중… (앞 대화를 요약해 접는다)", "since": time.time()}
 
     def tool_done(self, tc: dict) -> None:
         """도구 하나가 끝났다(chat 이 모든 길에서 부른다): 화면 작업 카드의 그 단계 줄에 ✓/✕·걸린 시간·같은 오류 몇 번째를 붙인다."""
@@ -335,6 +347,7 @@ class HubMain:
             self._turn0 = (st.get("prompt_tokens_total") or 0, st.get("completion_tokens") or 0, st.get("steps") or 0,
                            round(st.get("model_time_s") or 0, 1))
             n0, f0 = len(self.sess.messages), self.sess.st.get("summaries", 0)
+            t_turn = time.monotonic()
             reason = self.sess.turn(text, images=images)
             if self.sess.st.get("summaries", 0) == f0:   # 차례 안에서 앞 대화를 접었으면 자리(n0)가 바뀌어 이번에는 건너뛴다
                 self._extract_later(n0)
@@ -345,6 +358,10 @@ class HubMain:
             except Exception:
                 pass
             self.ui._add("turn_end", f"[차례 끝: {reason}]" + (" — 화면에서 멈춤" if self.ui.halt_req.is_set() else ""))
+            try:
+                self._notify_turn_end(reason, time.monotonic() - t_turn, stopped=self.ui.halt_req.is_set())
+            except Exception:
+                pass
             self.ui.log[-1]["reason"] = "stopped" if self.ui.halt_req.is_set() else reason
         except Exception as e:   # 메인이 죽으면 화면에 남기고 다음 입력을 받는다
             self.ui._add("warn", f"메인 오류: {type(e).__name__}: {e}")
@@ -357,6 +374,26 @@ class HubMain:
             self._busy.release()
 
     # ── 꿈꾸기 자동(판 54): 한가할 때·닫을 때, 모델 서버가 준비됐을 때만(깨우려고 부르지 않는다) ──
+    def _notify_turn_end(self, reason: str, secs: float, stopped: bool = False) -> str | None:
+        """차례가 끝나면 폰(ntfy): 끝·질문·막힘. 짧은 차례(NOTIFY_DONE_MIN_S, 기본 60초)·사람이 멈춘 것은 알리지 않는다.
+        23:00~07:30 은 알리지 않는다(현황판 밤 조용과 같은 규칙, STEWART_BOARD_QUIET=0 이면 늘). 내용(답 글)은 싣지 않는다."""
+        import os
+        from datetime import datetime
+        from .board import _quiet
+        lim = float(os.environ.get("STEWART_NOTIFY_DONE_MIN_S") or 60)
+        if stopped or not self.hub._notify_on or lim <= 0 or secs < lim:
+            return None
+        if os.environ.get("STEWART_BOARD_QUIET") != "0" and _quiet(datetime.now()):
+            return None
+        last = next((m.get("text") or "" for m in reversed(self.ui.log) if m.get("kind") == "assistant"), "")
+        kind = ("막힘" if reason not in ("answered", "asked") else
+                "질문" if reason == "asked" or last.rstrip().endswith(("?", "？", "까요", "까요.", "니까")) else "끝")
+        mins = f"{int(secs // 60)}분 {int(secs % 60)}초" if secs >= 60 else f"{int(secs)}초"
+        text = {"끝": f"stewart: 차례 끝({mins})", "질문": f"stewart: 묻는 것이 있다({mins}) — 화면에서 답", 
+                "막힘": f"stewart: 막혀서 멈춤({mins}, {reason}) — 화면에서 확인"}[kind]
+        self.hub._notify(text)
+        return kind
+
     def _quota_alert(self, text: str) -> None:
         self.ui._add("warn", "웹 검색: " + text)
         if self.hub._notify_on:

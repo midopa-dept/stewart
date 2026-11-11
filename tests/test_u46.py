@@ -47,7 +47,7 @@ class TSummary(MainBase):
         ids = {m["tool_call_id"] for m in s.messages if m["role"] == "tool"}
         calls = {tc["id"] for m in s.messages for tc in m.get("tool_calls") or []}
         self.assertEqual(ids, calls)                                                       # 툴콜 짝이 깨지지 않음
-        self.assertTrue(any(m["kind"] == "compact" and "요약으로 접음" in m["text"] for m in self.main.state()["main_log"]))
+        self.assertTrue(any(m["kind"] == "compact" and m["text"].startswith("압축함(앞 대화") for m in self.main.state()["main_log"]))
         self.assertEqual(self.main.state()["tokens"]["summaries"], 1)
         fold = json.loads((s.rec.dir / "folds" / "001.json").read_text(encoding="utf-8"))   # 접은 원문 보관
         self.assertEqual(fold["messages"][0]["content"], "사람 0: 앞으로는 테스트를 먼저 돌려라")

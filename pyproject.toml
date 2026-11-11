@@ -20,3 +20,4 @@ packages = ["src/stewart"]
 [tool.hatch.build.targets.wheel.force-include]
 "profiles" = "stewart/_profiles"
 "backends.example.toml" = "stewart/_data/backends.example.toml"
+"demos/media/schema.json" = "stewart/demos/media/schema.json"   # media 프로필의 ../demos/media 가 wheel 안에서도 풀리게

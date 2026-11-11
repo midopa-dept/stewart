@@ -151,6 +151,16 @@ _HUMAN = [
 ]
 
 
+HUMAN_HINT = {   # 꼴마다 사람 손 카드에 덧붙일 사례 지식(기기 이름 없이)
+    "키체인": " 키체인 잠금·허용 창은 로그인 세션에 묶인다 — 에이전트를 띄운 셸이 원격(SSH·tmux)이면 화면 앞에서 푼 것이 그 셸에 안 먹을 수 있으니, "
+              "에이전트를 띄운 것과 같은 쪽 셸에서 `security unlock-keychain` 을 치거나, 화면 앞에서 그 명령을 한 번 돌려 허용 창에서 '항상 허용'을 고르게 안내한다.",
+}
+
+
+def human_hint(what: str) -> str:
+    return next((v for k, v in HUMAN_HINT.items() if k in (what or "")), "")
+
+
 def human_boundary(result: str) -> str:
     """실패 결과가 사람 경계 꼴이면 그 설명, 아니면 빈 글."""
     body = str(result or "")
@@ -161,8 +171,8 @@ def human_boundary(result: str) -> str:
 
 
 HUMAN_NOTE = ("\n\n[엔진] 사람만 풀 수 있는 경계로 보인다({what}). 같은 계열 명령을 더 시도하지 말고, 긴 보고 대신 '사람 손 카드' 하나로 넘겨라: "
-              "```text 사람 손 카드``` 코드 블록에 어느 기기·어느 셸에서, 붙여 넣을 한 줄, 그 줄이 하는 일, 끝나면 무엇이 풀리는지. 비밀번호·토큰 값은 줄에 넣지 않는다"
-              "(묻게 두거나 -w 를 맨 끝에 두어 입력받게). {how}")
+              "보통 글로 어느 기기·어느 셸에서, 하는 일, 끝나면 무엇이 풀리는지를 쓰고, 붙여 넣을 명령만 따로 bash 코드 블록에(그 블록의 [복사]가 명령만 가져간다). "
+              "비밀번호·토큰 값은 명령에 넣지 않는다(묻게 두거나 -w 를 맨 끝에 두어 입력받게).{hint} {how}")
 
 
 def soft_exit(cmd: str, result: str) -> bool:
