@@ -236,16 +236,17 @@ export function Composer({ target }) {
     setText(v); hideSug()
     requestAnimationFrame(() => { const t = ta.current; const p = a + it.insert.length; t.focus(); t.setSelectionRange(p, p) })
   }
-  async function addFiles(files) {   // 큰 폰 사진·HEIC 는 줄여 JPEG 로(imgprep.js). 건너뛸 때는 늘 까닭을 토스트로(판 74)
+  async function addFiles(files) {   // 2.0MP 로 줄임(글 그림 PNG·사진 JPEG, 원본도 함께 — imgprep.js 판 82). 건너뛸 때는 늘 까닭을 토스트로(판 74)
     const list = [...(files || [])]
     if (!list.length) return
     if (!vision) { toast(isMain ? '이 백엔드는 이미지를 받지 않는다(backends 표 vision = false)' : '이 칸에서는 아직 사진을 붙이지 못한다(메인 칸에서)'); return }
     for (const f of list) {
       try {
-        const x = await prepImage(f)
+        const x = await prepImage(f, {}, { tiles: !!st?.image_tiles })
         if (!x.ok) { toast(x.why); continue }
         if (x.note) toast(`${x.name}: ${x.note}`)
-        setImgs(xs => { if (xs.length >= IMG_MAX) { toast(`사진은 한 번에 ${IMG_MAX}장까지`); return xs } return [...xs, { name: x.name, size: x.size, data: x.data }] })
+        const add = x.tiles ? x.tiles.map(t => ({ name: t.name, size: t.size, data: t.data })) : [{ name: x.name, size: x.size, data: x.data, orig: x.orig }]
+        setImgs(xs => { if (xs.length + add.length > IMG_MAX) { toast(`사진은 한 번에 ${IMG_MAX}장까지`); return xs } return [...xs, ...add] })
       } catch (e) { toast('사진을 못 읽었다: ' + (e?.message || e)) }
     }
   }
@@ -257,7 +258,7 @@ export function Composer({ target }) {
     try {
       if (isMain) {
         const body = { text: v }
-        if (imgs.length) body.images = imgs.map(x => ({ name: x.name, data: x.data }))
+        if (imgs.length) body.images = imgs.map(x => ({ name: x.name, data: x.data, ...(x.orig ? { orig: x.orig } : {}) }))
         await cpost('/api/main', body)
       } else {
         await post('/api/session/send', { name: target, text: v, kind: kind || '지시' })

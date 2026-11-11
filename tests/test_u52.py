@@ -54,7 +54,7 @@ class TPhoto(unittest.TestCase):
         self.assertIn("image/jpeg", js)
         self.assertIn("toDataURL", js)                                   # 브라우저에서 줄이기
         src = (ROOT / "ui" / "src" / "imgprep.js").read_text(encoding="utf-8")
-        self.assertIn("MAX_SIDE = 1600", src)
+        self.assertIn("MAX_PIXELS = 2000000", src)                       # 판 82: 서버 화소 상한 아래 2.0MP(긴 변 1600 아님)
 
 
 

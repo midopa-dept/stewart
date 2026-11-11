@@ -310,17 +310,28 @@ class HubMain:
         text = text.strip()
         if not text and not images:
             return "empty"
-        parts = []
+        parts, img_note = [], ""
         if images:
             from . import images as IMG
             if not self.sess.backend.vision:
                 return "no_vision"
             if self.busy:
                 return "busy_images"
-            for name, data in images:
+            from . import ocr as OCR
+            ocr_on = OCR.enabled(getattr(self._root(), "image_ocr", False))
+            notes = []
+            for i, item in enumerate(images, 1):
+                name, data = item[0], item[1]
+                orig = item[2] if len(item) > 2 else None
                 part, desc = IMG.from_bytes(data, name, self.sess.rec.dir)   # ImageError 는 화면으로(까닭)
                 parts.append(part)
-                self.ui._add("info", f"이미지 붙임: {desc}")
+                kept = IMG.keep_original(part, orig) if orig else None   # 줄여 받은 사진의 원본(부분 확대용, 판 82)
+                self.ui._add("info", f"이미지 붙임: {desc}" + (" · 원본도 둠(부분 확대용)" if kept else ""))
+                notes.append(f"{i}) {IMG.path_of(part)}")
+                if ocr_on:
+                    notes[-1] += OCR.note(i, OCR.text_of(orig or data))
+            img_note = ("[붙인 그림 — 작은 글자·세부는 view_image(path, region=[x0,y0,x1,y1] 0~1 비율)로 잘라 크게 본다: "
+                        + " ".join(n for n in notes) + "]")
         text = text or "(붙인 이미지를 봐라)"
         self.ui._add("user", text + (f"  [이미지 {len(parts)}장]" if parts else ""))
         if not parts:
@@ -358,6 +369,8 @@ class HubMain:
             with self.ui._lock:
                 self.ui.pending.append(text)
             return "queued"
+        if img_note:   # 모델에게만: 붙인 그림의 경로(부분 확대용)·OCR 글 — 화면 말 줄은 그대로
+            text = text + "\n\n" + img_note
         self._turn = threading.Thread(target=self._run_turn, args=(text, parts or None), daemon=True)
         self._turn.start()
         return "started"
@@ -731,7 +744,8 @@ class HubMain:
                          "think_since": live.get("think_since")} if self.busy else None,
                 "now": self.ui.now if self.busy else None, "server_time": time.time(),
                 "todos": list(getattr(self.sess.env, "todos", None) or []), "main_run": str(self.sess.rec.dir),
-                "vision": bool(self.sess.backend.vision), "pending": list(self.ui.pending),
+                "vision": bool(self.sess.backend.vision), "image_tiles": bool(getattr(root, "image_tiles", False)),
+                "pending": list(self.ui.pending),
                 "backend": {"name": self.sess.backend.name, "model": self.sess.backend.model,
                             **({"external": self.sess.backend.provider_label(), "used": dict(self.sess.backend.used)}
                                if self.sess.backend.external() else {})},
@@ -846,7 +860,8 @@ def hub_config(path: str | None = None) -> dict:
     d = tomllib.loads(p.read_text(encoding="utf-8")).get("hub") or {}
     known = {"notify_url", "state_dir", "worktree_root", "port", "hosts", "ntfy_url", "ntfy_token_file", "hub_url", "ntfy_priority", "ui",
              "accounts", "listen", "user_root",
-             "label", "color", "notify_tag"}   # 판 77: 허브가 여럿일 때 이름표·색 띠·알림 꼬리표
+             "label", "color", "notify_tag",   # 판 77: 허브가 여럿일 때 이름표·색 띠·알림 꼬리표
+             "image_ocr", "image_tiles"}        # 판 82: 사진 OCR 글 덧붙이기·긴 그림 조각(둘 다 기본 끔)
     bad = sorted(set(d) - known)
     if bad:
         from .config import ConfigError
@@ -1154,6 +1169,7 @@ def run_hub(a) -> int:
     main = HubMain(hub, profile, backend, rec, mode=a.mode, worker_profile=a.worker_profile or a.profile,
                    worker_backend=a.backend, history=history, resumed_from=prev)
     main.label, main.color = str(cfg.get("label") or ""), str(cfg.get("color") or "")   # 허브가 여럿일 때 가름(머리 이름·색 띠)
+    main.image_ocr, main.image_tiles = bool(cfg.get("image_ocr", False)), bool(cfg.get("image_tiles", False))   # 판 82 손잡이
     resumed = hub.recover()
     token = make_token(state_dir, reuse=not getattr(a, "new_token", False))   # 다시 켜도 같은 토큰·로그인 유지(--new-token 이면 새로)
     web = WebApp(main, hub, token, port=a.port or int(cfg.get("port") or DEFAULT_PORT), extra_hosts=cfg.get("hosts") or (),

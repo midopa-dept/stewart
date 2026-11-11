@@ -9,6 +9,9 @@ C. 기록·문맥·이어 하기: 메시지 안 이미지는 자리표 {"type":"
 - 형식은 앞 바이트로만 본다: PNG·JPEG·WebP·GIF. 줄이기·변환은 하지 않는다(새 의존성 없음). 크기 상한 MAX_BYTES(STEWART_IMAGE_MAX_BYTES).
 - 토큰 어림: 이미지당 IMAGE_TOKENS(compact.est_tokens 가 자리표 수로 더한다).
 - 사람이 준 이미지는 작업 폴더 밖이어도 묻지 않는다. 비밀 꼴 이름(fswalk.is_secret)만 거부한다. EXIF 는 그대로 간다.
+D. 판 82(사진 글자 실측 B 채택): 허브가 2.0MP 로 줄여 보내면 원본도 함께 받아 images/<sha>.orig.<확장자> 로 둔다(keep_original).
+   모델은 view_image(path, region) 으로 원본에서 잘라 크게 본다(crop — 맥 sips). 한 요청에 그림이 backend.max_images 장을
+   넘으면 최근 것만 보내고 앞 것은 경로를 적은 글 자리표로(서버가 요청을 통째로 거절하지 않게).
 """
 
 from __future__ import annotations
@@ -111,6 +114,72 @@ def store(store_dir: Path, data: bytes, mime: str) -> dict:
     return {"type": "image_url", "image_url": {"url": SCHEME + str(p.resolve())}}
 
 
+def path_of(part: dict) -> Path | None:
+    url = str(((part or {}).get("image_url") or {}).get("url") or "")
+    return Path(url[len(SCHEME):]) if url.startswith(SCHEME) else None
+
+
+def keep_original(part: dict, orig: bytes) -> Path | None:
+    """줄인 그림(part)의 원본을 옆에 둔다: <줄인 것 이름>.orig.<확장자>. 받지 않는 꼴이면 None."""
+    p = path_of(part)
+    try:
+        mime = check(orig)
+    except ImageError:
+        return None
+    if p is None:
+        return None
+    q = p.with_name(f"{p.stem}.orig.{EXT[mime]}")
+    if not q.exists():
+        q.write_bytes(orig)
+    return q
+
+
+def original_of(path: Path) -> Path:
+    """그림 경로 → 원본이 따로 있으면 원본, 없으면 그대로."""
+    for q in sorted(Path(path).parent.glob(Path(path).stem + ".orig.*")):
+        return q
+    return Path(path)
+
+
+class CropError(Exception):
+    pass
+
+
+def crop(src: Path, region, out_dir: Path) -> tuple[Path, str]:
+    """src 의 region 을 잘라 PNG 로 → (경로, 설명). region = [x0, y0, x1, y1] — 모두 1 이하면 비율(0~1), 아니면 원본 화소.
+    잘린 것이 작으면 긴 변 1024 까지 키운다. 맥 기본 sips 만 쓴다(새 의존성 없음) — 그 밖 OS 는 CropError."""
+    import shutil
+    import subprocess
+    import sys
+    if sys.platform != "darwin" or not shutil.which("sips"):
+        raise CropError("부분 확대(region)는 맥(sips)에서만 된다 — region 없이 통째로 본다")
+    data = Path(src).read_bytes()
+    d = dims(data, sniff(data) or "")
+    if not d:
+        raise CropError("그림 크기를 읽지 못했다")
+    w, h = d
+    try:
+        x0, y0, x1, y1 = (float(v) for v in region)
+    except (TypeError, ValueError):
+        raise CropError("region 은 [x0, y0, x1, y1] 숫자 넷") from None
+    if max(x0, y0, x1, y1) <= 1.0:
+        x0, x1, y0, y1 = x0 * w, x1 * w, y0 * h, y1 * h
+    x0, x1 = sorted((max(0, min(w, x0)), max(0, min(w, x1))))
+    y0, y1 = sorted((max(0, min(h, y0)), max(0, min(h, y1))))
+    cw, ch = int(x1 - x0), int(y1 - y0)
+    if cw < 8 or ch < 8:
+        raise CropError(f"region 이 너무 작다({cw}×{ch}) — 그림은 {w}×{h}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"crop-{hashlib.sha256(data + repr((x0, y0, cw, ch)).encode()).hexdigest()[:12]}.png"
+    args = ["sips", "-s", "format", "png", "-c", str(ch), str(cw), "--cropOffset", str(int(y0)), str(int(x0))]
+    r = subprocess.run(args + [str(src), "--out", str(out)], capture_output=True, timeout=60)
+    if r.returncode != 0 or not out.is_file():
+        raise CropError("sips 가 자르지 못했다: " + r.stderr.decode("utf-8", "replace")[-200:])
+    if max(cw, ch) < 1024:
+        subprocess.run(["sips", "-Z", "1024", str(out)], capture_output=True, timeout=60)
+    return out, f"{Path(src).name} 의 ({int(x0)},{int(y0)})~({int(x0) + cw},{int(y0) + ch}) — 원본 {w}×{h} 에서 {cw}×{ch}"
+
+
 def from_file(path: str | Path, store_dir: Path) -> tuple[dict, str]:
     """사람이 준 이미지 파일 → (자리표 부분, 설명 한 줄). 작업 폴더 밖이어도 된다."""
     p = Path(os.path.expanduser(str(path)))
@@ -166,10 +235,13 @@ def _data_url(url: str) -> str | None:
     return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}" if mime else None
 
 
-def expand(messages, vision: bool):
-    """보낼 메시지 사본: 자리표를 data URL 로(vision), 아니면 글 자리표로. 이미지가 없으면 같은 것을 돌려준다."""
-    if not count(messages):
+def expand(messages, vision: bool, max_images: int = 0):
+    """보낼 메시지 사본: 자리표를 data URL 로(vision), 아니면 글 자리표로. 이미지가 없으면 같은 것을 돌려준다.
+    max_images 가 있으면 뒤(최근)에서부터 그 장수만 보내고 앞 것은 경로를 적은 글로(판 82)."""
+    n = count(messages)
+    if not n:
         return messages
+    skip = max(0, n - max_images) if max_images and vision else 0
     out = []
     for m in messages:
         c = m.get("content") if isinstance(m, dict) else None
@@ -182,6 +254,12 @@ def expand(messages, vision: bool):
                 url = str((x.get("image_url") or {}).get("url") or "")
                 if not vision:
                     parts.append({"type": "text", "text": "[이미지: 이 백엔드는 이미지를 받지 않아 빼고 보냈다]"})
+                    continue
+                if skip:
+                    skip -= 1
+                    where = url[len(SCHEME):] if url.startswith(SCHEME) else ""
+                    parts.append({"type": "text", "text": f"[앞 그림 — 한 요청 {max_images}장 상한이라 이번에는 뺐다"
+                                                          + (f". 다시 보려면 view_image 로: {where}]" if where else "]")})
                     continue
                 du = _data_url(url) if url.startswith(SCHEME) else url
                 parts.append({"type": "image_url", "image_url": {"url": du}} if du

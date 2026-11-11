@@ -589,7 +589,10 @@ class WebApp:
         got = []
         for x in imgs:
             try:
-                got.append((str(x.get("name") or "")[:200], base64.b64decode(str(x.get("data") or ""), validate=True)))
+                item = (str(x.get("name") or "")[:200], base64.b64decode(str(x.get("data") or ""), validate=True))
+                if x.get("orig"):   # 화면이 줄여 보낸 사진의 원본(부분 확대용, 판 82) — 상한은 images.check 가 본다
+                    item += (base64.b64decode(str(x["orig"]), validate=True),)
+                got.append(item)
             except (ValueError, AttributeError):
                 return self._json(h, 400, {"error": "images", "detail": "이미지 자료가 base64 가 아니다"})
         try:

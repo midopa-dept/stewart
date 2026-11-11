@@ -52,6 +52,7 @@ class Backend:
     served_max_len: int | None = None       # 서버가 알려 준 max_model_len(없거나 못 물었으면 None)
     dropped_params: list = field(default_factory=list)   # 서버가 모른다고 거절해 빼고 보내는 샘플링 칸(think.py)
     vision: bool = False        # 이미지 입력을 받는 모델인가(images.py). 기본 끔 — 꺼진 백엔드에는 이미지를 붙이지 않는다
+    max_images: int = 4         # 한 요청에 보내는 그림 상한(판 82): 서버(vLLM limit_mm_per_prompt)가 넘으면 요청을 통째로 거절 — 최근 것만 보낸다
     kind: str = "openai"        # openai(chat/completions 호환) | anthropic(Messages API, 판 69 — anthropic_backend.py)
     tool_mode: str = "native"   # native(요청의 tools) | text(tools 를 못 받는 API — 글 꼴로 부르고 꺼낸다, texttools.py)
     provider: str = ""          # 바깥 API 제공자 이름(허브 화면 "바깥 API: …" 표시). 비면 주소로 판단
@@ -183,6 +184,7 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 concurrency=max(1, int(b.get("concurrency", 1))),
                 api_key_file=b.get("api_key_file"),
                 vision=bool(b.get("vision", False)),
+                max_images=max(1, int(b.get("max_images", 4))),
                 kind=str(b.get("kind") or "openai"),
                 tool_mode=str(b.get("tool_mode") or "native"),
                 provider=str(b.get("provider") or ""),

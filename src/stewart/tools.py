@@ -197,8 +197,9 @@ def read_file(env: ToolEnv, path: str, offset: int = 1, limit: int = 400) -> tup
     return True, _clip(body + tail) if body else "(빈 파일)"
 
 
-def view_image(env: ToolEnv, path: str) -> tuple[bool, str]:
-    """작업 폴더의 이미지를 모델이 본다(U2-5 B). 결과는 글이고, 엔진이 다음 user 메시지에 그 이미지를 붙인다."""
+def view_image(env: ToolEnv, path: str, region: list | None = None) -> tuple[bool, str]:
+    """작업 폴더의 이미지를 모델이 본다(U2-5 B). 결과는 글이고, 엔진이 다음 user 메시지에 그 이미지를 붙인다.
+    region(판 82): [x0, y0, x1, y1](0~1 비율 또는 화소) — 원본이 따로 있으면(허브가 줄여 받은 사진) 원본에서 잘라 크게 붙인다."""
     from . import images as IMG
     if not env.vision:
         return False, "이 백엔드는 이미지를 받지 않는다(backends 표 vision = false). read_file 의 형식·크기 줄로만 다룬다"
@@ -213,7 +214,19 @@ def view_image(env: ToolEnv, path: str) -> tuple[bool, str]:
     except (OSError, IMG.ImageError) as e:
         return False, f"이미지를 열지 못했다: {e}"
     import tempfile
-    env.pending_images.append(IMG.store(env.artifacts_dir or Path(tempfile.gettempdir()) / "stewart-images", data, mime))
+    store = env.artifacts_dir or Path(tempfile.gettempdir()) / "stewart-images"
+    if region:
+        src = IMG.original_of(p)
+        try:
+            out, desc = IMG.crop(src, region, Path(store) / "images")
+            data = out.read_bytes()
+            mime = IMG.check(data, out.name)
+        except (OSError, IMG.ImageError, IMG.CropError) as e:
+            return False, f"부분을 자르지 못했다: {e}"
+        env.pending_images.append(IMG.store(store, data, mime))
+        _mark_seen(env, p)
+        return True, f"자른 부분을 다음 메시지에 붙였다: {desc} ({IMG.describe(data, mime)})"
+    env.pending_images.append(IMG.store(store, data, mime))
     _mark_seen(env, p)
     return True, f"이미지를 다음 메시지에 붙였다: {path} ({IMG.describe(data, mime)})"
 
@@ -1374,8 +1387,11 @@ TOOLS = {
             "required": ["content", "status"]}},
     }, ["items"]),
     "todo_read": (todo_read, "지금 할 일 목록을 본다.", {}, []),
-    "view_image": (view_image, "작업 폴더의 이미지 파일(PNG·JPEG·WebP·GIF)을 본다. 이미지는 다음 메시지에 붙어 온다(이미지를 받는 백엔드만).", {
+    "view_image": (view_image, "작업 폴더의 이미지 파일(PNG·JPEG·WebP·GIF)을 본다. 이미지는 다음 메시지에 붙어 온다(이미지를 받는 백엔드만). "
+                   "작은 글자·세부는 region 으로 그 부분만 원 해상도로 잘라 크게 본다(사람이 붙인 사진은 원본에서).", {
         "path": {"type": "string"},
+        "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
+                   "description": "[x0, y0, x1, y1] — 0~1 비율(왼쪽 위가 0,0). 없으면 통째로"},
     }, ["path"]),
     "notebook_edit": (notebook_edit, "주피터 노트북(.ipynb) 칸 하나를 바꾸거나(replace) 그 자리에 새 칸을 넣거나(insert) 지운다(delete). "
                       "칸 번호는 read_file 이 보여 주는 1부터. 바꾼 코드 칸의 옛 출력은 비운다.", {

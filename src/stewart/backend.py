@@ -137,7 +137,8 @@ def safe_messages(messages) -> list:
 
 def _body(backend: Backend, messages, tools=None, response_format=None, **extra) -> dict:
     from .images import expand
-    body: dict = {"model": backend.model, "messages": expand(safe_messages(messages), backend.vision), "stream": False}
+    body: dict = {"model": backend.model, "messages": expand(safe_messages(messages), backend.vision, getattr(backend, "max_images", 0)),
+                  "stream": False}
     body.update(backend.params)
     if tools:
         body["tools"] = tools
