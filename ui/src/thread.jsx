@@ -39,6 +39,7 @@ export function groupLog(log) {
     if (m.kind === 'tail') { out.push({ type: 'tail', key: 'tl' + m.ts + m.text, m }); continue }
     if (m.kind === 'memory') { out.push({ type: 'memory', key: 'mm' + m.ts + m.text, m }); continue }
     if (m.kind === 'memory_ask') { out.push({ type: 'memask', key: 'ma' + m.ts + m.text, m }); continue }
+    if (m.kind === 'memory_plan') { out.push({ type: 'memplan', key: 'mp' + m.ts, m }); continue }
     if (m.kind === 'diff') out.push({ type: 'diff', key: 'd' + m.ts + m.text.length, m })
     else out.push({ type: m.kind === 'user' ? 'user' : m.kind === 'assistant' ? 'assistant' : 'note', key: m.kind + m.ts + m.text.slice(0, 20), m })
   }
@@ -225,6 +226,34 @@ export function TokenLine() {
 }
 
 // 오래 지킬 지시를 남기기 전에 묻는 카드(판 83): [허용] = 방침으로 남김, [이번만] = 이번 차례에만
+// 기억 정리 제안 카드(판 88): 항목마다 [받기]·[두기], [모두 받기]·[고른 것 적용]. 폰에서 누르기 쉬운 크기
+function MemPlan({ m }) {
+  const plan = m.plan || []
+  const [pick, setPick] = useState({}), [done, setDone] = useState(null)
+  async function go(accept) {
+    try { const r = await post('/api/memory/consolidate', { accept }); setDone(r); refresh() }
+    catch (e) { toast('안 됨: ' + e.message) }
+  }
+  const chosen = plan.filter(p => pick[p.n] === true).map(p => p.n)
+  return (
+    <div class="text-[13.5px] my-2 border border-line rounded-xl px-3.5 py-3 bg-panel shadow-card">
+      <div class="font-semibold mb-1">🧠 {m.text}</div>
+      {plan.map(p => <div key={p.n} class="py-2 border-t border-soft first:border-t-0">
+        <div class="break-words">{p.desc}</div>
+        {!done && <div class="flex gap-2 mt-1.5">
+          <button class={'btn !py-1.5 !px-3 text-sm ' + (pick[p.n] === true ? 'btn-ok' : '')} onClick={() => setPick({ ...pick, [p.n]: true })}>받기</button>
+          <button class={'btn !py-1.5 !px-3 text-sm ' + (pick[p.n] === false ? 'btn-ghost line-through' : '')} onClick={() => setPick({ ...pick, [p.n]: false })}>두기</button>
+        </div>}
+      </div>)}
+      {done ? <div class="text-xs text-mute mt-2">{done.applied?.length ? `${done.applied.length}개 받음 — 되돌리기: stewart memory consolidate --revert ${String(done.backup || '').split('/').pop()}` : '받은 것이 없어 바꾸지 않았다'}</div>
+        : <div class="flex gap-2 mt-2 flex-wrap">
+          <button class="btn btn-ok !py-2 !px-3.5" onClick={() => go('all')}>모두 받기</button>
+          <button class="btn !py-2 !px-3.5" disabled={!chosen.length} onClick={() => go(chosen)}>고른 것 적용({chosen.length})</button>
+        </div>}
+    </div>
+  )
+}
+
 function MemAsk({ m }) {
   const [done, setDone] = useState('')
   async function answer(keep) {
@@ -343,6 +372,7 @@ export function Thread({ log, prior }) {
           todos={i === lastTodo ? liveTodos : (g.m.todos || [])} />   // 가장 최근 카드는 지금 목록으로 그 자리에서 고쳐진다
         if (g.type === 'memory') return <MemLine key={g.key} m={g.m} />
         if (g.type === 'memask') return <MemAsk key={g.key} m={g.m} />
+        if (g.type === 'memplan') return <MemPlan key={g.key} m={g.m} />
         if (g.type === 'tail') return <div key={g.key} class="text-[13px] my-2 text-warn">📌 {g.m.text}</div>
         if (g.type === 'error') return <ErrorCard key={g.key} m={g.m} last={i >= tail - 1} />
         if (g.type === 'end') return <div key={g.key} class="text-[13px] text-mute my-2">— 차례 끝: {END[g.m.reason] || g.m.reason} —</div>

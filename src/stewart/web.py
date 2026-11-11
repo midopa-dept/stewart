@@ -343,6 +343,13 @@ class WebApp:
                 return self._json(h, 400, {"error": "json"})
             if path == "/api/main":
                 return self.main_send(h, data)
+            if path == "/api/memory/consolidate":   # 기억 정리 카드(판 88): accept = [번호…] 또는 "all"
+                acc = data.get("accept")
+                if acc != "all" and not (isinstance(acc, list) and all(isinstance(x, int) for x in acc)):
+                    return self._json(h, 400, {"error": "fields", "detail": "accept 는 번호 목록 또는 \"all\""})
+                cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
+                r = cv.memory_apply(None if acc == "all" else acc)
+                return self._json(h, 200 if "error" not in r else 409, r)
             if path in ("/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm"):   # 기억 자리(판 52·83)
                 mem = getattr(self.main.sess, "mem", None)
                 if mem is None:
@@ -513,7 +520,7 @@ class WebApp:
             return self._json(h, 200, {"rules": [{"id": r.id, "pattern": r.pattern, "warn": broad_note(r.pattern),
                                                   "scope": "session" if r.origin == "session" else "project"}
                                                  for r in self.hub.allow_rules()]})
-        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
+        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm", "/api/memory/consolidate", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
                     "/api/session/control"):
             return self._json(h, 405, {"error": "method"})
         return self._json(h, 404, {"error": "not_found"})

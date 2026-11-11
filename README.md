@@ -116,7 +116,7 @@ uv run stewart hub --project ~/my-project
 
 - `web_fetch` 는 사설·루프백·링크 로컬·CGNAT 주소로 가지 않고, 리다이렉트도 다시 검사합니다. 가져온 글은 바깥 자료 표시로 감싸 모델에게 줍니다.
 - chat 과 허브에서는 검색 주소가 없어도 `web_fetch` 와 `doc_search` 가 켜집니다. `run` 은 프로필과 환경 변수에 적은 것만 씁니다.
-- 내장 스킬 16개가 chat·허브에서 켜집니다: 단계 계획, 오류 진단, git 작업, 코드 리뷰, 보안 검토, 정리(simplify), 시험 고치기, 실행해 확인, 웹 조사, 깊은 조사, 문서 파일(PDF·Word·Excel·PowerPoint), 프로젝트 안내 파일 만들기, 스킬 만들기, stewart 설정, 인계 문서, 막힘 보고. 사용자·프로젝트에 같은 이름의 스킬이 있으면 그쪽이 이깁니다(`STEWART_BUILTIN_SKILLS=0` 이면 끔).
+- 내장 스킬 17개가 chat·허브에서 켜집니다: 단계 계획, 오류 진단, git 작업, 코드 리뷰, 보안 검토, 정리(simplify), 시험 고치기, 실행해 확인, 웹 조사, 깊은 조사, 문서 파일(PDF·Word·Excel·PowerPoint), 프로젝트 안내 파일 만들기, 스킬 만들기, stewart 설정, 인계 문서, 막힘 보고, 기억 정리. 사용자·프로젝트에 같은 이름의 스킬이 있으면 그쪽이 이깁니다(`STEWART_BUILTIN_SKILLS=0` 이면 끔).
 
 ## 안전 장치
 
@@ -140,6 +140,7 @@ stewart 는 모델이 고른 셸 명령을 내 기기에서 돌립니다. 아래
   - 자료(`knowledge/`): 모델이 몰랐거나 틀려서 사람이 고쳐 준 사실. 지시문에 싣지 않고 `doc_search` 로 찾습니다.
 - "앞으로" 가 붙은 지시는 방침으로 남길지 묻고, 이번 차례에만 해당하는 지시는 남기지 않습니다. 허브의 기억 탭에서 보고, 고치고, 지울 수 있습니다.
 - 메모는 `stewart dream` 이 대상마다 `MEMORY.md` 제안으로 모읍니다. 사람이 `--accept` 로 들이기 전에는 바뀌지 않습니다. 허브는 한가할 때 제안을 스스로 만듭니다(`STEWART_DREAM_AUTO=0` 이면 끔).
+- 기억 정리: 허브에서 `/memory` 또는 "기억 정리해 줘", 터미널에서 `stewart memory consolidate`. 모델이 세 갈래를 한 번 읽고 갈래 옮기기·합치기·지움 후보·짧게 다시 쓰기를 제안하고, 사람이 항목마다 받거나 둡니다. 받기 전에 사본을 남기고 `--revert` 로 되돌립니다(`--dry-run` 은 제안만).
 - 손으로 쓴 규칙 파일(`AGENTS.md`, `STEWART.md`)과 부딪히면 규칙 파일이 이깁니다.
 - 기억 폴더는 `~/.local/share/stewart/memory`(`STEWART_MEMORY_DIR`)입니다.
 

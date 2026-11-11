@@ -57,6 +57,49 @@ def _common(p: argparse.ArgumentParser, task: bool = True) -> None:
     p.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
 
 
+def _memory_consolidate(a) -> int:
+    """stewart memory consolidate [--dry-run] [--yes] [-b 백엔드] [--revert consolidate-<시각>] — 판 88."""
+    import tempfile
+    from . import memconsolidate as MC
+    from .config import Profile
+    from .memory import Memory
+    wd = Path(tempfile.mkdtemp(prefix="stewart-memcons-"))
+    os.environ["STEWART_MEMORY_MIGRATE"] = "0"   # 정리는 옮기기를 대신하지 않는다(옮기기는 stewart memory migrate·허브 첫 켜기)
+    mem = Memory(Profile(name="chat", path=wd / "p.toml", system="", tools=[], workdir=wd), wd / "run")
+    if a.revert:
+        print("되돌렸다: " + ", ".join(MC.revert(mem, a.revert if isinstance(a.revert, str) else "")))
+        return 0
+    if not mem.md():
+        print("기억이 아직 세 갈래가 아니다 — 먼저 stewart memory migrate")
+        return 2
+    backends, default = load_backends()
+    bk = backends[a.backend or default]
+    plan = MC.propose(mem, bk)
+    if not plan:
+        print("고칠 것이 없다고 한다(바뀐 것 없음)")
+        return 0
+    for p in plan:
+        print(MC.describe(p))
+    if a.dry_run:
+        print(f"\n미리 보기 — 아무것도 바꾸지 않았다. 받으려면 --dry-run 없이(항목마다 묻는다) 또는 --yes.")
+        return 0
+    if a.yes:
+        acc = None
+    else:
+        acc = []
+        for p in plan:
+            ans = input(f"{p['n']}번 받을까? [y/N/a=나머지 모두] ").strip().lower()
+            if ans == "a":
+                acc += [q["n"] for q in plan if q["n"] >= p["n"]]
+                break
+            if ans in ("y", "yes", "ㅇ"):
+                acc.append(p["n"])
+    r = MC.apply(mem, plan, acc)
+    print(f"받음 {len(r['applied'])}개" + (f" — 사본 {Path(r['backup']).name}/ · 되돌리기: stewart memory consolidate --revert {Path(r['backup']).name}"
+                                        if r["backup"] else ""))
+    return 0
+
+
 def resolve(profile_name: str, backend_name: str | None, workdir: str | None = None,
             check_workdir: bool = True) -> tuple[Profile, Backend]:
     backends, default = load_backends()
@@ -332,9 +375,12 @@ def main(argv: list[str] | None = None) -> int:
     dr.add_argument("--accept", metavar="대상", help="제안된 MEMORY.md 를 들인다(모델을 부르지 않음)")
     dr.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
     mm = sub.add_parser("memory", help="기억 세 갈래(방침·프로필·자료): migrate [--dry-run|--revert] — 옛 remember.jsonl 옮기기·되돌리기")
-    mm.add_argument("action", choices=["migrate"])
+    mm.add_argument("action", choices=["migrate", "consolidate"])
+    mm.add_argument("-b", "--backend", help="consolidate: 정리를 맡길 모델의 백엔드(없으면 기본)")
+    mm.add_argument("--yes", action="store_true", help="consolidate: 묻지 않고 제안을 모두 받는다")
     mm.add_argument("--dry-run", action="store_true", help="쓰지 않고 옮길 표만")
-    mm.add_argument("--revert", action="store_true", help="세 갈래 파일을 reverted-<날짜>/ 로 옮기고 옛 파일로 돌아간다")
+    mm.add_argument("--revert", nargs="?", const=True, default=False,
+                    help="migrate: 세 갈래 파일을 reverted-<날짜>/ 로 옮기고 옛 파일로 / consolidate: --revert consolidate-<시각> 로 그 사본을 되살림")
     og = sub.add_parser("organize", help="폴더 정리 계획 검토·실행·되돌리기(review|apply|undo)", add_help=False)
     og.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("backends", help="백엔드 목록")
@@ -407,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
             r = cloud.wait(backends[a.backend], a.port, Path(a.runs_dir), timeout_s=a.timeout_min * 60)
             print(json.dumps(r, ensure_ascii=False, indent=1))
             return 0 if r["ok"] else 1
+        if a.cmd == "memory" and a.action == "consolidate":
+            return _memory_consolidate(a)
         if a.cmd == "memory":
             from . import memstore as MS
             from .memory import USER, memory_dir

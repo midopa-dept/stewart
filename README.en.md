@@ -114,7 +114,7 @@ uv run stewart hub --project ~/my-project
 
 - `web_fetch` refuses private, loopback, link-local and CGNAT addresses and re-checks redirects. Fetched text reaches the model wrapped in outside-content markers.
 - In chat and the hub, `web_fetch` and `doc_search` are on even without a search address. `run` uses only what the profile and environment variables turn on.
-- Sixteen built-in skills are on in chat and the hub: step plans, error diagnosis, git work, code review, security review, simplify, fixing tests, run-and-check, web research, deep research, document files (PDF, Word, Excel, PowerPoint), project init, skill creator, stewart config, hand-off notes, reporting a blocker. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
+- Seventeen built-in skills are on in chat and the hub: step plans, error diagnosis, git work, code review, security review, simplify, fixing tests, run-and-check, web research, deep research, document files (PDF, Word, Excel, PowerPoint), project init, skill creator, stewart config, hand-off notes, reporting a blocker, memory consolidation. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
 
 ## Safety
 
@@ -138,6 +138,7 @@ stewart runs shell commands the model chooses on your machine. The guards below 
   - Knowledge (`knowledge/`): facts the model did not know or got wrong and you corrected. Not loaded into the prompt; found with `doc_search`.
 - Instructions marked as lasting ("from now on") are offered as policy; instructions for the current turn only are not saved. The hub's memory tab lets you view, edit and delete entries.
 - `stewart dream` gathers notes into a proposed `MEMORY.md` per subject. Nothing changes until you take it with `--accept`. The hub makes proposals by itself when idle (`STEWART_DREAM_AUTO=0` turns that off).
+- Memory consolidation: `/memory` or "clean up my memory" in the hub, `stewart memory consolidate` in the terminal. The model reads the three parts once and proposes moves between parts, merges, removal candidates and shorter rewrites; you take or keep each item. A copy is saved before anything is applied and `--revert` restores it (`--dry-run` only shows the proposals).
 - Hand-written rule files (`AGENTS.md`, `STEWART.md`) win over memory when they conflict.
 - The memory folder is `~/.local/share/stewart/memory` (`STEWART_MEMORY_DIR`).
 

@@ -257,7 +257,8 @@ class HubMainUI(HubUI):
 
 
 HUB_COMMANDS = (("clear", "지금 대화를 기록에 남기고 빈 문맥으로 새 대화"), ("reset", "/clear 와 같다"),
-                ("compact", "오래된 도구 결과 줄이기('/compact 요약' 은 앞 대화를 요약해 접기)"), ("help", "이 목록"))
+                ("compact", "오래된 도구 결과 줄이기('/compact 요약' 은 앞 대화를 요약해 접기)"),
+                ("memory", "기억 정리 제안 — 모델이 방침·프로필·자료를 읽고 고칠 것을 카드로(항목별 받기·두기)"), ("help", "이 목록"))
 
 
 class HubMain:
@@ -304,7 +305,8 @@ class HubMain:
         if mig:   # 판 83: 옛 기억을 세 갈래로 옮겼으면 한 번 알린다(옛 파일·옮긴 표는 남김)
             c = mig["counts"]
             self.ui._add("info", f"기억을 세 갈래로 옮겼다 — 방침 {c['policy']} · 프로필 {c['profile']} · 자료 {c['knowledge']}. "
-                                 f"옮긴 표: {mig.get('table_path')} · 옛 파일은 그대로 · 되돌리기: stewart memory migrate --revert")
+                                 f"옮긴 표: {mig.get('table_path')} · 옛 파일은 그대로 · 되돌리기: stewart memory migrate --revert"
+                                 " · 모델로 한 번 정리하려면 /memory")
             hub.event("memory_migrated", **c)
         self.ui.on_backend_error = lambda kind, text: self.watch.poke(kind if kind in ("down", "loading", "auth") else None, text)
         self.ui.sd.set_status(status="idle", run_dir=str(rec.dir))
@@ -349,6 +351,9 @@ class HubMain:
         self.ui._add("user", text + (f"  [이미지 {len(parts)}장]" if parts else ""))
         if not parts:
             self.ui.last_user = text
+        if not parts and re.match(r"^\s*(기억\s*(을|를)?\s*(좀\s*)?정리|memory\s+consolidate)", text, re.I) and len(text) <= 40:
+            self.ui._add("user", text)
+            return self.memory_consolidate()   # "기억 정리해 줘" 도 /memory 와 같이(판 88)
         if text.startswith("/"):   # 프로젝트 명령(.stewart/commands, 호환 .claude/commands)은 펼쳐 보낸다. stewart 내장 명령은 허브 메인 칸에서 쓰지 않는다
             from .chat import COMMANDS
             exp = self.sess.expand_command(text)
@@ -371,6 +376,8 @@ class HubMain:
                     self.ui._add("warn", f"{text.split()[0]}: {e}")
                     return "busy"
                 return "cleared"
+            elif text.split()[0] == "/memory":   # 기억 정리(판 88, SW-40)
+                return self.memory_consolidate()
             elif text.split()[0] == "/help":
                 self.ui._add("info", "허브 메인 칸 명령: " + " · ".join(f"/{n} — {d}" for n, d in HUB_COMMANDS)
                              + " · 그 밖 /이름 은 프로젝트·사용자 명령(.stewart/commands)")
@@ -604,6 +611,51 @@ class HubMain:
             return {"ok": r is not None, **(r or {})}
         finally:
             self._busy.release()
+
+    # ---- 기억 정리(판 88, SW-40): 모델이 세 갈래를 읽고 제안 → 카드에서 항목별 받기 ----
+    def memory_consolidate(self) -> str:
+        mem = getattr(self.sess, "mem", None)
+        if mem is None or not mem.md():
+            self.ui._add("warn", "기억 정리: 기억이 꺼져 있거나 아직 세 갈래로 옮기지 않았다")
+            return "memory_off"
+        if self.busy:
+            self.ui._add("warn", "기억 정리: 차례가 끝난 뒤에 부른다")
+            return "busy"
+        self.ui._add("info", "기억 정리 제안을 만드는 중(모델 한 번)…")
+
+        def run():
+            from . import memconsolidate as MC
+            from .backend import BackendError
+            try:
+                plan = MC.propose(mem, self.sess.backend)
+            except (BackendError, OSError, ValueError) as e:
+                self.ui._add("warn", f"기억 정리: 모델을 부르지 못했다({str(e)[:160]})")
+                return
+            self._mem_plan = plan
+            if not plan:
+                self.ui._add("info", "기억 정리: 고칠 것이 없다고 한다(바뀐 것 없음)")
+                return
+            self.ui._add("memory_plan", f"기억 정리 제안 {len(plan)}개 — 항목마다 받기·두기, 받은 것만 바뀐다(적용 전 사본)")
+            self.ui.log[-1].update(plan=[{**p, "desc": MC.describe(p)} for p in plan])
+            self.hub.event("memory_plan", n=len(plan))
+        threading.Thread(target=run, daemon=True).start()
+        return "memory_plan"
+
+    def memory_apply(self, accept: list[int] | None) -> dict:
+        from . import memconsolidate as MC
+        plan = getattr(self, "_mem_plan", None) or []
+        mem = getattr(self.sess, "mem", None)
+        if not plan or mem is None:
+            return {"applied": [], "error": "정리 제안이 없다(/memory 로 다시)"}
+        r = MC.apply(mem, plan, accept)
+        self._mem_plan = None
+        if r["applied"]:
+            self.ui._add("info", f"기억 정리: {len(r['applied'])}개 받음 — 적용 전 사본 {Path(r['backup']).name}/ · "
+                                 f"되돌리기: stewart memory consolidate --revert {Path(r['backup']).name}")
+        else:
+            self.ui._add("info", "기억 정리: 받은 것이 없어 바꾸지 않았다")
+        self.hub.event("memory_apply", applied=len(r["applied"]))
+        return r
 
     def _stop_running_turn(self, wait_s: float = 10.0) -> None:
         """닫기 전에 도는 차례를 멈추고 기다린다(판 87) — 셸을 닫은 뒤 그 차례가 run_shell 로 새 셸을 띄우지 않게."""
