@@ -37,11 +37,13 @@ class TOps(unittest.TestCase):
         self.assertEqual([o["op"] for o in out], ["add", "drop", "update"])
 
     def test_apply_add_update_drop_deny(self):
-        done = MEM.apply_ops(self.m, [{"op": "add", "kind": "feedback", "text": "앞으로는 보고를 파일로"}])
+        done = MEM.apply_ops(self.m, [{"op": "add", "kind": "user", "text": "사용자는 보고를 파일로 받는다"}])
         it = done[0]["item"]
-        self.assertEqual((it["scope"], it["source"]), ("user", "model"))
-        MEM.apply_ops(self.m, [{"op": "update", "id": it["id"], "text": "앞으로는 보고를 파일로 + 한 줄 요약"}])
-        self.assertEqual([x["text"] for x in self.m.remembered()], ["앞으로는 보고를 파일로 + 한 줄 요약"])
+        self.assertEqual((it["scope"], it["source"], it["kind"]), ("user", "model", "profile"))
+        MEM.apply_ops(self.m, [{"op": "update", "id": it["id"], "text": "사용자는 보고를 파일로 + 한 줄 요약으로 받는다"}])
+        self.assertEqual([x["text"] for x in self.m.remembered()], ["사용자는 보고를 파일로 + 한 줄 요약으로 받는다"])
+        ask = MEM.apply_ops(self.m, [{"op": "add", "kind": "feedback", "text": "앞으로는 보고를 파일로"}])   # 모델이 고른 방침은 묻는다(판 83)
+        self.assertEqual(ask[0]["op"], "ask")
         MEM.apply_ops(self.m, [{"op": "drop", "id": it["id"]}])
         self.assertEqual(self.m.remembered(), [])
         self.assertTrue(self.m.deny(text="회의록을 남겨라"))
@@ -51,8 +53,8 @@ class TOps(unittest.TestCase):
         self.assertEqual(self.m.remembered(), [])
 
     def test_project_scope_only_in_its_place(self):
-        MEM.apply_ops(self.m, [{"op": "add", "kind": "project", "text": "a 는 make check 로 시험한다"},
-                               {"op": "add", "kind": "user", "text": "나는 짧은 답을 좋아한다"}])
+        self.m.remember("policy", "a 에서는 늘 make check 로 시험한다", scope="project")   # 판 83: 자료는 싣지 않으므로 방침으로
+        MEM.apply_ops(self.m, [{"op": "add", "kind": "user", "text": "나는 짧은 답을 좋아한다"}])
         text_a, _ = self.m.inject()
         self.assertIn("make check", text_a)
         self.assertIn("규칙 파일이 이긴다", text_a)                                  # 손으로 쓴 규칙이 정본

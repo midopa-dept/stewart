@@ -35,7 +35,7 @@ PROFILE_MAX_CHARS = 120
 JACCARD_SAME = 0.6
 MARKER = "migrated.json"
 _META = re.compile(r"\s*<!--\s*(.*?)\s*-->\s*$")
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()   # replace 가 갈래를 바꿀 때 add 를 다시 부른다
 
 # 오래 지킬 지시의 꼴(이번 한 번이 아니라 "앞으로") — 이것이 없으면 방침으로 받지 않는다
 PERSIST = re.compile(r"(앞으로(?:는|도)?|다음부터(?:는)?|이제부터(?:는)?|항상|언제나|늘\s|매번|절대(?:로)?|기본으로|기본값|"

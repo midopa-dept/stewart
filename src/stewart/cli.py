@@ -331,6 +331,10 @@ def main(argv: list[str] | None = None) -> int:
     dr.add_argument("--yes", action="store_true", help="주입 색인(MEMORY.md)도 바로 바꾼다(없으면 MEMORY.md.proposed)")
     dr.add_argument("--accept", metavar="대상", help="제안된 MEMORY.md 를 들인다(모델을 부르지 않음)")
     dr.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
+    mm = sub.add_parser("memory", help="기억 세 갈래(방침·프로필·자료): migrate [--dry-run|--revert] — 옛 remember.jsonl 옮기기·되돌리기")
+    mm.add_argument("action", choices=["migrate"])
+    mm.add_argument("--dry-run", action="store_true", help="쓰지 않고 옮길 표만")
+    mm.add_argument("--revert", action="store_true", help="세 갈래 파일을 reverted-<날짜>/ 로 옮기고 옛 파일로 돌아간다")
     og = sub.add_parser("organize", help="폴더 정리 계획 검토·실행·되돌리기(review|apply|undo)", add_help=False)
     og.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("backends", help="백엔드 목록")
@@ -403,6 +407,25 @@ def main(argv: list[str] | None = None) -> int:
             r = cloud.wait(backends[a.backend], a.port, Path(a.runs_dir), timeout_s=a.timeout_min * 60)
             print(json.dumps(r, ensure_ascii=False, indent=1))
             return 0 if r["ok"] else 1
+        if a.cmd == "memory":
+            from . import memstore as MS
+            from .memory import USER, memory_dir
+            d = memory_dir() / USER["key"]
+            if a.revert:
+                r = MS.revert(d)
+                print(f"되돌렸다: {', '.join(r['moved']) or '(옮길 세 갈래 파일 없음)'}" + (f" → {r['to']}" if r["to"] else "")
+                      + " — 옛 remember.jsonl 을 다시 쓴다(자동으로 다시 옮기지 않는다)")
+                return 0
+            if not a.dry_run and MS.Store(d).marker().get("reverted"):
+                (d / MS.MARKER).unlink()       # 되돌린 뒤 다시 옮기기: 표지를 지우고 옮긴다
+            r = MS.migrate(d, dry_run=a.dry_run)
+            if a.dry_run:
+                print(r["table"])
+            elif r.get("skipped"):
+                print(r["skipped"])
+            else:
+                print(f"옮겼다: 방침 {r['counts']['policy']} · 프로필 {r['counts']['profile']} · 자료 {r['counts']['knowledge']} — 표 {r['table_path']}")
+            return 0
         if a.cmd == "dream":
             from . import dream as DR
             from .memory import memory_dir

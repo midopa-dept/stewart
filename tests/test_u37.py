@@ -72,12 +72,17 @@ class THub(MainBase):
 
     def test_remember_show_undo_and_next_session(self):
         self.r.scripts["MAIN"] = [msg("알겠습니다.")]
-        self.main.send(".env cat 하지 마라. 이번에는 README 만 봐 줘")
+        self.main.send("앞으로는 .env cat 하지 마라. 이번에는 README 만 봐 줘")   # 판 83: 오래 지킬 지시는 먼저 묻는다
         self.assertTrue(self.main.wait_idle())
+        ask = [m for m in self.main.state()["main_log"] if m["kind"] == "memory_ask"]
+        self.assertEqual(len(ask), 1)
+        self.assertEqual([m for m in self.main.state()["main_log"] if m["kind"] == "memory"], [])
+        it = self.main.sess.mem.confirm(ask[0]["mem_id"], True)                  # [허용]
+        self.main.ui.memory_op("add", it)
         mem = [m for m in self.main.state()["main_log"] if m["kind"] == "memory"]
         self.assertEqual(len(mem), 1)
         self.assertIn(".env cat 하지 마라", mem[0]["text"])
-        self.assertEqual(mem[0]["mem_kind"], "feedback")
+        self.assertEqual(mem[0]["mem_kind"], "policy")
         # 다음 세션(새 메인): 지시문 맨 앞 기억에 들어 있다
         from stewart.cli import resolve
         from stewart.hubmain import HubMain

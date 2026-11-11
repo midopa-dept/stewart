@@ -141,10 +141,13 @@ function BoardTab() {
   )
 }
 
-const MKIND = { explicit: '기억해 달라 함', feedback: '지적·지시', user: '사용자', project: '이 프로젝트', reference: '참고' }
+const MKIND = { policy: '방침', profile: '프로필', knowledge: '자료',
+  explicit: '기억해 달라 함', feedback: '지적·지시', user: '사용자', project: '이 프로젝트', reference: '참고' }
+const KIND3 = [['policy', '방침', '어떻게 일할지 — 늘 지시문에'], ['profile', '프로필', '사용자에 대한 짧은 사실 — 늘 지시문에(600바이트)'],
+  ['knowledge', '자료', '고쳐 준 사실·참고 — 지시문에 싣지 않고 doc_search 로 찾음']]
 const MSRC = { said: '사람 말에서', model: '모델이 알아챔', human: '사람이 넣음' }
 function MemoryTab() {
-  const [d, setD] = useState(null), [edit, setEdit] = useState({}), [add, setAdd] = useState(''), [kind, setKind] = useState('explicit')
+  const [d, setD] = useState(null), [edit, setEdit] = useState({}), [add, setAdd] = useState(''), [kind, setKind] = useState('policy')
   const load = () => get('/api/memory').then(setD).catch(() => setD({ on: false, items: [], deny: [] }))
   useEffect(load, [])
   const act = async (path, body) => { try { await post(path, body); load() } catch (e) { toast('안 됨: ' + e.message) } }
@@ -155,17 +158,28 @@ function MemoryTab() {
       <div class="font-semibold mb-1">기억 더하기</div>
       <div class="flex gap-1.5">
         <select class="field !w-32 flex-none" value={kind} onChange={e => setKind(e.currentTarget.value)}>
-          {Object.entries(MKIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+          {(d.md ? KIND3.map(([k, v]) => [k, v]) : Object.entries(MKIND).slice(3)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
         <input class="field" placeholder="다음 대화부터 지킬 것 한 문장" value={add} onInput={e => setAdd(e.currentTarget.value)}
           onKeyDown={e => { if (e.key === 'Enter' && add.trim()) { act('/api/memory/add', { text: add.trim(), kind }); setAdd('') } }} />
         <button class="btn flex-none" disabled={!add.trim()} onClick={() => { act('/api/memory/add', { text: add.trim(), kind }); setAdd('') }}>더하기</button>
       </div>
       <div class="text-xs text-mute mt-1 mb-3">손으로 쓴 규칙 파일(~/.config/stewart/STEWART.md · 프로젝트 AGENTS.md·STEWART.md)이 정본이다 — 기억과 부딪히면 규칙 파일이 이긴다.</div>
+      {(d.pending || []).length > 0 && <><div class="font-semibold mb-1">물어보는 중 {d.pending.length}</div>
+        {d.pending.map(x => <div key={x.id} class="py-1.5 border-b border-soft">
+          <div class="break-words">{x.text}</div>
+          <div class="flex gap-2 mt-1 text-xs">
+            <button class="text-ok hover:underline" onClick={() => act('/api/memory/confirm', { id: x.id, keep: true })}>허용(방침으로)</button>
+            <button class="text-mute hover:text-fg" onClick={() => act('/api/memory/confirm', { id: x.id, keep: false })}>이번만</button></div>
+        </div>)}<div class="mb-3" /></>}
+      {d.md && d.inject && <div class="text-xs text-mute mb-2">지시문에 실림: 방침 {d.inject.policy?.[0] ?? 0}/{d.inject.policy?.[1] ?? 0} · 프로필 {d.inject.profile?.[0] ?? 0}/{d.inject.profile?.[1] ?? 0} · 자료 {d.inject.knowledge ?? 0}건은 싣지 않고 찾아 씀
+        {d.inject.profile_over && <span class="text-warn"> · 프로필이 600바이트를 넘어 오래된 것이 빠졌다 — 줄여 달라</span>}
+        {d.dir && <div>파일(직접 열어 고쳐도 된다): {d.dir}/policy.md · profile.md · knowledge/</div>}</div>}
       <div class="font-semibold mb-1">기억 {d.items.length}</div>
       {!d.items.length && <div class="text-mute">아직 없음 — 대화 중 "앞으로는 …", "… 하지 마라", "기억해: …" 를 알아채 남긴다</div>}
       {d.items.map(x => <div key={x.id} class="py-1.5 border-b border-soft">
         <div class="flex gap-1 flex-wrap items-center text-xs text-mute">
-          <span class="chip">{MKIND[x.kind] || x.kind}</span>
+          {d.md ? <select class="chip !py-0" value={x.kind} title="갈래 바꾸기" onChange={e => act('/api/memory/update', { id: x.id, text: x.text, kind: e.currentTarget.value })}>
+            {KIND3.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select> : <span class="chip">{MKIND[x.kind] || x.kind}</span>}
           <span class="chip">{x.scope === 'project' ? '이 프로젝트' + (x.where ? ' · ' + x.where : '') : '모든 프로젝트'}</span>
           <span>{MSRC[x.source] || x.source} · {String(x.ts || '').slice(5, 16).replace('T', ' ')}</span>
         </div>
@@ -182,7 +196,8 @@ function MemoryTab() {
       </div>)}
       {d.deny.length > 0 && <><div class="font-semibold mb-1 mt-3">기억하지 말라 한 것 {d.deny.length}</div>
         {d.deny.map((t, i) => <div key={i} class="py-0.5 text-mute line-through">{t}</div>)}</>}
-      <div class="text-xs text-mute mt-3">사용자 기억은 모든 프로젝트, 프로젝트 기억은 이 대상({d.place})에서만 지시문에 들어간다(새것부터 2KB).</div>
+      <div class="text-xs text-mute mt-3">{d.md ? `방침·프로필은 모든 프로젝트 것과 이 대상(${d.place}) 것이 지시문에 들어간다(새것부터 방침 1.5KB·프로필 600바이트). 자료는 doc_search 로만.`
+        : `사용자 기억은 모든 프로젝트, 프로젝트 기억은 이 대상(${d.place})에서만 지시문에 들어간다(새것부터 2KB).`}</div>
     </div>
   )
 }

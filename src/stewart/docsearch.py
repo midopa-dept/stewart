@@ -28,6 +28,27 @@ TEXT_EXT = {".md", ".markdown", ".txt", ".rst", ".adoc", ".org", ".tex", ".csv",
             ".toml", ".yaml", ".yml", ".json", ".ini", ".cfg", ".conf", ".html", ".htm", ".css", ".xml", ".svelte", ".vue"}
 WEB_KEEP_DAYS, WEB_KEEP_MAX, WEB_MAX_CHARS = 30, 200, 200_000
 
+def memory_items(d):
+    """자료 기억(판 83) 파일들 → (열쇠 "memory:<주제>", 크기, mtime, 읽기). 줄 끝 표 주석은 빼고 읽는다."""
+    if not d:
+        return
+    d = Path(d)
+    if not d.is_dir():
+        return
+    for f in sorted(d.glob("*.md")):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+
+        def read(f=f):
+            try:
+                return re.sub(r"\s*<!--.*?-->", "", f.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                return ""
+        yield ("memory:" + f.stem, st.st_size, st.st_mtime, read)
+
+
 _WORD = re.compile(r"[A-Za-z0-9_]+|[가-힣]+")
 
 

@@ -38,6 +38,7 @@ export function groupLog(log) {
     if (m.kind === 'error') { out.push({ type: 'error', key: 'x' + m.ts + m.text, m }); continue }
     if (m.kind === 'tail') { out.push({ type: 'tail', key: 'tl' + m.ts + m.text, m }); continue }
     if (m.kind === 'memory') { out.push({ type: 'memory', key: 'mm' + m.ts + m.text, m }); continue }
+    if (m.kind === 'memory_ask') { out.push({ type: 'memask', key: 'ma' + m.ts + m.text, m }); continue }
     if (m.kind === 'diff') out.push({ type: 'diff', key: 'd' + m.ts + m.text.length, m })
     else out.push({ type: m.kind === 'user' ? 'user' : m.kind === 'assistant' ? 'assistant' : 'note', key: m.kind + m.ts + m.text.slice(0, 20), m })
   }
@@ -223,6 +224,25 @@ export function TokenLine() {
   )
 }
 
+// 오래 지킬 지시를 남기기 전에 묻는 카드(판 83): [허용] = 방침으로 남김, [이번만] = 이번 차례에만
+function MemAsk({ m }) {
+  const [done, setDone] = useState('')
+  async function answer(keep) {
+    try { await post('/api/memory/confirm', { id: m.mem_id, keep }); setDone(keep ? '방침으로 남겼다' : '이번만 — 남기지 않았다'); refresh() }
+    catch (e) { toast('안 됨: ' + e.message) }
+  }
+  return (
+    <div class="text-[13px] my-1.5 border border-line rounded-lg px-3 py-2 bg-panel">
+      <div class="flex items-start gap-1.5"><span>🧠</span><span class="flex-1">{m.text}
+        <span class="text-mute"> ({m.mem_scope === 'project' ? '이 프로젝트' : '모든 프로젝트'}{m.mem_source === 'model' ? ' · 모델이 알아챔' : ''})</span></span></div>
+      {done ? <div class="text-xs text-mute mt-1">{done}</div>
+        : <div class="flex gap-1.5 mt-1.5">
+          <button class="btn btn-ok !py-0.5 !px-2.5 text-xs" onClick={() => answer(true)}>허용 — 다음 대화부터 지킨다</button>
+          <button class="btn !py-0.5 !px-2.5 text-xs" onClick={() => answer(false)}>이번만</button></div>}
+    </div>
+  )
+}
+
 function MemLine({ m }) {
   const [gone, setGone] = useState(false)
   async function undo() { try { await post('/api/memory/forget', { id: m.mem_id }); setGone(true) } catch (e) { toast('못 되돌림: ' + e.message) } }
@@ -320,6 +340,7 @@ export function Thread({ log, prior }) {
         if (g.type === 'todo') return <TodoCard key={g.key} ts={g.m.ts + g.m.text.length} latest={i === lastTodo}
           todos={i === lastTodo ? liveTodos : (g.m.todos || [])} />   // 가장 최근 카드는 지금 목록으로 그 자리에서 고쳐진다
         if (g.type === 'memory') return <MemLine key={g.key} m={g.m} />
+        if (g.type === 'memask') return <MemAsk key={g.key} m={g.m} />
         if (g.type === 'tail') return <div key={g.key} class="text-[13px] my-2 text-warn">📌 {g.m.text}</div>
         if (g.type === 'error') return <ErrorCard key={g.key} m={g.m} last={i >= tail - 1} />
         if (g.type === 'end') return <div key={g.key} class="text-[13px] text-mute my-2">— 차례 끝: {END[g.m.reason] || g.m.reason} —</div>

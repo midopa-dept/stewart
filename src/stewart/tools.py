@@ -49,6 +49,7 @@ class ToolEnv:
     quota_at: int = -1                               # quota 를 읽을 때의 검색 수(-1 = 아직 안 읽음)
     quota_warned: str = ""                           # 이미 알린 brave 이달 경고("80"·"0") — 같은 경고를 되풀이하지 않게(판 61)
     doc_index: object = None                         # doc_search 색인(세션 안, 판 64)
+    memory_knowledge_dir: Path | None = None         # 자료 기억(판 83) — doc_search 가 "memory:<주제>" 로 찾는다
     web_cache_dir: object = None                     # web_fetch 본문을 남길 자리(실사용 + 기억 켬일 때만, 판 64)
     on_quota: object = None                          # 경고 한 줄을 받는 고리(허브: 폰 알림·화면 경고). 없으면 결과 글에만
     fetch_log: list = field(default_factory=list)    # [{url, final_url, status, bytes, error}]
@@ -1049,8 +1050,8 @@ DOC_SEARCH_MAX_CHARS = 6000
 def doc_search(env: ToolEnv, query: str, path: str = ".", source: str = "all") -> tuple[bool, str]:
     """작업 폴더 문서·코드(+ 한 번 읽은 웹 글)를 낱말 순위로 찾는다. 이름·기호·오류 문구를 정확히 알면 search 가 낫다."""
     from . import docsearch as DS
-    if source not in ("all", "files", "web"):
-        return False, "source 는 all·files·web 중 하나"
+    if source not in ("all", "files", "web", "memory"):
+        return False, "source 는 all·files·web·memory 중 하나"
     if not str(query or "").strip():
         return False, "query 가 비었다"
     base = _p(env, path)
@@ -1059,7 +1060,7 @@ def doc_search(env: ToolEnv, query: str, path: str = ".", source: str = "all") -
     if env.doc_index is None:
         env.doc_index = DS.Index()
     items, n = [], 0
-    if source != "web":
+    if source in ("all", "files"):
         for f in fswalk.walk(env.workdir, skip=lambda q, d: not d and env.is_secret(q)):
             if f.suffix.lower() not in DS.TEXT_EXT and f.name not in ("README", "Makefile", "Dockerfile", "LICENSE"):
                 continue
@@ -1079,10 +1080,11 @@ def doc_search(env: ToolEnv, query: str, path: str = ".", source: str = "all") -
                 except (UnicodeDecodeError, OSError):
                     return ""
             items.append((_rel(env, f), st.st_size, st.st_mtime, read))
-    items += list(DS.web_items(env.web_cache_dir)) if source != "files" else []
+    items += list(DS.web_items(env.web_cache_dir)) if source in ("all", "web") else []
+    items += list(DS.memory_items(env.memory_knowledge_dir)) if source in ("all", "memory") else []
     re_read = env.doc_index.update(items)
     rel = _rel(env, base) if base.resolve() != Path(env.workdir).resolve() else ""
-    prefix = "web:" if source == "web" else (rel.rstrip("/") + "/" if rel and rel != "." else "")
+    prefix = "web:" if source == "web" else "memory:" if source == "memory" else (rel.rstrip("/") + "/" if rel and rel != "." else "")
     hits = env.doc_index.search(query, prefix=prefix)
     if not hits:
         return True, f"doc_search '{query}': 맞는 쪽 없음(문서 {len(env.doc_index.files)}개 훑음). 낱말을 바꾸거나 search(정규식)로."
@@ -1372,7 +1374,8 @@ TOOLS = {
                    "정확한 이름·기호·오류 문구는 search 가 낫다. 찾은 뒤에는 read_file 로 읽고 말한다.", {
         "query": {"type": "string", "description": "찾을 말(낱말 몇 개, 한국어·영어)"},
         "path": {"type": "string", "description": "이 폴더 아래만, 기본 '.'"},
-        "source": {"type": "string", "enum": ["all", "files", "web"], "description": "all(기본)·files(작업 폴더만)·web(한 번 읽은 웹 글만)"},
+        "source": {"type": "string", "enum": ["all", "files", "web", "memory"],
+                   "description": "all(기본)·files(작업 폴더만)·web(한 번 읽은 웹 글만)·memory(자료 기억 — 사람이 고쳐 준 사실·참고)"},
     }, ["query"]),
     "glob": (glob_files, "경로 패턴으로 파일 이름을 찾는다(.gitignore 의 파일은 건너뜀).", {
         "pattern": {"type": "string", "description": "path 기준 경로 패턴. *.py 는 맨 위만, **/*.py 는 모든 깊이"},

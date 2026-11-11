@@ -108,7 +108,14 @@ class HubMainUI(HubUI):
         """스스로 기억한 것: 대화에 "기억함: …" 한 줄([되돌리기])."""
         self.memory_op("add", item)
 
+    def memory_ask(self, item: dict) -> None:
+        """오래 지킬 지시(판 83): 남기기 전에 묻는 카드 — [허용](방침으로)·[이번만]."""
+        self._add("memory_ask", f"방침으로 기억할까요: {item['text']}")
+        self.log[-1].update(mem_id=item["id"], mem_kind=item["kind"], mem_source=item.get("source"), mem_scope=item.get("scope", "user"))
+
     def memory_op(self, op: str, item: dict) -> None:
+        if op == "ask":
+            return self.memory_ask(item)
         word = {"add": "기억함", "update": "기억 고침", "drop": "기억 버림"}[op]
         self._add("memory", f"{word}: {item['text']}")
         self.log[-1].update(mem_id=item["id"], mem_kind=item["kind"], mem_op=op, mem_source=item.get("source"),
@@ -293,6 +300,12 @@ class HubMain:
         from .modelstat import ModelWatch
         self._idle_since = time.monotonic()  # 꿈꾸기 자동의 한가함 잣대(판 54)
         self.watch = ModelWatch(backend)      # 모델 서버 점(허브가 start — 시험에서는 띄우지 않는다)
+        mig = getattr(getattr(self.sess, "mem", None), "migrated", None)
+        if mig:   # 판 83: 옛 기억을 세 갈래로 옮겼으면 한 번 알린다(옛 파일·옮긴 표는 남김)
+            c = mig["counts"]
+            self.ui._add("info", f"기억을 세 갈래로 옮겼다 — 방침 {c['policy']} · 프로필 {c['profile']} · 자료 {c['knowledge']}. "
+                                 f"옮긴 표: {mig.get('table_path')} · 옛 파일은 그대로 · 되돌리기: stewart memory migrate --revert")
+            hub.event("memory_migrated", **c)
         self.ui.on_backend_error = lambda kind, text: self.watch.poke(kind if kind in ("down", "loading", "auth") else None, text)
         self.ui.sd.set_status(status="idle", run_dir=str(rec.dir))
         self._busy = threading.Lock()
@@ -566,7 +579,7 @@ class HubMain:
             except (BackendError, OSError, ValueError):
                 return
             msg = ((resp.get("choices") or [{}])[0].get("message") or {})
-            for d in MEM.apply_ops(mem, MEM.extract_ops(msg.get("content") or "")):
+            for d in MEM.apply_ops(mem, MEM.extract_ops(msg.get("content") or ""), said=said):
                 self.ui.memory_op(d["op"], d["item"])
             self.sess.rec.event("memory_extract", ops=len(MEM.extract_ops(msg.get("content") or "")))
         t = threading.Thread(target=run, daemon=True)

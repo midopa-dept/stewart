@@ -132,7 +132,9 @@ def subjects(profile) -> list[dict]:
 
 
 USER = {"key": "user", "kind": "user", "name": "사용자(모든 프로젝트)", "path": ""}
-USER_BYTES = 2048          # 지시문의 "스스로 기억함" 몫(합 INJECT_TOTAL 안)
+USER_BYTES = 2048          # 지시문의 "스스로 기억함" 몫(합 INJECT_TOTAL 안) — 옛 한 갈래
+POLICY_BYTES = 1536        # 세 갈래(판 83): 방침 몫
+PROFILE_BYTES = 600        #                 프로필 몫(넘으면 오래된 것부터 빠지고 화면에 "줄여 달라")
 REMEMBER_MAX = 200
 _EXPLICIT = re.compile(r"^\s*(?:꼭\s*|이것?\s*)?기억해\s*(?:둬|줘|두어라|라|두라)?\s*[:：,.]?\s*(?P<a>.+)$|^(?P<b>.+?)\s*(?:을|를)?\s*(?:꼭\s*)?기억해\s*(?:둬|줘|두어라|라|두라)?\s*[.!]?$")
 _RULE = re.compile(r"(앞으로(?:는|도)?|다음부터(?:는)?|이제부터(?:는)?|항상|언제나|절대(?:로)?|매번|늘\s)|"
@@ -164,6 +166,23 @@ def detect(text: str) -> list[tuple[str, str]]:
     return out[:3]
 
 
+def route(kind: str, sent: str) -> tuple[str | None, str]:
+    """detect 가 고른 말 → (갈래, 어떻게). 어떻게: save(바로 남기고 보이며 되돌리기) · ask(사람에게 [허용]·[이번만]) · skip.
+    - "기억해 …"(explicit): 바로 남긴다 — 지시 꼴이면 방침, 선호면 프로필, 그 밖은 자료.
+    - 선호(user): 프로필(짧으면) 또는 자료로 바로.
+    - 지시(feedback): "앞으로·항상·다음부터 …"처럼 오래 지킬 말이면 방침으로 묻고, 아니면 이번 차례 지시라 남기지 않는다."""
+    from . import memstore as MS
+    if kind == "explicit":
+        if MS.PERSIST.search(sent) or MS.DIRECTIVE.search(sent) or _RULE.search(sent):
+            return "policy", "save"
+        return ("profile" if _PREF.search(sent) and len(sent) <= MS.PROFILE_MAX_CHARS else "knowledge"), "save"
+    if kind == "user":
+        return ("profile" if len(sent) <= MS.PROFILE_MAX_CHARS else "knowledge"), "save"
+    if kind == "feedback":
+        return ("policy", "ask") if MS.PERSIST.search(sent) else (None, "skip")
+    return "knowledge", "save"
+
+
 class Memory:
     """한 실행(또는 chat 세션)의 기억 손잡이. 도구(memory_search·note_add)와 엔진이 쓴다."""
 
@@ -181,6 +200,22 @@ class Memory:
         self.target = None           # 여러 프로젝트 뿌리에서 이번 대상 프로젝트(판 54) — 없으면 place
         self._shown: set[str] = set()   # 대상 색인을 이미 대화에 넣은 프로젝트
         self._shell_seen: set[str] = set()
+        from . import memstore as MS   # 판 83: 방침·프로필·자료 세 갈래(마크다운이 정본) — 옛 remember.jsonl 은 처음 한 번 옮긴다
+        try:
+            self.migrated = MS.auto_migrate(self.dir / USER["key"])
+        except OSError:
+            self.migrated = None
+
+    @property
+    def store(self):
+        from . import memstore as MS
+        return MS.Store(self.dir / USER["key"])
+
+    def md(self) -> bool:
+        """세 갈래(마크다운) 쓰기인가: 되돌리지 않았고(옮겼거나 옛 파일이 없음)."""
+        if self.store.marker().get("reverted"):
+            return False
+        return self.store.active() or not (self.dir / USER["key"] / "remember.jsonl").is_file()
 
     # ---- 대상 가르기(판 54): stewart-work 같은 뿌리 아래 폴더별 프로젝트 기억 ----
     def here(self) -> dict:
@@ -214,7 +249,8 @@ class Memory:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[:INJECT_LINES]
             body = "\n".join(lines)[:INJECT_BYTES]
         head = f"[기억] 이번 대상 프로젝트: {t['name']} ({t['path']}) — 메모·검색은 이 대상으로 간다."
-        rem = [x for x in self.remembered() if x.get("scope") == "project" and x.get("place") == t["key"]][-10:]
+        rem = [x for x in self.remembered() if x.get("scope") == "project" and x.get("place") == t["key"]
+               and x.get("kind") != "knowledge"][-10:]
         if rem:
             body = "이 프로젝트에서 스스로 기억함:\n" + "\n".join(f"- {x['text']}" for x in rem) + ("\n" + body if body else "")
         return head + ("\n" + body if body else "\n(이 프로젝트의 색인은 아직 없다.)")
@@ -239,6 +275,8 @@ class Memory:
         return d / "remember.jsonl"
 
     def remembered(self) -> list[dict]:
+        if self.md():
+            return self.store.items()[-REMEMBER_MAX:]
         f = self.dir / USER["key"] / "remember.jsonl"
         if not f.is_file():
             return []
@@ -279,6 +317,19 @@ class Memory:
         text = " ".join(str(text or "").split())[:300]
         if not text or _SECRETISH.search(text) or self._is_denied(text):
             return None
+        if self.md():   # 세 갈래: 옛 종류 이름도 받는다(feedback·explicit → 방침/자료, user → 프로필/자료, project·reference → 자료)
+            from . import memstore as MS
+            k = MS.kind_of_legacy(kind, text)
+            if k == "profile" and len(text) > MS.PROFILE_MAX_CHARS:
+                k = "knowledge"
+            place = self.here()["key"] if scope == "project" else None
+            old = self.store.same(k, text, scope, place)
+            if old is not None:   # 거의 같은 것이 있으면 새로 쌓지 않고 고친다(Mem0 의 UPDATE)
+                return None if old["text"] == text else self.update(old["id"], text, source=source)
+            x = scrub({"id": _h(text + datetime.now().isoformat()), "ts": datetime.now().isoformat(timespec="seconds"),
+                       "kind": k, "text": text, "run": self.run_id, "source": source, "scope": scope, "place": place,
+                       "where": self.here()["name"] if scope == "project" else None})
+            return self.store.add(x)
         if any(x["text"] == text for x in self.remembered()):
             return None
         x = scrub({"id": _h(text + datetime.now().isoformat()), "ts": datetime.now().isoformat(timespec="seconds"),
@@ -288,12 +339,17 @@ class Memory:
             f.write(json.dumps(x, ensure_ascii=False) + "\n")
         return x
 
-    def update(self, item_id: str, text: str, source: str = "human") -> dict | None:
-        """같은 기억을 새 말로 덮는다(같은 id 로 한 줄 더 — 뒤의 것이 이긴다)."""
+    def update(self, item_id: str, text: str, source: str = "human", kind: str | None = None) -> dict | None:
+        """같은 기억을 새 말로 덮는다(같은 id 로 한 줄 더 — 뒤의 것이 이긴다). kind 를 주면 갈래를 바꾼다(세 갈래)."""
         text = " ".join(str(text or "").split())[:300]
         old = next((x for x in self.remembered() if x["id"] == item_id), None)
         if old is None or not text or _SECRETISH.search(text):
             return None
+        if self.md():
+            from . import memstore as MS
+            new = {"text": text, "ts": datetime.now().isoformat(timespec="seconds"), "source": source, "run": self.run_id,
+                   **({"kind": kind} if kind in MS.KINDS else {})}
+            return {**old, **new} if self.store.replace(item_id, scrub(new)) is not None else None
         x = {**old, "text": text, "ts": datetime.now().isoformat(timespec="seconds"), "source": source, "run": self.run_id}
         with open(self._rem_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps(scrub(x), ensure_ascii=False) + "\n")
@@ -302,6 +358,8 @@ class Memory:
     def forget(self, item_id: str) -> bool:
         if not any(x["id"] == item_id for x in self.remembered()):
             return False
+        if self.md():
+            return self.store.replace(item_id, None) is not None
         with open(self._rem_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"forget": item_id, "ts": datetime.now().isoformat(timespec="seconds")}) + "\n")
         return True
@@ -322,7 +380,52 @@ class Memory:
             f.write(json.dumps({"text": text, "ts": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) + "\n")
         return True
 
+    # ---- 묻는 기억(판 83): "앞으로 …" 같은 오래 지킬 지시는 바로 남기지 않고 사람에게 [허용]·[이번만] ----
+    def _pend_file(self) -> Path:
+        return self.dir / USER["key"] / "pending.jsonl"
+
+    def pending(self) -> list[dict]:
+        f = self._pend_file()
+        if not f.is_file():
+            return []
+        out = []
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return out[-20:]
+
+    def propose(self, kind: str, text: str, scope: str = "user", source: str = "said") -> dict | None:
+        """남길지 사람에게 물을 기억. 이미 있거나·비밀 꼴·기억하지 말라 한 것이면 None."""
+        text = " ".join(str(text or "").split())[:300]
+        if not text or _SECRETISH.search(text) or self._is_denied(text):
+            return None
+        if any(x["text"] == text for x in self.remembered()) or any(x["text"] == text for x in self.pending()):
+            return None
+        x = scrub({"id": "p" + _h(text + datetime.now().isoformat()), "ts": datetime.now().isoformat(timespec="seconds"),
+                   "kind": kind, "text": text, "scope": scope, "source": source, "run": self.run_id})
+        f = self._pend_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(x, ensure_ascii=False) + "\n")
+        return x
+
+    def confirm(self, pend_id: str, keep: bool) -> dict | None:
+        """[허용] 이면 남기고 그 기억을, [이번만] 이면 버리고 {}. 없는 id 면 None."""
+        items = self.pending()
+        x = next((p for p in items if p.get("id") == pend_id), None)
+        if x is None:
+            return None
+        rest = [p for p in items if p.get("id") != pend_id]
+        self._pend_file().write_text("".join(json.dumps(p, ensure_ascii=False) + "\n" for p in rest), encoding="utf-8")
+        if not keep:
+            return {}
+        return self.remember(x["kind"], x["text"], source=x.get("source") or "said", scope=x.get("scope") or "user") or {}
+
     def _user_part(self) -> tuple[str, dict]:
+        if self.md():
+            return self._user_part3()
         # 사용자 전역 + 이 대상(git 뿌리 또는 작업 폴더)의 프로젝트 기억
         items = [x for x in self.remembered() if x.get("scope", "user") == "user" or x.get("place") == self.place["key"]]
         label = {"explicit": "기억해 달라 함", "feedback": "지적·지시", "user": "사용자", "project": "이 프로젝트", "reference": "참고"}
@@ -339,6 +442,37 @@ class Memory:
             return "", log
         return ("## 사용자(스스로 기억함 — 새것부터. 손으로 쓴 규칙 파일(STEWART.md·AGENTS.md)과 부딪히면 규칙 파일이 이긴다)\n"
                 + "\n".join(lines), log)
+
+    def _user_part3(self) -> tuple[str, dict]:
+        """세 갈래 주입: 방침(이 범위, POLICY_BYTES)·프로필(PROFILE_BYTES — 넘으면 오래된 것부터 빼고 표시)은 싣고, 자료는 건수 한 줄."""
+        items = [x for x in self.remembered() if x.get("scope", "user") == "user" or x.get("place") == self.place["key"]]
+
+        def take(kind, cap):
+            lines, size, n = [], 0, [x for x in items if x["kind"] == kind]
+            for x in reversed(n):
+                ln = f"- {x['text']}"
+                b = len((ln + "\n").encode("utf-8"))
+                if size + b > cap:
+                    break
+                lines.append(ln)
+                size += b
+            return lines, size, len(n)
+        pol, ps, pn = take("policy", POLICY_BYTES)
+        pro, rs, rn = take("profile", PROFILE_BYTES)
+        kn = sum(1 for x in self.remembered() if x["kind"] == "knowledge")
+        log = {"subject": USER["key"], "lines": len(pol) + len(pro), "bytes": ps + rs, "of_lines": pn + rn,
+               "truncated": len(pol) < pn or len(pro) < rn, "policy": [len(pol), pn], "profile": [len(pro), rn], "knowledge": kn,
+               "profile_over": len(pro) < rn}
+        if not (pol or pro or kn):
+            return "", log
+        out = ["## 사용자(스스로 기억함 — 새것부터. 손으로 쓴 규칙 파일(STEWART.md·AGENTS.md)과 부딪히면 규칙 파일이 이긴다)"]
+        if pol:
+            out.append("### 방침(어떻게 일할지)\n" + "\n".join(pol))
+        if pro:
+            out.append("### 사용자에 대해\n" + "\n".join(pro))
+        if kn:
+            out.append(f"자료 기억 {kn}건(고쳐 준 사실·참고) — 지시문에는 싣지 않았다. 관련 있을 때 doc_search(query, source=\"memory\") 로 찾는다.")
+        return "\n".join(out), log
 
     # ---- L3 주입 ----
     def inject(self) -> tuple[str, list[dict]]:
@@ -570,8 +704,9 @@ def extract_ops(text: str) -> list[dict]:
         except ValueError:
             continue
         op = x.get("op")
-        if op == "add" and x.get("kind") in ("user", "feedback", "project", "reference") and isinstance(x.get("text"), str):
-            out.append({"op": "add", "kind": x["kind"], "text": x["text"]})
+        if op == "add" and x.get("kind") in ("user", "feedback", "project", "reference", "policy", "profile", "knowledge") \
+                and isinstance(x.get("text"), str):
+            out.append({"op": "add", "kind": x["kind"], "text": x["text"], **({"scope": x["scope"]} if x.get("scope") in ("user", "project") else {})})
         elif op == "update" and isinstance(x.get("id"), str) and isinstance(x.get("text"), str):
             out.append({"op": "update", "id": x["id"], "text": x["text"]})
         elif op == "drop" and isinstance(x.get("id"), str):
@@ -579,17 +714,58 @@ def extract_ops(text: str) -> list[dict]:
     return [o for o in out if not _SECRETISH.search(o.get("text", ""))][:6]
 
 
+EXTRACT_PROMPT3 = """[기억 고르기] 아래는 방금 끝난 차례의 사람 말과 그 차례의 마지막 답이다. 다음 세션에도 쓸 것만 고른다.
+갈래(kind)는 셋 중 하나를 꼭 고른다:
+- policy: 사람이 "앞으로·항상·다음부터 …"처럼 오래 지키라고 한 일하는 방식. 이번 차례에만 한 지시("이번엔 …", "이 파일은 …")는 고르지 않는다.
+- profile: 사용자에 대한 짧은 사실(언어·역할·기기·선호) — 120자 안 한 문장.
+- knowledge: 모델이 몰랐거나 틀려서 사람이 고쳐 준 사실·참고(이 프로젝트의 결정·함정·이름·자리 포함). 애매하면 knowledge.
+고르지 않을 것: 이번 차례에만 해당하는 일, 이미 기억한 것과 같은 것, 추측, 주소·토큰·비밀번호·비밀 파일 내용.
+이미 기억한 것(id: 갈래: 글):
+{known}
+기억하지 말라 한 것:
+{deny}
+답은 JSON 줄만(설명 없이, 없으면 아무것도 쓰지 않는다). 한 줄에 하나:
+{{"op":"add","kind":"policy|profile|knowledge","scope":"user|project","text":"한 문장(까닭이 있으면 '— 까닭' 으로)"}}
+{{"op":"update","id":"<이미 기억한 id>","text":"고친 한 문장"}}   (사람 말이 앞 기억을 바꾸거나 더 정확히 했을 때)
+{{"op":"drop","id":"<이미 기억한 id>"}}   (사람 말로 더는 맞지 않게 됐을 때)
+사람 말:
+{said}
+마지막 답(앞부분):
+{answer}"""
+
+
 def extract_prompt(mem: "Memory", said: list[str], answer: str) -> str:
-    known = "\n".join(f"{x['id']}: {x['text']}" for x in mem.remembered()[-40:]) or "(없음)"
     deny = "\n".join(mem.denied()[-20:]) or "(없음)"
     said_t = "\n".join(f"- {t[:800]}" for t in said[-6:])
+    if mem.md():
+        known = "\n".join(f"{x['id']}: {x['kind']}: {x['text']}" for x in mem.remembered()[-40:]) or "(없음)"
+        return EXTRACT_PROMPT3.format(known=known, deny=deny, said=said_t, answer=(answer or "")[:1500])
+    known = "\n".join(f"{x['id']}: {x['text']}" for x in mem.remembered()[-40:]) or "(없음)"
     return EXTRACT_PROMPT.format(known=known, deny=deny, said=said_t, answer=(answer or "")[:1500])
 
 
-def apply_ops(mem: "Memory", ops: list[dict]) -> list[dict]:
-    """op 를 적용하고 한 일을 돌려준다: [{op, item}]."""
+def apply_ops(mem: "Memory", ops: list[dict], said: list[str] | None = None) -> list[dict]:
+    """op 를 적용하고 한 일을 돌려준다: [{op, item}]. 세 갈래(판 83): 모델이 고른 방침은 사람 말에 "앞으로 …" 꼴이 있을 때만
+    사람에게 묻고(op "ask"), 그 밖은 자료로 내린다 — 모델이 이번 차례 지시를 제멋대로 방침으로 남기지 않게."""
+    from . import memstore as MS
     done = []
+    said_t = "\n".join(said or [])
     for o in ops:
+        if o["op"] == "add" and mem.md():
+            k = MS.kind_of_legacy(o["kind"], o["text"]) if o["kind"] not in MS.KINDS else o["kind"]
+            scope = o.get("scope") or ("project" if o["kind"] in ("project", "reference") else "user")
+            if k == "policy":
+                if said is not None and not MS.PERSIST.search(said_t):
+                    k = "knowledge"
+                else:
+                    it = mem.propose("policy", o["text"], scope=scope, source="model")
+                    if it is not None:
+                        done.append({"op": "ask", "item": it})
+                    continue
+            it = mem.remember(k, o["text"], source="model", scope=scope)
+            if it is not None:
+                done.append({"op": "add", "item": it})
+            continue
         if o["op"] == "add":
             scope = "project" if o["kind"] in ("project", "reference") else "user"
             it = mem.remember(o["kind"], o["text"], source="model", scope=scope)

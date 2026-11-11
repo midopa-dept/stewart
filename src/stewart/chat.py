@@ -289,6 +289,8 @@ class ChatSession:
         self.repair_on = TR.on("STEWART_TOOLCALL_REPAIR", True)
         self.edit_fb = TR.on("STEWART_EDIT_FEEDBACK", True)
         self.passback = TR.passback()
+        if self.mem is not None and self.mem.md():   # 자료 기억(판 83)은 doc_search(source="memory")로 찾는다
+            self.env.memory_knowledge_dir = self.mem.store.dir / "knowledge"
         if self.mem is not None:   # 웹 글 캐시(판 64): 받은 본문을 기억 폴더에 남겨 doc_search 로 다시 찾게(30일·200개)
             self.env.web_cache_dir = self.mem.dir / "web-cache"
         self.check = load_check(profile.action_check)
@@ -991,6 +993,21 @@ class ChatSession:
         self._raw_text = text   # 사람 말 그대로(말만 하고 멈춤 되돌리기 판정용, intent.py)
         if self.mem is not None and getattr(self.ui, "memory_writes", True):   # 스스로 기억(사용자 전역): 다음에도 지킬 지시·선호
             for kind, sent in MEM.detect(text):
+                how = "save"
+                if self.mem.md():   # 세 갈래(판 83): 이번 차례 지시는 남기지 않고, 오래 지킬 지시는 사람에게 묻는다
+                    kind, how = MEM.route(kind, sent)
+                if how == "skip":
+                    continue
+                if how == "ask":
+                    pend = self.mem.propose(kind, sent)
+                    if pend is not None:
+                        self.rec.event("remember_ask", id=pend["id"], what=kind)
+                        ask = getattr(self.ui, "memory_ask", None)
+                        if ask is not None:
+                            ask(pend)
+                        else:
+                            self.ui.dim(f"  (방침으로 기억할까? \"{sent[:80]}\" — 남기려면 '기억해: …' 라고 말한다)")
+                    continue
                 item = self.mem.remember(kind, sent)
                 if item is not None:
                     self.rec.event("remember", id=item["id"], what=kind)

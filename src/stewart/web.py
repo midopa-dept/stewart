@@ -343,21 +343,27 @@ class WebApp:
                 return self._json(h, 400, {"error": "json"})
             if path == "/api/main":
                 return self.main_send(h, data)
-            if path in ("/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add"):   # 기억 자리(판 52)
+            if path in ("/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm"):   # 기억 자리(판 52·83)
                 mem = getattr(self.main.sess, "mem", None)
                 if mem is None:
                     return self._json(h, 409, {"error": "memory_off", "detail": "기억이 꺼져 있다(STEWART_MEMORY=0 또는 프로필 memory = false)"})
                 i, t = data.get("id"), data.get("text")
                 if path == "/api/memory/forget":
                     ok = isinstance(i, str) and mem.forget(i)
-                elif path == "/api/memory/update":
-                    ok = isinstance(i, str) and isinstance(t, str) and mem.update(i, t) is not None
+                elif path == "/api/memory/update":   # 판 83: kind 를 주면 갈래 바꾸기
+                    k = data.get("kind") if data.get("kind") in ("policy", "profile", "knowledge") else None
+                    ok = isinstance(i, str) and isinstance(t, str) and mem.update(i, t, kind=k) is not None
                 elif path == "/api/memory/deny":
                     ok = mem.deny(i if isinstance(i, str) else None, t if isinstance(t, str) else None)
+                elif path == "/api/memory/confirm":   # 묻는 기억 카드: [허용](keep) · [이번만]
+                    r = mem.confirm(i, bool(data.get("keep"))) if isinstance(i, str) else None
+                    if r:
+                        self.main.ui.memory_op("add", r)
+                    ok = r is not None
                 else:
-                    kind = data.get("kind") if data.get("kind") in ("user", "feedback", "project", "reference") else "explicit"
-                    ok = isinstance(t, str) and mem.remember(kind, t, source="human",
-                                                             scope="project" if kind in ("project", "reference") else "user") is not None
+                    kind = data.get("kind") if data.get("kind") in ("user", "feedback", "project", "reference", "policy", "profile", "knowledge") else "explicit"
+                    scope = data.get("scope") if data.get("scope") in ("user", "project") else ("project" if kind in ("project", "reference") else "user")
+                    ok = isinstance(t, str) and mem.remember(kind, t, source="human", scope=scope) is not None
                 return self._json(h, 200 if ok else 404, {"ok": bool(ok)})
             if path == "/api/board/close":   # 사람이 화면에서 자기 할 일을 닫는다(했음·안 함)
                 tid, st = data.get("id"), data.get("status", "done")
@@ -498,13 +504,16 @@ class WebApp:
             if mem is None:
                 return self._json(h, 200, {"on": False, "items": [], "deny": []})
             items = [x for x in mem.remembered() if x.get("scope", "user") == "user" or x.get("place") == mem.place["key"]]
-            return self._json(h, 200, {"on": True, "items": items[::-1], "deny": mem.denied()[::-1], "place": mem.place["name"]})
+            _, ilog = mem._user_part()
+            return self._json(h, 200, {"on": True, "items": items[::-1], "deny": mem.denied()[::-1], "place": mem.place["name"],
+                                       "md": mem.md(), "pending": mem.pending()[::-1], "dir": str(mem.store.dir) if mem.md() else None,
+                                       "inject": {k: ilog.get(k) for k in ("policy", "profile", "knowledge", "profile_over", "bytes")}})
         if path == "/api/rules":
             from .allowrules import broad_note
             return self._json(h, 200, {"rules": [{"id": r.id, "pattern": r.pattern, "warn": broad_note(r.pattern),
                                                   "scope": "session" if r.origin == "session" else "project"}
                                                  for r in self.hub.allow_rules()]})
-        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
+        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
                     "/api/session/control"):
             return self._json(h, 405, {"error": "method"})
         return self._json(h, 404, {"error": "not_found"})
