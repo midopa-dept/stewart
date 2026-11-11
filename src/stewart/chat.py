@@ -211,6 +211,8 @@ class ChatSession:
                  mode: str | None = None, default_mode: str = "auto", think: bool | None = None,
                  extra_tools: tuple[list[dict], object] | None = None):
         self.profile, self.backend, self.rec = profile, backend, rec
+        from .shell import hide_env
+        hide_env(backend.api_key_env)          # 백엔드 키 변수는 모델 셸 환경에서 뺀다(판 69)
         # 더 여는 도구(허브의 메인 세션 도구 등): (정의 목록, execute(name, args) -> (ok, 글)). delegate 처럼 확인 없이 돈다
         self.extra_defs, self.extra_exec = (list(extra_tools[0]), extra_tools[1]) if extra_tools else ([], None)
         self.ui = ui or UI()
@@ -1057,6 +1059,8 @@ class ChatSession:
                 tim = resp.get("timings") or {}
                 self.st["completion_tokens"] += usage.get("completion_tokens") or 0
                 self.st["prompt_tokens_total"] += usage.get("prompt_tokens") or 0
+                if usage.get("cost_usd"):   # Messages API 백엔드(판 69)
+                    self.st["cost_usd"] = round(self.st.get("cost_usd", 0.0) + float(usage["cost_usd"]), 6)
                 self.st["last_prompt_tokens"] = usage.get("prompt_tokens") or self.st["last_prompt_tokens"]
                 done = self.comp.observe(usage.get("prompt_tokens"))
                 if done:
@@ -1078,7 +1082,7 @@ class ChatSession:
                     for rc in calls:
                         rc.setdefault("id", "call_" + uuid.uuid4().hex[:8])
                         rc.setdefault("type", "function")
-                    self.messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
+                    self.messages.append({"role": "assistant", "content": content or None, "tool_calls": calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})   # 생각 블록 되보내기(판 69)
                     any_ok = False
                     for rc in calls:
                         tc = self._exec(rc, step)
@@ -1168,7 +1172,7 @@ class ChatSession:
                     self.ui.warn("  생각 끄고 다시 보냈어도 생성 상한에 닿아 답이 비었다. 다시 묻거나 /think off 로 바꿔 본다.")
                     reason = "length_empty"
                     break
-                self.messages.append({"role": "assistant", "content": content})
+                self.messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})
                 if self._cut and content.strip() and self._continued < CO.CONTINUE_MAX:   # 끊긴 글 답: 최종 답으로 받지 않고 잇게 한다
                     self._continued += 1
                     self.messages.append({"role": "user", "content": CO.CONTINUE_NOTE.format(mt=CO.limit_of(self.profile, self.backend))})

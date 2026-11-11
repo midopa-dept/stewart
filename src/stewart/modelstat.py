@@ -46,6 +46,10 @@ def probe(backend, timeout: float = 4.0, pod: bool = True) -> dict:
     """한 번 찔러 본다. 돌려주는 것: {state, label, served: [id…], configured, pod: {model, adapter, served_name}|None, detail, checked}."""
     out = {"state": "down", "served": [], "configured": backend.model, "backend": backend.name, "pod": None,
            "detail": "", "checked": time.time()}
+    if getattr(backend, "kind", "openai") == "anthropic":   # 바깥 API — 키가 있으면 준비된 것으로(찔러 보느라 돈을 쓰지 않는다)
+        ok = bool(backend.api_key())
+        return {**out, "state": "ok" if ok else "auth", "label": LABEL.get("ok" if ok else "auth", ""), "served": [backend.model],
+                "detail": "" if ok else f"키 없음({backend.api_key_env})"}
     try:
         code, text = _get(backend.base_url + "/models", _headers(backend), timeout)
         try:

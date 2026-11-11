@@ -354,6 +354,11 @@ def chat(
     """요청 1회. (응답 JSON, 소요 초)를 돌려준다. 소요 초에는 상한 대기 시간이 들어가지 않는다.
     max_tokens 가 있으면 백엔드 params 의 값을 덮어쓴다(프로필 max_tokens).
     thinking 이 None 이 아니면 chat_template_kwargs.enable_thinking 을 그 값으로 덮어쓴다(chat /think)."""
+    if getattr(backend, "kind", "openai") == "anthropic":   # Messages API(판 69)
+        from . import anthropic_backend as AB
+        with slot(backend):
+            return AB.chat(backend, messages, tools, max_tokens, thinking)
+    messages = _openai_only(messages)
     extra = {"max_tokens": max_tokens} if max_tokens else {}
     extra.update(thinking_kwargs(backend, thinking))
     extra.update(overrides or {})   # 생각 켬 샘플링 묶음(think.py)
@@ -377,8 +382,17 @@ def chat(
         return data, time.monotonic() - t0
 
 
+def _openai_only(messages: list[dict]) -> list[dict]:
+    """Anthropic 백엔드가 남긴 칸(anthropic_content)은 OpenAI 호환 서버에 보내지 않는다(같은 대화에서 백엔드를 바꿨을 때)."""
+    if not any("anthropic_content" in m for m in messages):
+        return messages
+    return [{k: v for k, v in m.items() if k != "anthropic_content"} for m in messages]
+
+
 def models(backend: Backend, timeout: float = 15) -> tuple[list[str], float]:
     """GET /models — 서버가 올린 모델 이름 목록."""
+    if getattr(backend, "kind", "openai") == "anthropic":
+        return [backend.model], 0.0
     t0 = time.monotonic()
     with _open(backend, "/models", None, timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
@@ -388,6 +402,8 @@ def models(backend: Backend, timeout: float = 15) -> tuple[list[str], float]:
 def served_context(backend: Backend, timeout: float = 5) -> int | None:
     """서버가 실제로 받는 문맥 길이. vLLM GET /v1/models 의 max_model_len(같은 id 의 것, 없으면 하나뿐일 때 그것).
     서버가 알려 주지 않거나 닿지 않으면 None."""
+    if getattr(backend, "kind", "openai") == "anthropic":
+        return None
     try:
         with _open(backend, "/models", None, timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
@@ -571,6 +587,11 @@ def chat_stream(
     """chat() 과 같은 (응답, 초)를 돌려주지만 스트리밍으로 받는다. on_delta(본문 조각, 생각 조각)를 조각마다 부른다.
     on_first() 는 첫 조각(본문·생각·툴콜 무엇이든)이 왔을 때 한 번 부른다(첫 토큰까지 시간).
     도중에 KeyboardInterrupt 가 나면 연결을 바로 닫고(서버도 생성을 멈춘다) 받은 데까지를 e.partial 에 붙여 다시 던진다."""
+    if getattr(backend, "kind", "openai") == "anthropic":   # Messages API(판 69)
+        from . import anthropic_backend as AB
+        with slot(backend):
+            return AB.chat(backend, messages, tools, max_tokens, thinking, on_delta=on_delta, on_first=on_first)
+    messages = _openai_only(messages)
     extra = {"stream": True, "stream_options": {"include_usage": True}}
     if max_tokens:
         extra["max_tokens"] = max_tokens

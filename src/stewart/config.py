@@ -52,6 +52,7 @@ class Backend:
     served_max_len: int | None = None       # 서버가 알려 준 max_model_len(없거나 못 물었으면 None)
     dropped_params: list = field(default_factory=list)   # 서버가 모른다고 거절해 빼고 보내는 샘플링 칸(think.py)
     vision: bool = False        # 이미지 입력을 받는 모델인가(images.py). 기본 끔 — 꺼진 백엔드에는 이미지를 붙이지 않는다
+    kind: str = "openai"        # openai(chat/completions 호환) | anthropic(Messages API, 판 69 — anthropic_backend.py)
 
     def api_key(self) -> str | None:
         if self.api_key_env and os.environ.get(self.api_key_env):
@@ -106,7 +107,7 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
         try:
             out[name] = Backend(
                 name=name,
-                base_url=b["base_url"].rstrip("/"),
+                base_url=str(b.get("base_url") or ("https://api.anthropic.com" if b.get("kind") == "anthropic" else b["base_url"])).rstrip("/"),
                 model=b["model"],
                 precision=b.get("precision", "?"),
                 max_context=int(b.get("max_context", 8192)),
@@ -119,7 +120,10 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 concurrency=max(1, int(b.get("concurrency", 1))),
                 api_key_file=b.get("api_key_file"),
                 vision=bool(b.get("vision", False)),
+                kind=str(b.get("kind") or "openai"),
             )
+            if out[name].kind not in ("openai", "anthropic"):
+                raise ConfigError(f"{path}: backends.{name}.kind 는 openai 또는 anthropic")
         except KeyError as e:
             raise ConfigError(f"{path}: backends.{name}에 {e} 가 없다") from None
     default = data.get("default") or next(iter(out), "")

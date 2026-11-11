@@ -9,6 +9,11 @@ dependencies = ["prompt_toolkit==3.0.53", "rich==15.0.0"]
 [project.scripts]
 stewart = "stewart.cli:main"
 
+[project.optional-dependencies]
+anthropic = [
+    "anthropic>=1",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -21,3 +26,8 @@ packages = ["src/stewart"]
 "profiles" = "stewart/_profiles"
 "backends.example.toml" = "stewart/_data/backends.example.toml"
 "demos/media/schema.json" = "stewart/demos/media/schema.json"   # media 프로필의 ../demos/media 가 wheel 안에서도 풀리게
+
+[dependency-groups]
+dev = [
+    "anthropic>=1",
+]

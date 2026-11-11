@@ -325,6 +325,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     depth = 1 if parent else 0
     exec_mode = M.check_mode(mode or profile.mode or "auto", interactive=bool(parent.get("ask")))
     web = web_search_config(profile)
+    from .shell import hide_env
+    hide_env(backend.api_key_env)          # 백엔드 키 변수는 모델 셸 환경에서 뺀다(판 69)
     base_names = [t for t in DG.other_tools(clarify.other_tools(profile.tools)) if t != SK.NAME]
     tool_defs = T.definitions(base_names) if base_names else []
     if profile.tools and clarify.wanted(profile.tools, profile.output_format):
@@ -649,6 +651,12 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         tim = resp.get("timings") or {}
         st["completion_tokens"] += usage.get("completion_tokens") or 0
         st["prompt_tokens_total"] += usage.get("prompt_tokens") or 0
+        if usage.get("anthropic"):   # Messages API 백엔드(판 69): 캐시 읽기·쓰기·비용을 실행 합계에
+            ac = st.setdefault("anthropic_usage", {"input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                                                   "output_tokens": 0, "cost_usd": 0.0})
+            for k2 in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
+                ac[k2] += int(usage["anthropic"].get(k2) or 0)
+            ac["cost_usd"] = round(ac["cost_usd"] + float(usage.get("cost_usd") or 0), 6)
         st["last_prompt_tokens"] = usage.get("prompt_tokens") or st["last_prompt_tokens"]
         prompt_mark = len(messages)
         rt = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
@@ -683,7 +691,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             for rc in raw_calls:
                 rc.setdefault("id", "call_" + uuid.uuid4().hex[:8])
                 rc.setdefault("type", "function")
-            messages.append({"role": "assistant", "content": content or None, "tool_calls": raw_calls})
+            messages.append({"role": "assistant", "content": content or None, "tool_calls": raw_calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})   # 생각 블록 되보내기(판 69)
             step_ok = False
             ask_hold = False     # 되묻기 점검을 건 단계: 같은 응답의 뒤 호출도 돌리지 않는다
             for rc in raw_calls:
@@ -901,7 +909,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             srec["note"] = "생각 끔으로 다시 보냈어도 상한에 닿아 빈 답 → length_empty 로 끝"
         else:
             # 최종 답
-            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})
             lang_bad = _language_problem(profile, content)
             chk = None
             # (hooks Stop 첫 꼴): 이번 실행이 파일을 바꿨으면 끝내기 전 확인 명령. 실패면 출력을 돌려주고 다시(상한까지)
@@ -1157,6 +1165,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "shell": shell_end,
         "web_result_urls": sorted({u for e in env.search_log for u in e["urls"]}),  # 나중 web_fetch 허용 목록
         "completion_tokens": st["completion_tokens"], "prompt_tokens_total": st["prompt_tokens_total"],
+        **({"anthropic_usage": st["anthropic_usage"], "cost_usd": st["anthropic_usage"]["cost_usd"]} if st.get("anthropic_usage") else {}),
         "last_prompt_tokens": st["last_prompt_tokens"],
         "gen_tok_per_s": (st["pred_n"] / (st["pred_ms"] / 1000)) if st["pred_ms"] else None,
         "prompt_tok_per_s": (st["prompt_n"] / (st["prompt_ms"] / 1000)) if st["prompt_ms"] else None,

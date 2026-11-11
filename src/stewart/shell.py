@@ -38,6 +38,15 @@ def own_venv() -> str | None:
     return os.path.realpath(sys.prefix) if sys.prefix != getattr(sys, "base_prefix", sys.prefix) else None
 
 
+HIDDEN_ENV: set = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}   # 모델의 셸에 넘기지 않는 키 변수(판 69 — 백엔드 api_key_env 도 여기에)
+
+
+def hide_env(name: str | None) -> None:
+    """백엔드 키 변수 이름을 모델 셸 환경에서 빼게 적는다(모델이 친 env 로 키를 보지 못하게)."""
+    if name:
+        HIDDEN_ENV.add(name)
+
+
 def tool_env(base: dict | None = None) -> dict:
     """모델의 셸·확인 명령에 넘길 환경: stewart 자신의 가상 환경과 stewart 설정이 새지 않게 뺀다.
     - PATH 에서 stewart 가상 환경의 bin 을 뺀다. VIRTUAL_ENV 가 그 가상 환경이면 지운다(사용자가 따로 켠 다른 venv 는 그대로).
@@ -59,7 +68,7 @@ def tool_env(base: dict | None = None) -> dict:
     for k in list(env):
         if k == "PATH":
             continue
-        if k.startswith("STEWART_") or any(h and h in env[k] for h in hide):
+        if k in HIDDEN_ENV or k.startswith("STEWART_") or any(h and h in env[k] for h in hide):
             env.pop(k)
     if osdep.IS_WIN and not env.get("HOME"):
         # WIN-HOME(VM 11-10): busybox-w32 는 HOME 을 채우지 않아 ~ 가 비었다. 경계 판정(파이썬 expanduser = USERPROFILE)과

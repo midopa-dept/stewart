@@ -37,3 +37,20 @@ timeout_s = 240                       # 한 요청 상한. 큰 파일 쓰기가 
 temperature = 0.2
 chat_template_kwargs = { enable_thinking = false }
 max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생성 막기). finish_reason=length 는 summary length_stops
+
+# Anthropic Messages API(판 69). 키는 파일에 적지 않는다 — api_key_env 에 환경 변수 이름만.
+# 꾸러미: uv sync --extra anthropic (또는 pip install 'stewart[anthropic]')
+# [backends.claude-opus]
+# kind = "anthropic"
+# model = "claude-opus-5-5"            # 또는 claude-sonnet-5-5
+# precision = "api"
+# max_context = 1000000
+# api_key_env = "ANTHROPIC_API_KEY"
+# timeout_s = 600
+# concurrency = 4
+# [backends.claude-opus.params]
+# effort = "high"                      # low | medium | high | xhigh | max (Opus 5.5 기본 medium)
+# max_retries = 4                      # 429·529·5xx·연결은 SDK 가 다시
+# max_tokens = 32000
+# # cache_ttl = "1h"                   # 프롬프트 캐시 유지(기본 5분)
+# # price = { input = 4.0, output = 20.0, cache_read = 0.2, cache_write = 5.0 }   # 1M 토큰당 $, 없으면 안의 표
