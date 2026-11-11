@@ -4,7 +4,10 @@ import os
 os.environ.setdefault("STEWART_SERVED_CONTEXT", "0")
 # 기억: chat·허브 기본 켬(판 50)이지만 시험 묶음은 끈다(지시문·도구 목록이 그대로이게). 기억 시험은 직접 켠다
 os.environ.setdefault("STEWART_MEMORY", "0")
-os.environ.setdefault("STEWART_BOARD_QUIET", "0")   # 현황판 밤 조용(23:00~07:30)은 시험 시각과 상관없게 끈다(test_u39 가 따로 켠다)
+os.environ.setdefault("STEWART_BOARD_QUIET", "0")
+os.environ.setdefault("STEWART_WEB_FETCH", "0")
+os.environ.setdefault("STEWART_DOC_SEARCH", "0")
+os.environ.setdefault("STEWART_SUMMARY", "0")       # 요약 접기 자동(판 65)은 시험 묶음에서 끈다(가짜 서버 대본이 흐트러지지 않게)    # 실사용 기본 켬인 doc_search(판 64)도 시험 묶음에서 끈다     # 실사용 기본 켬인 웹 읽기(판 61)는 시험 묶음에서 끈다(도구 목록 그대로) — 웹 시험은 직접 켠다   # 현황판 밤 조용(23:00~07:30)은 시험 시각과 상관없게 끈다(test_u39 가 따로 켠다)
 # 시험은 저장소의 예시 백엔드를 쓴다(개발 체크아웃의 로컬 backends.toml·사용자 설정에 기대지 않게)
 os.environ.setdefault("STEWART_BACKENDS", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                        "backends.example.toml"))

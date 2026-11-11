@@ -215,6 +215,7 @@ export function Sidebar() {
       <div class="px-4 py-3 border-t border-line text-xs text-mute flex flex-wrap gap-2 items-center">
         <div class="w-full flex items-center gap-1.5 min-w-0"><ModelDot /><span class="truncate" title="서버가 실제로 올린 모델">{modelName(st?.model) || st?.backend?.model}</span></div>
         <ConnDot />
+        {st?.web && <span class="chip" title={st.web.why || ''}>{st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐'}</span>}
         <span class="flex-1" />
         <NotifToggle />
         {USER && <><span class="chip" title="로그인한 사람(계정 모드)">{USER}</span>

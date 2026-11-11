@@ -420,7 +420,7 @@ def run_media(profile: Profile, backend: Backend, input_path: Path, runs_dir: Pa
         webinfo: dict[str, dict] = {}
         if web_candidates:
             wc = engine.web_search_config(profile)
-            if not wc:
+            if not wc or not wc["url"]:
                 raise SystemExit("웹 검색 후보 단계: 검색 주소가 없다(STEWART_SEARXNG_URL)")
             client = SearxClient(wc["url"], wc.get("categories", ""), wc["timeout_s"], cache_path=web_cache)
             wlog = (out_dir / "web.jsonl").open("a", encoding="utf-8")

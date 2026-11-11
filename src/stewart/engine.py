@@ -194,24 +194,54 @@ def _looks_like_toolcall(text: str, names: list[str]) -> bool:
     return bool(re.search(r"\b(" + "|".join(names) + r")\s*[({]", text))
 
 
-def web_search_config(profile: Profile) -> dict | None:
-    """web_search를 켤 수 있으면 설정(dict), 아니면 None. 도구 목록에 있고 검색 주소가 있어야 켜진다."""
-    if "web_search" not in profile.tools and profile.tools != ["*"]:
+def web_settings() -> dict:
+    """사용자 설정 [web](hub.toml — STEWART_HUB_CONFIG 또는 $XDG_CONFIG_HOME/stewart/hub.toml): backend·url·fetch. 없으면 {}."""
+    try:
+        import tomllib
+        from .forge import config_path
+        p = config_path()
+        if p.is_file():
+            w = tomllib.loads(p.read_text(encoding="utf-8")).get("web") or {}
+            return w if isinstance(w, dict) else {}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def web_search_config(profile: Profile, interactive: bool = False) -> dict | None:
+    """웹 도구 설정(dict) 또는 None(둘 다 꺼짐).
+    - 검색(web_search): 도구 목록에 있고 주소가 있어야 — 환경 변수(url_env, 기본 STEWART_SEARXNG_URL) → 프로필 [web_search] url
+      → 사용자 설정 [web] url. [web] backend = "none" 이면 끔.
+    - 읽기(web_fetch): 검색이 켜졌으면 켬. 검색이 없어도 실사용(chat·허브, interactive)은 [web] fetch(기본 true)면 켬 —
+      평가 길(run·bench)은 지금처럼 주소가 있을 때만(도구 목록이 바뀌지 않게). STEWART_WEB_FETCH=0|1 이 이긴다.
+    돌려주는 dict: url(""=검색 꺼짐)·fetch·why(꺼진 까닭)·max_*·timeout_s·categories."""
+    if "web_search" not in profile.tools and "web_fetch" not in profile.tools and profile.tools != ["*"]:
         return None
     w = profile.web_search
-    url = w.get("url") or os.environ.get(w.get("url_env", "STEWART_SEARXNG_URL"), "")
-    if not url:
+    ws = web_settings() if interactive else {}   # 사용자 설정은 실사용(chat·허브)에만 — 평가 길은 환경 변수·프로필 그대로
+    url = os.environ.get(w.get("url_env", "STEWART_SEARXNG_URL"), "") or w.get("url") or ws.get("url") or ""
+    why = ""
+    if str(ws.get("backend") or "searxng") == "none":
+        url, why = "", "설정 [web] backend = none"
+    elif "web_search" not in profile.tools and profile.tools != ["*"]:
+        url = ""
+    elif not url:
+        why = "검색 주소 없음(STEWART_SEARXNG_URL 또는 hub.toml [web] url)"
+    fx = os.environ.get("STEWART_WEB_FETCH")
+    fetch_wanted = "web_fetch" in profile.tools or profile.tools == ["*"]
+    fetch = fetch_wanted and (fx == "1" if fx in ("0", "1") else (bool(url) or (interactive and ws.get("fetch", True) is not False)))
+    if not url and not fetch:
         return None
     per = w.get("max_per_file")          # 파일마다 상한은 프로필이 적었을 때만(media)
-    return {"url": url, "max_per_file": int(per) if per else None, "max_total": int(w.get("max_total", T.WEB_MAX_TOTAL)),
-            "max_results": int(w.get("max_results", 5)),
+    return {"url": url, "fetch": fetch, "why": why, "max_per_file": int(per) if per else None,
+            "max_total": int(w.get("max_total", T.WEB_MAX_TOTAL)), "max_results": int(w.get("max_results", 5)),
             "timeout_s": float(w.get("timeout_s", 20)), "categories": w.get("categories", "")}
 
 
 def web_search_enabled(profile: Profile) -> int:
     """켜져 있으면 파일당 검색 상한, 꺼져 있으면 0."""
     c = web_search_config(profile)
-    return (c["max_per_file"] or c["max_total"]) if c else 0
+    return (c["max_per_file"] or c["max_total"]) if c and c["url"] else 0
 
 
 def memory_for(profile: Profile, interactive: bool = False) -> tuple[str, list[dict]]:
@@ -266,6 +296,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         tool_defs.append(SK.DEFINITION)
     if not web:  # 검색 주소가 없으면 웹 도구(web_search·web_fetch)를 도구 목록에서 뺀다
         tool_defs = [d for d in tool_defs if d["function"]["name"] not in T.WEB_TOOLS]
+    elif not web["url"]:   # 읽기만(STEWART_WEB_FETCH=1)
+        tool_defs = [d for d in tool_defs if d["function"]["name"] != "web_search"]
     if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(평가·실사용 기본 도구 목록은 그대로)
         tool_defs = [d for d in tool_defs if d["function"]["name"] != "view_image"]
     mem = MEM.Memory(profile, rec.dir) if (not parent and MEM.enabled(profile)) else None   # 기억 M1(작업자는 없음)

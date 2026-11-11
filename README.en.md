@@ -2,203 +2,196 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![API](https://img.shields.io/badge/API-OpenAI--compatible-informational)
 [![tests](https://github.com/midopa-dept/stewart/actions/workflows/tests.yml/badge.svg)](https://github.com/midopa-dept/stewart/actions/workflows/tests.yml)
 
-[Source](https://github.com/midopa-dept/stewart) · [Issues](https://github.com/midopa-dept/stewart/issues)
+[Source](https://github.com/midopa-dept/stewart) · [Issues](https://github.com/midopa-dept/stewart/issues) · [stewart-cloud](https://github.com/midopa-dept/stewart-cloud)
 
 **A small agent runner that lets a model you host work on a local folder.**
 
-Python · OpenAI-compatible API · llama.cpp / vLLM · macOS / Linux
-
-[한국어](README.md) · English · [stewart-cloud](https://github.com/midopa-dept/stewart-cloud)
+[한국어](README.md) · English
 
 ```mermaid
-flowchart TD
-    A["Request"] --> B["Model call<br/>(history fitted to the context length)"]
-    B -->|tool call| C{"Mode · working-folder boundary · approval"}
-    C -->|denied| B
-    C -->|allowed| D["PreToolUse hook"]
-    D --> E["Run the tool"]
-    E --> F["PostToolUse hook"]
-    F -->|result| B
-    B -->|no tool call| G{"Check before finishing<br/>(check_on_stop · Stop hook)"}
-    G -->|fails| B
-    G -->|passes| H["Answer + run record"]
+flowchart LR
+    U["You"] -->|terminal| C["stewart chat"]
+    U -->|browser| H["stewart hub<br/>(127.0.0.1:8765)"]
+    U -->|task file| R["stewart run"]
+    C --> L
+    H --> L
+    R --> L
+    subgraph L["Tool-call loop"]
+        direction TB
+        M["Model call"] -->|tool call| G{"Mode · folder boundary<br/>· secret files · approval"}
+        G -->|allowed| T["Run tool"]
+        T -->|result| M
+        G -->|denied| M
+    end
+    M <-->|"/v1/chat/completions"| S[("Your model server<br/>llama.cpp · vLLM")]
+    L --> K["Run record<br/>events · transcript · facts"]
 ```
 
-stewart is a small agent runner for OpenAI-compatible chat completion servers such as vLLM and llama.cpp.
+stewart connects to an OpenAI-compatible server such as vLLM or llama.cpp and lets the model read and edit files, run shell commands and search the web through tools. No model is included. You start the server and stewart connects to it.
 
-Point it at a folder and a model you host yourself. The model works through tools: it reads and edits files, runs shell commands, searches and fetches web pages.
-Every run leaves a full record, so you can compare what the model says it did with what it actually did.
+Every run leaves a record, so you can check what the model said it did against the files it actually changed and the commands it actually ran. Prompts and tool messages are in Korean.
 
-Prompts, tool messages and command help are in Korean.
+## Ways to use it
 
-## What it is
+| Command | What it does |
+|---|---|
+| `stewart chat` | Talk to the model in the terminal. The default mode is `edits` |
+| `stewart hub` | The same work in a browser. One main conversation can start several worker sessions |
+| `stewart run` | Run one task to the end without a person (`auto` or `--plan`) |
 
-- A tool-calling loop over `/v1/chat/completions`, written in Python 3.12 with two runtime dependencies (prompt_toolkit, rich).
-- Two ways to run it:
-  - `stewart run` takes one task and runs it unattended.
-  - `stewart chat` is an interactive session with a fixed input line.
-- No model is included. You start the server; stewart connects to it.
+Other commands: `ping` (check the server), `backends`, `profiles`, `rewind`, `dream` (memory upkeep), `sessions` (clean up past hub sessions), `hub-user` (hub accounts), `organize` (folder clean-up plans), `queue` and `bench` (run many tasks). See `stewart <command> --help`.
 
-## Features
+## Web hub
 
-- Execution modes:
-  - `auto` runs tools right away.
-  - `edits` applies file edits right away and asks before shell commands.
-  - `ask` asks before anything except reads.
-  - `plan` only reads, then writes a plan.
-- Checkpoints and rollback: `/undo`, `/rewind`, `stewart rewind`. An unattended run that does not finish can be rolled back automatically (profile setting).
-- A working-folder boundary, secret-file protection, and a filtered shell environment (see [Safety model](#safety-model)).
-- Context handling:
-  - stewart reads the server's `max_model_len` and compacts history to fit.
-  - On a context overflow it folds the history once and retries.
-  - When a thinking turn hits the length limit with an empty answer, it retries that turn once with thinking off.
-- Profiles (TOML) set tools, instructions and limits. Built-in profiles include `code`, `chat`, `research`, `organize` and `media`.
-- `ask_user` for clarifying questions, `delegate` for a sub-worker with its own context, skills, and minimal hooks.
-- Optional self-checks before finishing:
-  - a check command
-  - a requirements review
-  - a "should I have asked?" check
-  - a regression baseline
-  - a todo check
-- Optional memory: a run index, notes, per-subject pages and an injected index, maintained by `stewart dream`, which you run yourself.
-- Run records in `events.jsonl`, `transcript.md`, `summary.json` and `facts.md`.
+```bash
+uv run stewart hub --project ~/my-project
+```
 
-## Quick start
+- It serves `http://127.0.0.1:8765/`. The first-login token is in `hub-token` in the hub folder; `stewart hub url` shows it again.
+- On the screen
+  - Approval bar: allow or deny what the model asks to run. ⌘/Ctrl+Enter allows, ⇧⌘/Ctrl+Backspace denies.
+  - Conversation: edits show as diff cards with line numbers, thinking as a folding block, and every code block has a copy button.
+  - Hand-off card: when the model reaches something only a person can do (a password, keychain prompt, sudo, a login), it stops retrying and hands it to you.
+  - Side panel: board, memory, steps, plan, always-allow rules, tokens.
+  - Input: `/commands`, `@file`, pasted images.
+  - Model server status dot: ready, starting, unreachable, auth refused.
+- New approvals raise a browser notification. Set `[hub] ntfy_url` to also send them to your phone with [ntfy](https://ntfy.sh).
+- By default the hub listens on loopback only (`127.0.0.1`, `::1`). To use it from another device, put something in front (an SSH tunnel, for example) or turn on account mode.
+  - Account mode: set `accounts = true`, `listen = "<address>"` and `user_root = "<root of per-person working folders>"` under `[hub]`, then add people with `stewart hub-user add <name>`. Each person gets their own sessions, conversations, approvals and working folder.
+  - Passwords are stored with scrypt. Sessions last 12 hours, or end after 2 idle hours.
+  - It never binds to all addresses (`0.0.0.0`). There is no TLS, so keep it on a private network.
 
-### 1. Install
+## Tools the model gets
 
-You need macOS or Linux, [uv](https://docs.astral.sh/uv/) and git. [ripgrep](https://github.com/BurntSushi/ripgrep) makes search faster if it is installed.
+| Group | Tools |
+|---|---|
+| Files | `read_file` `list_dir` `search` `glob` `write_file` `edit_file` `multi_edit` `notebook_edit` `view_image` (when the backend has `vision = true`) |
+| Shell | `run_shell` (keeps state, up to 4 background jobs) `shell_output` `shell_kill` |
+| Web | `web_search` (SearXNG) `web_fetch` |
+| Find | `doc_search`: BM25 search over documents and code in the working folder, plus web pages already fetched |
+| Memory | `memory_search` `memory_read` `note_add` |
+| Flow | `todo_write` `todo_read` `ask_user` `delegate` (a worker with its own context) `load_skill` |
+
+- `web_fetch` refuses private, loopback, link-local and CGNAT addresses and re-checks redirects. Fetched text reaches the model wrapped in outside-content markers.
+- In chat and the hub, `web_fetch` and `doc_search` are on even without a search address. `run` uses only what the profile and environment variables turn on.
+
+## Safety
+
+stewart runs shell commands the model chooses on your machine. The guards below reduce mistakes; they are not isolation. Run unfamiliar repositories and unattended runs in a container, a virtual machine or a separate account.
+
+- **Modes:** `auto` (run at once), `edits` (edit files at once, ask before shell), `ask` (ask for everything but reading), `plan` (read only).
+- **Working-folder boundary:** paths are resolved with realpath and parent folders are compared by inode, so symlinks cannot lead outside. Writes outside the folder are denied in `run` and asked about in chat and the hub, whatever the mode. Adjust with the profile keys `extra_write_dirs` and `read_outside` (allow, ask, deny).
+- **Limits of the shell check:** only common write forms are checked (redirects, `rm`, `mv`, `cp`, `sed -i` and similar). Paths with variables or substitutions, writes inside other programs such as `python -c`, and `bash -c` or `eval` are not seen.
+- **Secret files:** `.env`, keys, certificates, `.netrc` and similar files are neither read nor written by the tools, and reading them through the shell is blocked too. Templates such as `.env.example` are allowed.
+- **Config folders:** writes to `~/.config/stewart` or the hub folder are always asked about in chat and denied in `run`.
+- **Shell environment:** the model's shell does not see stewart's virtual environment, `STEWART_*` variables, or variables holding stewart's install path. API keys are read from the environment variable named in the backend file.
+- **Hooks:** `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`. A hook gets JSON on stdin; exit code 2 blocks the action. Hooks are read from user profiles only.
+- **Loops:** when the same error shows up three times or the same call repeats, the model is told; if it keeps going, the run stops.
+
+## Memory
+
+- On by default in chat and the hub, off in `run` and `bench`. `STEWART_MEMORY=0|1` or the profile key `memory` overrides this.
+- When you say something the model should keep doing next time, it saves a note, scoped to all projects (user) or this project (project). The hub's memory tab lets you view, edit and delete them.
+- `stewart dream` gathers notes into a proposed `MEMORY.md` per subject. Nothing changes until you take it with `--accept`. The hub makes proposals by itself when idle (`STEWART_DREAM_AUTO=0` turns that off).
+- Hand-written rule files (`AGENTS.md`, `STEWART.md`) win over memory when they conflict.
+- The memory folder is `~/.local/share/stewart/memory` (`STEWART_MEMORY_DIR`).
+
+## Install and first run
+
+You need [uv](https://docs.astral.sh/uv/) and git. [ripgrep](https://github.com/BurntSushi/ripgrep) makes `search` faster.
 
 ```bash
 git clone https://github.com/midopa-dept/stewart.git
 cd stewart
 uv sync
-uv run stewart --help
-```
-
-Copy the example backend file and edit it:
-
-```bash
 mkdir -p ~/.config/stewart
 cp backends.example.toml ~/.config/stewart/backends.toml
 ```
 
-### 2. Try it with a local model
-
-Start a small instruct model that supports tool calling with [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`:
+Start a model that supports tool calls with `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 ```bash
 llama-server -m <model.gguf> --port 8080 --ctx-size 16384 --jinja
 ```
 
-In `~/.config/stewart/backends.toml`, `[backends.local]` points to `http://127.0.0.1:8080/v1`. Set `model` to the name your server reports. Then:
+`[backends.local]` in `backends.toml` points to `http://127.0.0.1:8080/v1`. Set `model` to the name the server reports, then try:
 
 ```bash
 uv run stewart ping -b local
-uv run stewart chat -b local --workdir ~/my-project
+uv run stewart chat --backend local --workdir ~/my-project
+uv run stewart hub --project ~/my-project
+uv run stewart run -p code --backend local --workdir ~/my-project --task "Fix the failing test"
 ```
 
-### 3. Use a rented GPU
+For bigger models on a rented GPU, see [stewart-cloud](https://github.com/midopa-dept/stewart-cloud). If you run vLLM yourself, turn on `--enable-auto-tool-choice --tool-call-parser <parser for your model>` and keep the port off the internet: reach it through an SSH tunnel or a private network.
 
-To run a larger model on a rented GPU without exposing it to the internet, use [stewart-cloud](https://github.com/midopa-dept/stewart-cloud).
+### Windows
 
-If you set up a server yourself, stewart works with any OpenAI-compatible endpoint that supports tool calls. With vLLM, enable a tool-call parser that matches your model family:
+Install and run the same way (`uv sync`, `uv run stewart`). `run_shell` needs a shell, so provide one of these:
 
-```bash
-vllm serve <model> --served-model-name my-model \
-  --host 127.0.0.1 --port 8000 --max-model-len 65536 \
-  --enable-auto-tool-choice --tool-call-parser <parser>
-```
+- Put [busybox-w32](https://frippery.org/busybox/) in the repository as `bin\busybox64u.exe`.
+- Set the environment variable `STEWART_SHELL` to a shell executable.
+- Set `[shell] path` in `~/.config/stewart/config.toml`.
 
-Keep the port private. Reach it through an SSH tunnel or a private network, then add it as a backend (below).
+Git bash also works, but its `/c/…` paths do not yet match the folder-boundary check, so stewart warns about it.
 
 ## Configuration
 
-stewart looks for the backend file in this order:
-
-1. `STEWART_BACKENDS` (a file path)
-2. `~/.config/stewart/backends.toml`
-3. `backends.toml` at the repository root
+| What | Where |
+|---|---|
+| Backends | `STEWART_BACKENDS` → `~/.config/stewart/backends.toml` → `backends.toml` in the repository |
+| Hub | `~/.config/stewart/hub.toml` (`STEWART_HUB_CONFIG`). `[hub]` (port, notifications, accounts), `[web]` (search address) |
+| Your profiles | `~/.config/stewart/profiles/`. Inherit with `extends = "code"` and write only what changes |
+| Project instructions | `AGENTS.md`, `STEWART.md`, `~/.config/stewart/STEWART.md` |
+| Run records | `~/.local/state/stewart/runs/` |
 
 ```toml
-[backends.cloud]
-base_url = "http://127.0.0.1:8000/v1"
-model = "my-model"                      # same as --served-model-name
-max_context = 65536                     # replaced by the server's max_model_len at startup
-concurrency = 8
-api_key_env = "STEWART_CLOUD_API_KEY"   # name of the variable that holds the key; never the key itself
-timeout_s = 240
+# ~/.config/stewart/backends.toml
+default = "local"
 
-[backends.cloud.params]                 # merged into every request body
+[backends.local]
+base_url = "http://127.0.0.1:8080/v1"
+model = "local-model"
+max_context = 16384          # with vLLM it is re-read from max_model_len at start
+timeout_s = 600
+# api_key_env = "MY_KEY_ENV"  # name of the variable holding the key; never the key itself
+
+[backends.local.params]       # merged into every request body
 temperature = 0.2
-max_tokens = 8192
 ```
 
-Common commands:
-
-```bash
-uv run stewart ping -b cloud
-uv run stewart chat -b cloud --workdir ~/my-project
-uv run stewart run -p code -b cloud --workdir ~/my-project --task "Fix the failing test"
-uv run stewart run -p code -b cloud --workdir ~/my-project --plan --task "..."
-uv run stewart profiles
+```toml
+# ~/.config/stewart/hub.toml
+[web]
+url = "<SearXNG address>"   # SearXNG with JSON output enabled. backend = "none" turns web tools off
 ```
 
-- Profiles:
-  - Built-in profiles live in `profiles/`.
-  - Your own go in `~/.config/stewart/profiles/`.
-  - Use `extends = "code"` to inherit a profile and override only what you need.
-- Run records go to `~/.local/state/stewart/runs/<time>-<profile>/`.
-- Web search:
-  - Uses a [SearXNG](https://github.com/searxng/searxng) JSON endpoint set in `STEWART_SEARXNG_URL`.
-  - `web_fetch` refuses private addresses.
-- Thinking:
-  - Toggle it with `--think` or `/think`.
-  - Tune it with `STEWART_THINK_MAX_TOKENS` and `STEWART_THINK_SAMPLING`.
-- Self-checks: `STEWART_CHECK_ON_STOP` (on in the `code` profile), `STEWART_REVIEW_ON_STOP`, `STEWART_ASK_CHECK`, `STEWART_BASELINE_DIFF` and `STEWART_TODO_CHECK`. The others are off by default.
-- Memory: off by default. Turn it on with `memory = true` in a profile or `STEWART_MEMORY=1`.
-- Hooks:
-  - Set them in a profile's `[hooks]` table: `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop`.
-  - Each hook gets JSON on stdin. Exit code 2 blocks the action.
-- Tests: `uv run python -m unittest discover -s tests -t .` runs against fake servers and needs no network.
+- Thinking: `--think` and `/think` in chat, `STEWART_THINK_MAX_TOKENS`, `STEWART_THINK_SAMPLING`.
+- Check before finishing: the profile key `check_on_stop` (on in the `code` profile).
+- Tests: `uv run python -m unittest discover -s tests -t .` runs against fake servers only and needs no network.
 
-## Safety model
+### Built-in profiles
 
-stewart lets a model run shell commands. The rails below reduce mistakes; they are not isolation. Run it on a machine without important data, or inside an OS sandbox, a dedicated account or a container.
+| Name | Use |
+|---|---|
+| `chat` | Interactive coding, all tools |
+| `code` | Change code and confirm with tests |
+| `manager` · `worker` · `verifier` | Split work, hand it to workers, let a verifier judge |
+| `research` | Search the web and summarize with sources |
+| `organize` | Scan a folder and only plan the moves |
+| `media` | Suggest places for media files that failed to sort |
 
-- **Working-folder boundary.**
-  - Paths are resolved with realpath and their parent folders are checked by inode, so a symlink does not lead out of the folder.
-  - A write outside the folder is refused in `run` and asked about in `chat`; an approval covers that path only.
-  - `extra_write_dirs` and `read_outside` (allow, ask or deny) widen or narrow the boundary.
-  - Shell commands are checked for common write forms only.
-- **Secret files.** Tools neither read nor write files that look like `.env` files, keys or certificates (profile `[secret_files]`). stewart's own config folder is also protected.
-- **Filtered environment.**
-  - The model's shell does not see stewart's virtual environment, its `PATH` entry, `STEWART_*` variables, or any variable that contains stewart's install path.
-  - API keys are read from environment variables named in the backend file; the file holds only the variable name.
-- **Approvals.** Modes decide what runs without asking. Writes outside the folder and edits to stewart's config ask in every mode, and for these an empty answer counts as no.
-- **Records.** Results from the Brave search engine are kept out of run records. `python -m stewart.scrub_records` removes them from older records (dry run by default).
+## Credits and references
 
-## How it differs
-
-stewart is a small, inspectable runner for self-hosted models, not a general agent framework.
-
-- It assumes a model you serve yourself, and adapts to the server's context length and tool-call quirks: it re-asks after broken tool calls, detects repeated identical calls, and handles empty thinking-only turns.
-- Records come first. Each run keeps enough detail to check the model's final report against the files it changed and the commands it ran.
-- Self-checks and memory are separate switches that default to off, so you can turn on one at a time and see what it changes.
-
-## Acknowledgements and references
-
-stewart contains no code copied from the projects below. Third-party packages are listed in [NOTICE](NOTICE).
-
-- Anthropic, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) documentation: the shape of execution modes, hooks, todo lists, memory files and sub-agents.
-- Anthropic, "The components of agent memory": memory layers (records, notes, pages, an injected index) and a small injected layer with one page per subject.
-- Qwen3 model card: recommended sampling for thinking mode, used by `STEWART_THINK_SAMPLING=qwen`.
-- [vLLM](https://github.com/vllm-project/vllm), [llama.cpp](https://github.com/ggml-org/llama.cpp), [SearXNG](https://github.com/searxng/searxng), [uv](https://github.com/astral-sh/uv).
-- The tool-call format of the OpenAI Chat Completions API.
+- Parts of the web UI (`ui/`) adapt layouts and code from the MIT-licensed projects [llama.cpp](https://github.com/ggml-org/llama.cpp), [opencode](https://github.com/anomalyco/opencode) and [OpenHands](https://github.com/OpenHands/OpenHands). The parts and full license texts are in [ui/THIRD_PARTY.md](ui/THIRD_PARTY.md); bundled packages are listed in [NOTICE](NOTICE).
+- Anthropic [Claude Code](https://docs.anthropic.com/en/docs/claude-code) docs: run modes, hooks, todos, memory files, sub-agents
+- Anthropic, "The components of agent memory": memory layers (records, notes, pages, injected index)
+- Qwen3 model card: recommended sampling for thinking mode (`STEWART_THINK_SAMPLING=qwen`)
+- [vLLM](https://github.com/vllm-project/vllm), [SearXNG](https://github.com/searxng/searxng), [uv](https://github.com/astral-sh/uv), [ntfy](https://ntfy.sh), [busybox-w32](https://frippery.org/busybox/)
 
 ## License
 

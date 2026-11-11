@@ -56,7 +56,13 @@ from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
 CONFIRM_TOOLS = WRITE_TOOLS | {"run_shell"}
-COMPACT_RATIO = 0.75   # 마지막 프롬프트 토큰이 max_context 의 이 비율을 넘으면 오래된 도구 결과를 줄인다
+COMPACT_RATIO = 0.5    # 마지막 프롬프트 토큰이 max_context 의 이 비율을 넘으면 오래된 도구 결과를 줄인다(판 65: 0.75→0.5 — 27B·150k 에서 긴 문맥은 느리다)
+SUMMARY_RATIO = 0.7    # 줄이고 나서도 이 비율을 넘으면 앞 대화를 요약 한 쪽으로 접는다(Claude Code 의 자동 compact 처럼, 판 65)
+SUMMARY_KEEP_TURNS = 2 # 접을 때 원문 그대로 남기는 최근 사람 차례 수
+SUMMARY_MAX_CHARS = 60000
+SUMMARY_SYSTEM = ("너는 대화 요약가다. 코딩 에이전트와 사람의 앞 대화를 받아, 에이전트가 이어서 일하는 데 필요한 것만 한국어로 정리한다. "
+                  "꼴: ## 목표·사람 요구(사람 말의 지시·금지·선호는 빠짐없이) / ## 한 일과 결과(바꾼 파일·돌린 명령·확인된 사실, 파일:줄) / "
+                  "## 정한 것 / ## 남은 일·막힌 것 / ## 주의(실패한 길·하지 말 것). 추측을 사실처럼 쓰지 않는다. 비밀 값은 옮기지 않는다. 2000자 안.")
 KEEP_RECENT = 8        # 줄이지 않고 둘 최근 메시지 수
 CLIP_OLD = 300
 
@@ -218,7 +224,9 @@ class ChatSession:
         self.stream = stream   # True 면 응답을 조각으로 받아 바로 보여 준다(cli chat 기본). Ctrl-C 가 생성을 바로 끊는다
         self.max_steps = profile.max_steps   # 차례당 단계 상한. 닿으면 묻는 모드는 "계속할까?"(한 번 더 같은 만큼), auto 는 끝내고 안내
         self.think = think     # None = 백엔드 params 그대로, True/False = chat_template_kwargs.enable_thinking 덮어쓰기(/think)
-        web = web_search_config(profile)
+        web = web_search_config(profile, interactive=True)
+        self.web_status = {"search": bool(web and web["url"]), "fetch": bool(web and web["fetch"]),
+                           "why": (web or {}).get("why") or ("" if web else "웹 도구 꺼짐(검색 주소 없음·읽기 끔)")}
         base_names = [t for t in DG.other_tools(clarify.other_tools(profile.tools)) if t != SK.NAME]
         defs = T.definitions(base_names) if base_names else []
         if profile.tools and clarify.wanted(profile.tools):
@@ -227,6 +235,11 @@ class ChatSession:
             defs.append(DG.CHAT_DEFINITION)   # 작업자에게 맡기기(확인 질문은 같은 화면에 "[작업자 N]"). 기본 읽기 전용
         if not web:
             defs = [d for d in defs if d["function"]["name"] not in T.WEB_TOOLS]
+        elif not web["url"]:   # 검색 주소가 없으면 읽기(web_fetch)만
+            defs = [d for d in defs if d["function"]["name"] != "web_search"]
+        if ((profile.tools == ["*"] or "doc_search" in profile.tools) and os.environ.get("STEWART_DOC_SEARCH") != "0"
+                and "doc_search" not in [d["function"]["name"] for d in defs]):   # 문서 찾기(판 64): 실사용 기본 켬
+            defs += T.definitions(["doc_search"])
         if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(실사용 기본 도구 목록은 그대로)
             defs = [d for d in defs if d["function"]["name"] != "view_image"]
         self.pfl = PC.flags(profile, interactive=True)   # 대화형: Claude Code 꼴 호환 기본 켬(사용자 전역 ~/.claude 는 기본 끔)
@@ -261,6 +274,8 @@ class ChatSession:
         self.env = T.ToolEnv(workdir=profile.workdir, shell_timeout_s=profile.shell_timeout_s, web=web,
                               artifacts_dir=rec.dir, **T.secret_options(profile))
         self.env.vision = bool(backend.vision)
+        if self.mem is not None:   # 웹 글 캐시(판 64): 받은 본문을 기억 폴더에 남겨 doc_search 로 다시 찾게(30일·200개)
+            self.env.web_cache_dir = self.mem.dir / "web-cache"
         self.check = load_check(profile.action_check)
         mem_text, mem_log = memory_for(profile, interactive=True)
         self.env_info = envinfo.measure(profile.workdir)   # 세션 시작 때 한 번(이어 하기는 새로 잰다)
@@ -281,6 +296,7 @@ class ChatSession:
         self.bd = BND.from_profile(profile)   # 작업 폴더 경계(밖 쓰기는 모드와 관계없이 묻는다)
         self.tks = TH.settings(profile)   # 생각 켬 차례의 상한·샘플링 손잡이
         self._pmark = 0                   # 마지막 응답 때의 메시지 수(프롬프트 어림용)
+        self.summary_on = os.environ.get("STEWART_SUMMARY") != "0"   # 요약 접기 자동(판 65, chat·허브). 시험 묶음은 끔
         self.ctx = sync_context(backend)    # 실제 문맥 길이 = 서버 max_model_len(있으면). 다르면 시작 화면에 경고
         self.hk = HK.Hooks(profile.hooks, profile.workdir, rec.dir, record=lambda r: self.rec.event("hook", **r))
         self._hook_ctx = self.hk.session_start("chat", "") if self.hk.has("SessionStart") else ""
@@ -299,6 +315,7 @@ class ChatSession:
         self._last_reason = None
         self._asked: str | None = None
         self.rf = RF.settings(profile, interactive=True)   # 실패 문턱에서 도구 없는 되짚기(기본 켬, STEWART_REFLECT=0 이면 끔)
+        self._err_sigs, self._human_noted, self._samerr_hit = {}, set(), None
         self._rstate = RF.State()
         self._fail_steps: list[list[dict]] = []
         self._recent_fail: list[dict] = []
@@ -633,6 +650,8 @@ class ChatSession:
                            "다른 방법을 써라.")
                 if self.fail_count[sig] >= REPEAT_STOP:
                     self._repeat_stop = True
+        if name == "run_shell" and not ok and not tc.get("denied"):   # 같은 오류 되풀이·사람 경계(판 62)
+            result += self._err_watch(str(args.get("command") or ""), result, tc)
         same = self.guard.observe(name, raw_s, ok, result)
         g_note = self.guard.note(same)
         if g_note is None and same == 2 and getattr(self.ui, "goal_notes", False):   # 허브: 두 번째부터 "이미 받은 결과"
@@ -677,13 +696,83 @@ class ChatSession:
 
     # ---- 문맥 줄이기 -----------------------------------------------------
     def compact(self, force: bool = False) -> int:
-        """문턱을 넘었으면(또는 /compact) 아직 안 줄인 앞쪽 덩어리를 한 번에 줄인다(compact.Compactor). 줄인 메시지 수."""
-        c = self.comp.maybe(self.messages, self.st["last_prompt_tokens"], self.st["steps"], force=force)
+        """문턱을 넘었으면(또는 /compact) 아직 안 줄인 앞쪽 덩어리를 한 번에 줄인다(compact.Compactor). 줄인 메시지 수.
+        줄인 뒤 새로 잰 문맥이 아직 SUMMARY_RATIO 를 넘으면(실사용) 앞 대화를 요약으로 접는다(summarize)."""
+        last = self.st["last_prompt_tokens"]
+        c = self.comp.maybe(self.messages, last, self.st["steps"], force=force)
         if not c:
+            win = getattr(self.comp, "full_context", None) or self.backend.max_context
+            if (self.summary_on and not force and last and win and last >= SUMMARY_RATIO * win
+                    and self.st["steps"] > getattr(self, "_clip_step", -1)):   # 줄인 뒤 다시 잰 값으로만
+                self.summarize(reason="auto")
             return 0
         self.st["compactions"] += 1
+        self._clip_step = self.st["steps"]
         self.rec.event("compact", **c)
+        hook = getattr(self.ui, "compacted", None)
+        if hook is not None:
+            hook("clip", c)
         return c["clipped"]
+
+    def _turn_starts(self) -> list[int]:
+        """사람 차례가 시작되는 메시지 자리(툴콜 짝이 끊기지 않는 경계)."""
+        out = []
+        for i, m in enumerate(self.messages):
+            if i == 0 or m.get("role") != "user" or str(m.get("content") or "").startswith("[엔진]"):
+                continue
+            prev = self.messages[i - 1]
+            if prev.get("role") in ("assistant", "system") and not prev.get("tool_calls") or prev.get("role") == "user":
+                out.append(i)
+        return out
+
+    def summarize(self, reason: str = "manual") -> dict | None:
+        """앞 대화(시스템 다음 ~ 최근 SUMMARY_KEEP_TURNS 사람 차례 앞)를 도구 없는 한 번으로 요약해 한 쪽으로 접는다.
+        접을 것이 없거나 요약을 못 받으면 None(대화는 그대로). 기록(transcript·events)에는 원문이 그대로 남는다."""
+        starts = self._turn_starts()
+        if len(starts) <= SUMMARY_KEEP_TURNS:
+            return None
+        cut = starts[-SUMMARY_KEEP_TURNS]
+        span = self.messages[1:cut]
+        if len(span) < 3:
+            return None
+        lines = []
+        for m in span:
+            role = {"user": "사람", "assistant": "에이전트", "tool": "도구 결과"}.get(m.get("role"), m.get("role"))
+            body = str(m.get("content") or "")
+            lim = 600 if m.get("role") == "tool" else 1500
+            body = body if len(body) <= lim else body[:lim] + f"…({len(body)}자)"
+            calls = "; ".join(f"{(tc.get('function') or {}).get('name')}({str((tc.get('function') or {}).get('arguments') or '')[:200]})"
+                              for tc in m.get("tool_calls") or [])
+            lines.append(f"[{role}] {body}" + (f"\n  호출: {calls}" if calls else ""))
+        text = "\n".join(lines)
+        if len(text) > SUMMARY_MAX_CHARS:
+            text = "…(앞은 너무 길어 끝 부분만)\n" + text[-SUMMARY_MAX_CHARS:]
+        try:
+            resp, _dt = chat(self.backend, [{"role": "system", "content": SUMMARY_SYSTEM},
+                                            {"role": "user", "content": "앞 대화:\n" + text}], None, max_tokens=1500, thinking=False)
+            summ = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        except Exception as e:
+            self.rec.event("summarize_fail", reason=reason, error=f"{type(e).__name__}: {e}"[:300])
+            return None
+        if not summ:
+            return None
+        before = len(self.messages)
+        self.messages = [self.messages[0],
+                         {"role": "user", "content": "[엔진] 앞 대화 요약 — 문맥을 줄이려고 엔진이 앞 대화를 접었다. 원문은 기록에 있다"
+                                                     "(memory_search·기록 파일). 사람의 지시·금지는 그대로 지킨다.\n\n" + summ},
+                         {"role": "assistant", "content": "앞 대화 요약을 받았다. 이어 간다."}] + self.messages[cut:]
+        self.comp = self._new_compactor()
+        self.st["last_prompt_tokens"], self._pmark = 0, 0
+        self.st["summaries"] = self.st.get("summaries", 0) + 1
+        info = {"reason": reason, "folded_messages": cut - 1, "before": before, "after": len(self.messages), "summary_chars": len(summ)}
+        self.rec.event("summarize", **info)
+        save_messages(self.rec.dir, self.messages)
+        hook = getattr(self.ui, "compacted", None)
+        if hook is not None:
+            hook("summary", info)
+        else:
+            self.ui.dim(f"  (앞 대화 {cut - 1}개 메시지를 요약 한 쪽으로 접었다 — 문맥 줄이기)")
+        return info
 
     def _clean(self) -> list[dict]:
         return [{k: v for k, v in m.items() if not k.startswith("_")} for m in self.messages]
@@ -772,6 +861,31 @@ class ChatSession:
             mt["thinking"] = False
 
     # ---- 한 차례 ---------------------------------------------------------
+    def _err_watch(self, cmd: str, result: str, tc: dict) -> str:
+        """실패한 셸 하나: 사람 경계 꼴이면 사람 손 카드로 넘기라는 알림(차례에 한 번), 다른 명령이 같은 오류를 SAME_ERROR_AT 번 내면 되짚기."""
+        note = ""
+        hb = ST.human_boundary(result)
+        if hb and hb not in self._human_noted:
+            self._human_noted.add(hb)
+            how = ("허브에서는 board add_todo(type=손작업, title 은 짧게, detail 에 기기·셸·한 줄·하는 일)로 올리고 그 U-번호로 말한 뒤 차례를 마친다."
+                   if "board" in self.tool_names + [d["function"]["name"] for d in self.extra_defs]
+                   else "ask_user 로 그 카드를 보이고 멈춘다.")
+            note += ST.HUMAN_NOTE.format(what=hb, how=how)
+            tc["human_boundary"] = hb
+            self.rec.event("human_boundary", what=hb)
+        sig = ST.err_sig(result)
+        if sig:
+            cmds = self._err_sigs.setdefault(sig, [])
+            if cmd not in cmds:
+                cmds.append(cmd)
+            n = len(cmds)
+            if n >= ST.SAME_ERROR_AT:
+                note += ST.SAME_ERROR_NOTE.format(sig=sig, n=n)
+                tc["same_error"] = n
+                if n == ST.SAME_ERROR_AT:
+                    self._samerr_hit = (sig, list(cmds), tc)
+        return note
+
     def _mem_seen(self, name: str, args: dict, ok: bool, result: str) -> str:
         """도구 한 번: 만진 경로로 대상 프로젝트를 고르고(바뀌면 그 프로젝트 색인을 결과 끝에 한 번), 실패한 셸은 차례 끝 메모로 모은다."""
         paths = []
@@ -862,6 +976,8 @@ class ChatSession:
         self._blocked: dict = {}          # 되짚기 뒤 이 차례에 막은 호출 서명
         self._last_reflect = ""
         self._asked = None
+        self._err_sigs, self._human_noted, self._samerr_hit = {}, set(), None   # 같은 오류·사람 경계(판 62), 차례마다
+        self.compact()                # 차례 시작에도 문턱을 본다(판 65): 도구 없이 답만 하는 차례가 이어지면 단계 뒤 판정이 돌지 않았다
         self._rstate = RF.State()     # 되짚기 횟수는 차례마다(사람이 "계속" 하면 다시 한 번 쓸 수 있다)
         self._fail_steps, self._recent_fail = [], []
         self._cut, self._continued = False, 0
@@ -999,6 +1115,13 @@ class ChatSession:
                             continue
                         reason = "repeated_failure"
                         break
+                    if self._samerr_hit:   # 다른 명령이 같은 오류를 거듭 냄 → 되짚기(판 62)
+                        sig, cmds, stc = self._samerr_hit
+                        self._samerr_hit = None
+                        facts = f"- 오류 꼴 `{sig}` 을 낸 명령 {len(cmds)}개:\n" + "\n".join(f"    $ {c[:160]}" for c in cmds)
+                        if self._reflect("same_error", step, consecutive, calls=[stc], facts=facts, label=f"같은 오류 {len(cmds)}번"):
+                            consecutive = 0
+                            continue
                     if self._guard_hit:
                         hit, self._guard_hit = self._guard_hit, 0
                         gtc, self._guard_tc = self._guard_tc, None

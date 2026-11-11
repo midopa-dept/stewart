@@ -47,6 +47,10 @@ class ToolEnv:
     last_search_zero: bool = False                   # 마지막 검색이 0건이었다(그 뒤 plan_add 항목은 미확정으로)
     quota: dict | None = None                        # brave 이달 셈(/quota.json). 못 읽으면 None
     quota_at: int = -1                               # quota 를 읽을 때의 검색 수(-1 = 아직 안 읽음)
+    quota_warned: str = ""                           # 이미 알린 brave 이달 경고("80"·"0") — 같은 경고를 되풀이하지 않게(판 61)
+    doc_index: object = None                         # doc_search 색인(세션 안, 판 64)
+    web_cache_dir: object = None                     # web_fetch 본문을 남길 자리(실사용 + 기억 켬일 때만, 판 64)
+    on_quota: object = None                          # 경고 한 줄을 받는 고리(허브: 폰 알림·화면 경고). 없으면 결과 글에만
     fetch_log: list = field(default_factory=list)    # [{url, final_url, status, bytes, error}]
     fetch_cache: dict = field(default_factory=dict)  # url → (제목, 글, 최종 주소). 메모리에만
     artifacts_dir: Path | None = None               # 그 실행의 기록 폴더(runs/<실행>). 정리 도구의 scan·plan 파일이 여기 생긴다
@@ -840,13 +844,18 @@ def _norm_query(q: str) -> str:
 WEB_CATEGORIES = ("general", "it", "science", "news")   # SearXNG 범주 이름. 모델이 고른다
 QUOTA_NEAR = 20        # brave 남은 어림이 이 아래면 다시 읽는다(실행 시작·한도 근처에서만)
 QUOTA_EVERY = 5        # 다시 읽기 사이 최소 검색 수
+QUOTA_REFRESH = 10     # 한도와 멀어도 이만큼 검색마다 한 번 다시 읽는다
+QUOTA_WARN = 0.8       # brave 이달 이만큼 넘게 쓰면 한 번 알린다(월 무료 한도를 넘겨 돈이 나가지 않게)
 
 
 def _quota_line(env: ToolEnv) -> str:
     """'brave 남은 n/950' 또는 'brave 이달 한도 도달(무료 엔진만)'. 못 읽으면 빈 글."""
     n = len(env.search_log)
     est = None if env.quota is None else env.quota["remaining"] - (n - env.quota_at)
-    need = env.quota_at < 0 or (est is not None and est <= QUOTA_NEAR and n - env.quota_at >= QUOTA_EVERY)
+    lim0 = (env.quota or {}).get("limit") or 0
+    near = max(QUOTA_NEAR, int(lim0 * (1 - QUOTA_WARN))) if lim0 else QUOTA_NEAR
+    need = (env.quota_at < 0 or (est is not None and est <= near and n - env.quota_at >= QUOTA_EVERY)
+            or n - env.quota_at >= QUOTA_REFRESH)   # 다른 기기·세션이 쓴 몫도 보이게 가끔 다시 읽는다(정적 파일 하나라 싸다)
     if need and hasattr(_searx(env), "quota"):
         q = _searx(env).quota(env.web.get("quota_url"))
         env.quota_at = n
@@ -855,10 +864,26 @@ def _quota_line(env: ToolEnv) -> str:
         est = None if env.quota is None else env.quota["remaining"] - (n - env.quota_at)
     if env.quota is None:
         return ""
-    if not env.quota["enabled"] or (est is not None and est <= 0):
-        return "brave 이달 한도 도달 또는 꺼짐(무료 엔진만)"
     lim = env.quota.get("limit")
+    if not env.quota["enabled"] or (est is not None and est <= 0):
+        _quota_warn(env, "0", f"brave 이달 한도 도달 또는 꺼짐 — 무료 엔진(bing·naver 등)만으로 검색한다"
+                              + (f"(상한 {lim})" if lim else ""))
+        return "brave 이달 한도 도달 또는 꺼짐(무료 엔진만)"
+    if lim and est is not None and est <= lim * (1 - QUOTA_WARN):
+        _quota_warn(env, "80", f"brave 이달 {int(QUOTA_WARN * 100)}% 넘게 씀 — 남은 약 {max(0, est)}/{lim}. 다 쓰면 무료 엔진만 남는다")
     return f"brave 남은 약 {max(0, est)}" + (f"/{lim}" if lim else "")
+
+
+def _quota_warn(env: ToolEnv, level: str, text: str) -> None:
+    """같은 단계 경고는 한 번만. 고리(허브 알림)가 있으면 부른다 — 깨져도 검색은 그대로."""
+    if env.quota_warned == level or (env.quota_warned == "0" and level == "80"):
+        return
+    env.quota_warned = level
+    if callable(env.on_quota):
+        try:
+            env.on_quota(text)
+        except Exception:
+            pass
 
 
 ZERO_STREAK_WARN = 2
@@ -887,8 +912,11 @@ def web_search(env: ToolEnv, query: str, for_file: str = "", categories: str = "
     - 전체 상한에 닿으면 오류가 아니라 안내로 돌려준다(연속 오류로 실행이 끝나 계획이 사라지지 않게).
     - 같은 검색어(공백·대소문자만 다른 것 포함)는 다시 묻지 않고 앞 결과를 보여 준다. 횟수에 넣지 않는다.
     - 결과 끝에 남은 횟수를 붙인다."""
-    if not env.web:
+    if not env.web or not env.web.get("url"):
         return False, "web_search가 설정되지 않았다(검색 주소 없음)."
+    from .memory import _SECRETISH
+    if _SECRETISH.search(str(query or "")):   # 검색어는 밖(검색 엔진)으로 나간다 — 비밀 꼴은 보내지 않는다
+        return False, "검색어에 비밀 꼴(토큰·키·비밀번호·긴 무작위 글)이 있어 보내지 않았다. 그 부분을 빼고 다시 검색하라."
     total = int(env.web.get("max_total") or WEB_MAX_TOTAL)
     cat = str(categories or "").strip().lower()
     if cat and cat not in WEB_CATEGORIES:
@@ -924,6 +952,9 @@ def web_search(env: ToolEnv, query: str, for_file: str = "", categories: str = "
     r = _searx(env).search(query, max_results=int(env.web.get("max_results", 5)), **kw)
     if r.get("error"):
         entry["error"] = r["error"]
+        if "429" in str(r["error"]):   # 검색 서버 앞단의 요청 제한 — 바로 다시 해도 같은 결과
+            return False, (f"검색 실패: 검색 서버가 요청이 잦다고 막았다(429, 기다렸다 {getattr(_searx(env), 'max_retries', 3)}번 다시 했다). "
+                           "같은 검색을 바로 되풀이하지 말고, 지금 아는 것으로 이어 가거나 잠시 뒤에 한 번만 다시 하라.")
         return False, f"검색 실패: {r['error']}"
     res = r["results"]
     nb = sum(1 for x in res if NS.is_brave(x.get("engines")))
@@ -982,6 +1013,12 @@ def web_fetch(env: ToolEnv, url: str, offset: int = 0, max_chars: int = FETCH_MA
             return False, str(e)
         final = res["final_url"]
         env.fetch_cache[url] = (title, text, final)
+        if env.web_cache_dir:   # 다음에 doc_search 로 다시 찾게(판 64) — 못 남겨도 읽기는 그대로
+            try:
+                from . import docsearch as DS
+                DS.web_save(env.web_cache_dir, final, title, text)
+            except OSError:
+                pass
     part = text[offset: offset + max_chars]
     head = [f"주소: {final}" + (f" (요청 {url})" if final != url else "")]
     if title:
@@ -991,6 +1028,60 @@ def web_fetch(env: ToolEnv, url: str, offset: int = 0, max_chars: int = FETCH_MA
     if offset + len(part) < len(text):
         tail = f"\n…(더 있다: offset={offset + len(part)} 으로 이어 읽는다)"
     return True, "\n".join(head) + "\n" + _outside(final, part or "(빈 본문)") + tail
+
+
+DOC_SEARCH_MAX_CHARS = 6000
+
+
+def doc_search(env: ToolEnv, query: str, path: str = ".", source: str = "all") -> tuple[bool, str]:
+    """작업 폴더 문서·코드(+ 한 번 읽은 웹 글)를 낱말 순위로 찾는다. 이름·기호·오류 문구를 정확히 알면 search 가 낫다."""
+    from . import docsearch as DS
+    if source not in ("all", "files", "web"):
+        return False, "source 는 all·files·web 중 하나"
+    if not str(query or "").strip():
+        return False, "query 가 비었다"
+    base = _p(env, path)
+    if not base.is_dir():
+        return False, f"폴더가 없다: {path}"
+    if env.doc_index is None:
+        env.doc_index = DS.Index()
+    items, n = [], 0
+    if source != "web":
+        for f in fswalk.walk(env.workdir, skip=lambda q, d: not d and env.is_secret(q)):
+            if f.suffix.lower() not in DS.TEXT_EXT and f.name not in ("README", "Makefile", "Dockerfile", "LICENSE"):
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if st.st_size > DS.MAX_FILE_BYTES:
+                continue
+            n += 1
+            if n > DS.MAX_FILES:
+                break
+
+            def read(f=f):
+                try:
+                    return f.read_text(encoding="utf-8", errors="strict")
+                except (UnicodeDecodeError, OSError):
+                    return ""
+            items.append((_rel(env, f), st.st_size, st.st_mtime, read))
+    items += list(DS.web_items(env.web_cache_dir)) if source != "files" else []
+    re_read = env.doc_index.update(items)
+    rel = _rel(env, base) if base.resolve() != Path(env.workdir).resolve() else ""
+    prefix = "web:" if source == "web" else (rel.rstrip("/") + "/" if rel and rel != "." else "")
+    hits = env.doc_index.search(query, prefix=prefix)
+    if not hits:
+        return True, f"doc_search '{query}': 맞는 쪽 없음(문서 {len(env.doc_index.files)}개 훑음). 낱말을 바꾸거나 search(정규식)로."
+    out = [f"doc_search '{query}' — 문서 {len(env.doc_index.files)}개 중 순위(이번에 다시 읽음 {re_read}). 주장하기 전에 read_file 로 그 줄을 읽어라."]
+    for h in hits:
+        out.append(f"{h['key']}:{h['start']}-{h['end']}  (점수 {h['score']})")
+        for ln, t in h["hits"]:
+            out.append(f"    {ln}: {t.strip()[:200]}")
+    body = "\n".join(out)
+    if any(h["key"].startswith("web:") for h in hits):
+        body = _outside("doc_search 결과(웹 글 캐시 포함)", body)
+    return True, body[:DOC_SEARCH_MAX_CHARS]
 
 
 # ── 폴더 정리 도구(정리 프로필 전용, tools="*" 에 들어가지 않는다) ──────────────────────
@@ -1187,6 +1278,7 @@ def plan_drop(env: ToolEnv, ids: list) -> tuple[bool, str]:
     return True, f"뺐다 {n}건, 계획 전체 {len(plan.items)}건 " + _plan_md(env)
 
 
+OPT_IN = {"doc_search"}   # "*" 에 들지 않는 도구 — 실사용(chat·허브)이 따로 붙인다, 평가 길은 목록에 적어야 열린다(판 64)
 ORGANIZE_TOOLS = {"folder_scan", "scan_read", "scan_stats", "peek", "plan_add", "plan_show", "plan_drop"}
 
 
@@ -1263,6 +1355,12 @@ TOOLS = {
                    "description": "content=맞은 줄(기본), files=파일 이름만, count=파일마다 맞은 줄 수"},
         "ignore_case": {"type": "boolean", "description": "대소문자 무시"},
     }, ["pattern"]),
+    "doc_search": (doc_search, "문서·코드를 뜻이 가까운 낱말로 찾아 순위대로 경로:줄을 준다(BM25, 한 번 읽은 웹 글 포함). "
+                   "정확한 이름·기호·오류 문구는 search 가 낫다. 찾은 뒤에는 read_file 로 읽고 말한다.", {
+        "query": {"type": "string", "description": "찾을 말(낱말 몇 개, 한국어·영어)"},
+        "path": {"type": "string", "description": "이 폴더 아래만, 기본 '.'"},
+        "source": {"type": "string", "enum": ["all", "files", "web"], "description": "all(기본)·files(작업 폴더만)·web(한 번 읽은 웹 글만)"},
+    }, ["query"]),
     "glob": (glob_files, "경로 패턴으로 파일 이름을 찾는다(.gitignore 의 파일은 건너뜀).", {
         "pattern": {"type": "string", "description": "path 기준 경로 패턴. *.py 는 맨 위만, **/*.py 는 모든 깊이"},
         "path": {"type": "string", "description": "찾기 시작할 폴더, 기본 '.'"},
@@ -1370,7 +1468,7 @@ def unknown_tool(name: str, available: list[str]) -> str:
 
 def definitions(names: list[str]) -> list[dict]:
     if names == ["*"]:
-        names = [n for n in TOOLS if n not in ORGANIZE_TOOLS]   # 정리 도구는 정리 프로필에서만 연다
+        names = [n for n in TOOLS if n not in ORGANIZE_TOOLS and n not in OPT_IN]   # 정리 도구는 정리 프로필에서만 연다
     out = []
     for n in names:
         if n not in TOOLS:

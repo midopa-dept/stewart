@@ -240,6 +240,30 @@ class TTuiWindows(unittest.TestCase):
     def test_console_helpers_are_noop_on_posix(self):
         self.assertIsNone(osdep.win_console_vt())
         self.assertFalse(osdep.win_on_ctrl_c(lambda: None))
+        self.assertFalse(osdep.win_ctrl_c_enable())
+
+
+class TCtrlCEnable(unittest.TestCase):
+    """sshd 아래(새 프로세스 그룹 물림)에서도 사람이 쓰는 명령은 Ctrl-C 를 받게, 작업자는 그대로(11-11 VM 6·20·22)."""
+
+    def _run(self, argv):
+        from stewart import cli
+        calls = []
+        with mock.patch.object(osdep, "IS_WIN", True), \
+                mock.patch.object(osdep, "win_on_ctrl_c", lambda fn: calls.append("handler") or True), \
+                mock.patch.object(osdep, "win_ctrl_c_enable", lambda: calls.append("enable") or True), \
+                mock.patch("stewart.worker.main", lambda a: 0):
+            try:
+                cli.main(argv)
+            except SystemExit:
+                pass
+        return calls
+
+    def test_worker_keeps_ctrl_c_off(self):
+        self.assertEqual(self._run(["worker", "--session-dir", "x"]), ["handler"])
+
+    def test_people_commands_enable(self):
+        self.assertEqual(self._run(["profiles"]), ["handler", "enable"])
 
 
 if __name__ == "__main__":

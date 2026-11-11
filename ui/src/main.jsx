@@ -1,5 +1,6 @@
 // stewart 허브 화면 — 틀: 데스크톱은 [사이드바 | 대화 | (필요할 때) 작업 내역], 폰은 한 화면(서랍·아래 시트)
 import './polyfills.js'
+import './copy.js'
 import { render, Component } from 'preact'
 import { useEffect, useRef, useState, useLayoutEffect } from 'preact/hooks'
 import './app.css'

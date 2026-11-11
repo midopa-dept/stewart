@@ -466,6 +466,20 @@ def win_console_vt() -> str | None:
     return None
 
 
+def win_ctrl_c_enable() -> bool:
+    """Windows: 이 프로세스의 콘솔 Ctrl-C 처리를 켠다(SetConsoleCtrlHandler(NULL, FALSE)).
+    CREATE_NEW_PROCESS_GROUP 로 뜬 프로세스는 Ctrl-C 를 무시하고, 그 성질이 자식에게 물려진다 — 예: Windows OpenSSH 의
+    sshd 아래에서 뜬 셸·stewart(11-11 VM: 연기 시험 6·20·22 가 ssh 길에서만 Ctrl-C 를 못 받음). 사람이 쓰는 명령
+    (chat·hub 등)만 부른다. 허브 작업자는 일부러 새 프로세스 그룹이라 Ctrl-C 를 받지 않아야 하므로 부르지 않는다.
+    켰으면 True."""
+    if not IS_WIN:
+        return False
+    k = ctypes.WinDLL("kernel32", use_last_error=True)      # type: ignore[attr-defined]
+    k.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    k.SetConsoleCtrlHandler.restype = ctypes.c_int
+    return bool(k.SetConsoleCtrlHandler(None, 0))
+
+
 def win_on_ctrl_c(fn) -> bool:
     """Windows 콘솔 Ctrl-C·Ctrl-Break 때 fn() 을 (그 신호용 스레드에서) 먼저 부른다. 파이썬의 SIGINT 처리는 그대로 이어진다
     (False 를 돌려 다음 처리기로 넘긴다). 붙였으면 True."""

@@ -1,7 +1,7 @@
 // 오른쪽 패널(데스크톱, 기본 닫힘) / 아래 시트(폰): 단계 · 계획 · 늘 허용 · 토큰
 import { useState, useEffect } from 'preact/hooks'
 import { get, post, fmtK, fmtSecs } from './lib.js'
-import { hub, panel, setPanel, sessions, toast, refresh } from './state.js'
+import { hub, panel, setPanel, sessions, toast, refresh, busy } from './state.js'
 import { STATUS } from './side.jsx'
 
 const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰']]
@@ -187,6 +187,10 @@ function MemoryTab() {
   )
 }
 
+async function compactNow(mode) {
+  try { await post('/api/main/compact', { mode }); refresh() } catch (e) { toast('못 줄임: ' + e.message) }
+}
+
 function Tokens() {
   const t = hub.value?.tokens
   if (!t) return <div class="text-mute text-sm p-4">아직 없음</div>
@@ -205,6 +209,12 @@ function Tokens() {
         <div class="font-semibold mt-3 mb-1">이번 차례</div>
         {row('입력', fmtK(t.turn.prompt))}{row('출력', fmtK(t.turn.completion))}{row('단계', t.turn.steps)}{row('모델 시간', fmtSecs(t.turn.model_s || 0))}
       </>}
+      {row('요약해 접은 횟수', t.summaries || 0)}
+      <div class="flex gap-2 mt-3">
+        <button class="btn !py-1 text-xs" disabled={busy.value} onClick={() => compactNow('clip')} title="오래된 도구 결과를 줄인다(원문은 기록에)">줄이기</button>
+        <button class="btn !py-1 text-xs" disabled={busy.value} onClick={() => compactNow('summary')} title="최근 두 차례 앞의 대화를 요약 한 쪽으로 접는다(원문은 기록에)">요약해 접기</button>
+      </div>
+      <div class="text-xs text-mute mt-2">자동: 문맥이 줄이기 선(창의 50%)을 넘으면 오래된 도구 결과를 줄이고, 그래도 70% 를 넘으면 앞 대화를 요약해 접는다. 일하는 중에는 누를 수 없다.</div>
       <div class="text-xs text-mute mt-3">입력은 서버가 알려 준 prompt_tokens(같은 앞부분은 서버 캐시로 다시 읽지 않을 수 있다).</div>
     </div>
   )

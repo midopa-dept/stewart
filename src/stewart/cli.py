@@ -369,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     if osdep.IS_WIN:   # 콘솔 Ctrl-C 가 막혀 있는 소켓 읽기를 깨우지 못하므로 받는 중인 연결을 먼저 끊는다(WIN-4)
         from .backend import abort_streams
         osdep.win_on_ctrl_c(abort_streams)
+        if a.cmd != "worker":     # 작업자는 Ctrl-C 를 받지 않는 새 프로세스 그룹 그대로(hub 22번)
+            osdep.win_ctrl_c_enable()
     if a.cmd == "worker":
         from . import worker
         return worker.main(["--session-dir", a.session_dir]

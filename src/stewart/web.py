@@ -63,8 +63,13 @@ def _page(kind: str = "new") -> str:
     """화면 HTML. new = 새 화면(web_ui/), old = 예전 한 파일 화면(되돌릴 길)."""
     if kind in UI_DIRS:
         p = resources.files("stewart").joinpath(UI_DIRS[kind], "index.html")
-        if p.is_file():
-            return p.read_text(encoding="utf-8")
+        if p.is_file():   # 빌드 지문을 ?v= 로 붙여 옛 app.js 를 브라우저가 붙잡지 않게(판 65)
+            h = resources.files("stewart").joinpath(UI_DIRS[kind], "SOURCE_HASH")
+            v = h.read_text(encoding="utf-8").strip()[:12] if h.is_file() else ""
+            page = p.read_text(encoding="utf-8")
+            if v:
+                page = page.replace('/ui/app.js"', f'/ui/app.js?v={v}"').replace('/ui/app.css"', f'/ui/app.css?v={v}"')
+            return page
     return resources.files("stewart").joinpath("web_page.html").read_text(encoding="utf-8")
 
 
@@ -342,6 +347,11 @@ class WebApp:
                 if ok:
                     self._notice("사람이 되짚기 금지 하나를 풀었다 — 그 호출을 다시 할 수 있다")
                 return self._json(h, 200 if ok else 404, {"ok": ok})
+            if path == "/api/main/compact":   # 화면 [줄이기]·[요약해 접기](판 65) — 일하는 중이면 409
+                try:
+                    return self._json(h, 200, self.main.compact_now(str(data.get("mode") or "clip")))
+                except (ValueError, RuntimeError) as e:
+                    return self._json(h, 409, {"error": "compact", "detail": str(e)})
             if path == "/api/main/stop":   # 화면 [멈춤]: 메인 차례 끊기
                 return self._json(h, 200, {"result": self.main.stop_turn()})
             if path == "/api/main/reopen":   # 지난 메인 대화로 다시 열기(목록에 든 기록만)
@@ -435,7 +445,7 @@ class WebApp:
             return self._json(h, 200, {"rules": [{"id": r.id, "pattern": r.pattern, "warn": broad_note(r.pattern),
                                                   "scope": "session" if r.origin == "session" else "project"}
                                                  for r in self.hub.allow_rules()]})
-        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
+        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
                     "/api/session/control"):
             return self._json(h, 405, {"error": "method"})
         return self._json(h, 404, {"error": "not_found"})

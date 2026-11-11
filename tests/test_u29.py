@@ -69,8 +69,12 @@ class TServe(MainBase):
 
     def test_new_ui_default_and_old_fallback(self):
         r, page = self.req("GET", "/", headers={"Cookie": self.ck})
-        self.assertIn(b'src="/ui/app.js"', page)
+        v = (OUT / "SOURCE_HASH").read_text().strip()[:12].encode()
+        self.assertIn(b'src="/ui/app.js?v=' + v + b'"', page)              # 빌드 지문으로 캐시 깨기(판 65)
+        self.assertIn(b'href="/ui/app.css?v=' + v + b'"', page)
         self.assertNotIn(b"__CSRF__", page)
+        r, js = self.req("GET", "/ui/app.js?v=" + v.decode(), headers={"Cookie": self.ck})
+        self.assertEqual(r.status, 200)
         r, old = self.req("GET", "/?ui=old", headers={"Cookie": self.ck})
         self.assertIn(b'id="askbar"', old)                        # 옛 한 파일 화면(되돌릴 길)
         r, js = self.req("GET", "/ui/app.js", headers={"Cookie": self.ck})

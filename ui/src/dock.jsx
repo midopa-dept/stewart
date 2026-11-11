@@ -3,6 +3,7 @@ import { Component } from 'preact'
 import { useState, useRef, useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { post, get, store } from './lib.js'
+import { copyText, flash } from './copy.js'
 import { hub, queue, busy, refresh, toast, view, sessions } from './state.js'
 
 const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
@@ -111,9 +112,13 @@ function AskCard({ it, full }) {
       </div>
       {it.prompt && it.prompt !== text && (full || !s.command) && <div class="text-[13px] mt-1 whitespace-pre-wrap">{it.prompt}</div>}
       {/* 긴 명령은 띠 안에서 스크롤(대화가 가려지지 않게 높이 상한). 폰은 두 줄만, 누르면 전문 */}
-      <pre class={'font-mono text-[12.5px] leading-normal my-2 bg-code rounded-lg px-2.5 py-2 whitespace-pre-wrap break-all overflow-auto ' +
-        (full ? 'max-h-[50vh]' : 'max-h-36 max-md:max-h-[3.4em] max-md:overflow-hidden max-md:cursor-pointer')}
-        onClick={() => { if (!full && window.matchMedia('(max-width: 767px)').matches) sheetAsk.value = key }}>{s.command ? text : text}</pre>
+      <div class="relative">
+        <pre class={'font-mono text-[12.5px] leading-normal my-2 bg-code rounded-lg pl-2.5 pr-14 py-2 whitespace-pre-wrap break-all overflow-auto ' +
+          (full ? 'max-h-[50vh]' : 'max-h-36 max-md:max-h-[3.4em] max-md:overflow-hidden max-md:cursor-pointer')}
+          onClick={() => { if (!full && window.matchMedia('(max-width: 767px)').matches) sheetAsk.value = key }}>{text}</pre>
+        <button type="button" class="cp-btn absolute top-1.5 right-1.5" title="명령 전문 복사"
+          onClick={e => { e.stopPropagation(); const b = e.currentTarget; copyText(text).then(ok => flash(b, ok)) }}>복사</button>
+      </div>
       {full && s.diff && <pre class="font-mono text-xs bg-code rounded-lg px-2.5 py-2 max-h-[40vh] overflow-auto">{s.diff.map((l, i) => <span key={i} class={'block ' + (l.startsWith('+') ? 'dl-add' : l.startsWith('-') ? 'dl-del' : '')}>{l}</span>)}</pre>}
       {!full && s.diff && <div class="text-xs text-mute -mt-1 mb-2">diff {s.diff.length}줄 — <button class="underline" onClick={() => { sheetAsk.value = key }}>전문 보기</button></div>}
       <div class="flex gap-1.5 flex-wrap items-center">

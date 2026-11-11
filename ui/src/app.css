@@ -98,3 +98,10 @@ button:disabled { cursor: default; opacity: .55; }
 .safe-b { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 /* 단추 안 단축키 힌트(판 57, 꼴은 OpenHands — ui/THIRD_PARTY.md) */
 .kbd { margin-left: .4rem; padding: 0 .3rem; border: 1px solid currentColor; border-radius: .3rem; font-size: 10.5px; opacity: .6; font-family: inherit; }
+/* 코드 블록 머리·복사(판 63) */
+.md .cb { position: relative; margin: .6rem 0; border: 1px solid var(--c-line); border-radius: .6rem; overflow: hidden; background: var(--c-code); }
+.md .cb pre { margin: 0; border: 0; border-radius: 0; }
+.cb-head { display: flex; align-items: center; gap: .5rem; padding: .2rem .5rem .2rem .75rem; font-size: 11.5px; color: var(--c-mute); border-bottom: 1px solid var(--c-line); }
+.cb-head span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-btn { flex: none; font-size: 11.5px; padding: .1rem .55rem; border: 1px solid var(--c-line); border-radius: .4rem; background: var(--c-panel); color: var(--c-fg); cursor: pointer; }
+.cp-btn:hover { background: var(--c-soft); }

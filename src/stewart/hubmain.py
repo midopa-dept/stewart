@@ -135,6 +135,14 @@ class HubMainUI(HubUI):
         self._add("diff", "\n".join(lines))
         self.log[-1]["stat"] = st
 
+    def compacted(self, kind: str, info: dict) -> None:
+        """chat 이 문맥을 줄였을 때 화면 한 줄(판 65)."""
+        if kind == "clip":
+            self._add("compact", f"문맥 줄임: 오래된 도구 결과 {info.get('clipped', 0)}개를 줄였다(원문은 기록에, 필요하면 다시 읽는다)")
+        else:
+            self._add("compact", f"앞 대화를 요약으로 접음: 메시지 {info.get('folded_messages', 0)}개 → 요약 한 쪽"
+                                 f"({'자동 — 문맥이 문턱을 넘음' if info.get('reason') == 'auto' else '사람이 누름'}, 원문은 기록에)")
+
     def tool_done(self, tc: dict) -> None:
         """도구 하나가 끝났다(chat 이 모든 길에서 부른다): 화면 작업 카드의 그 단계 줄에 ✓/✕·걸린 시간·같은 오류 몇 번째를 붙인다."""
         for m in reversed(self.log):
@@ -147,6 +155,11 @@ class HubMainUI(HubUI):
                 if tc.get("name") == "todo_write" and ok and getattr(self, "env", None) is not None:
                     m["todos"] = [dict(t) for t in (getattr(self.env, "todos", None) or [])]   # 그때의 목록(앞 카드는 이것으로)
                 m["ok"], m["elapsed"] = ok, round(float(tc.get("elapsed_s") or 0), 2)
+                if tc.get("name") == "run_shell":   # [명령 복사] 는 줄인 한 줄이 아니라 명령 전문(판 65)
+                    try:
+                        m["command"] = str(json.loads(tc.get("raw_arguments") or "{}").get("command") or "")[:8000]
+                    except (ValueError, AttributeError):
+                        pass
                 if not ok:
                     first = next((x.strip() for x in str(tc.get("result") or "").splitlines() if x.strip()), "")
                     sig = str(tc.get("name")) + "\0" + first[:160]
@@ -245,6 +258,7 @@ class HubMain:
         if history:
             self.ui._add("info", f"앞 메인 대화를 이어 받았다({resumed_from}). 새로 시작하려면 허브를 --new-main 으로 띄운다.")
         self.ui.env = self.sess.env
+        self.sess.env.on_quota = self._quota_alert   # brave 이달 80%·한도 도달 → 폰·화면(판 61)
         from .modelstat import ModelWatch
         self._idle_since = time.monotonic()  # 꿈꾸기 자동의 한가함 잣대(판 54)
         self.watch = ModelWatch(backend)      # 모델 서버 점(허브가 start — 시험에서는 띄우지 않는다)
@@ -286,6 +300,15 @@ class HubMain:
             if exp is not None:
                 self.ui._add("info", f"({text.split()[0]} → 프로젝트 명령 본문을 보낸다)")
                 text = exp
+            elif text.split()[0] == "/compact":   # 허브 칸에서도 줄이기(판 65): "/compact" = 도구 결과 줄이기, "/compact 요약" = 앞 대화 접기
+                self.ui._add("user", text)
+                try:
+                    r = self.compact_now("summary" if "요약" in text or "summary" in text else "clip")
+                    if r.get("ok") and r.get("clipped"):
+                        pass   # compacted 고리가 한 줄을 남겼다
+                except RuntimeError as e:
+                    self.ui._add("warn", f"/compact: {e}")
+                return "compacted"
             elif text.split()[0] in COMMANDS:
                 self.ui._add("warn", f"{text.split()[0]} 는 stewart chat 의 내장 명령이다. 허브 메인 칸에서는 쓰지 않는다.")
                 return "builtin_ignored"
@@ -303,9 +326,10 @@ class HubMain:
             st = self.sess.st
             self._turn0 = (st.get("prompt_tokens_total") or 0, st.get("completion_tokens") or 0, st.get("steps") or 0,
                            round(st.get("model_time_s") or 0, 1))
-            n0 = len(self.sess.messages)
+            n0, f0 = len(self.sess.messages), self.sess.st.get("summaries", 0)
             reason = self.sess.turn(text, images=images)
-            self._extract_later(n0)
+            if self.sess.st.get("summaries", 0) == f0:   # 차례 안에서 앞 대화를 접었으면 자리(n0)가 바뀌어 이번에는 건너뛴다
+                self._extract_later(n0)
             try:   # 차례 끝 꼬리표: 열린 사용자 할 일 + 승인 대기(판과 대기열이 출처)
                 tail = self.hub.board.tail(self.hub.queue())
                 if tail:
@@ -325,6 +349,14 @@ class HubMain:
             self._busy.release()
 
     # ── 꿈꾸기 자동(판 54): 한가할 때·닫을 때, 모델 서버가 준비됐을 때만(깨우려고 부르지 않는다) ──
+    def _quota_alert(self, text: str) -> None:
+        self.ui._add("warn", "웹 검색: " + text)
+        if self.hub._notify_on:
+            try:
+                self.hub._notify("stewart 웹 검색: " + text)
+            except Exception:
+                pass
+
     def _dream_due(self) -> bool:
         """고리에서 쓰레드를 띄울지 가볍게(모델·파일 안 봄): 한가한 시간·다시 보기 간격만."""
         from . import dream as DR
@@ -385,6 +417,7 @@ class HubMain:
                                     default_mode="edits", extra_tools=(HT.DEFINITIONS, self.tools.execute),
                                     history=history, resumed_from=run_dir)
             self.ui.env = self.sess.env
+            self.sess.env.on_quota = self._quota_alert
             self._resumed, self._turn0 = True, None
             self.ui.sd.set_status(run_dir=str(rec.dir))
             try:
@@ -430,6 +463,25 @@ class HubMain:
         t = threading.Thread(target=run, daemon=True)
         t.start()
         self._extract_t = t
+
+    def compact_now(self, mode: str = "clip") -> dict:
+        """사람이 누른 줄이기: clip = 오래된 도구 결과 줄이기, summary = 앞 대화를 요약으로 접기. 일하는 중이면 RuntimeError."""
+        if mode not in ("clip", "summary"):
+            raise ValueError("mode 는 clip 또는 summary")
+        if not self._busy.acquire(blocking=False):
+            raise RuntimeError("메인이 일하는 중이다 — 차례가 끝난 뒤에 누른다")
+        try:
+            if mode == "clip":
+                n = self.sess.compact(force=True)
+                if not n:
+                    self.ui._add("compact", "문맥 줄이기: 더 줄일 오래된 도구 결과가 없다")
+                return {"ok": True, "clipped": n}
+            r = self.sess.summarize(reason="manual")
+            if r is None:
+                self.ui._add("compact", "요약해 접기: 접을 앞 대화가 없거나(최근 두 차례는 남긴다) 요약을 받지 못했다")
+            return {"ok": r is not None, **(r or {})}
+        finally:
+            self._busy.release()
 
     def stop_turn(self) -> str:
         """화면 [멈춤]: 메인 차례를 끊는다. 도는 셸 명령은 끝날 때까지 기다린 뒤 다음 단계 앞에서 끊긴다."""
@@ -518,6 +570,7 @@ class HubMain:
                 "vision": bool(self.sess.backend.vision), "pending": list(self.ui.pending),
                 "backend": {"name": self.sess.backend.name, "model": self.sess.backend.model},
                 "tokens": self.tokens(), "resume_note": self.resume_note(), "model": self.watch.status,
+                "web": getattr(self.sess, "web_status", None),
                 "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view()}
 
     def tokens(self) -> dict:
@@ -527,7 +580,7 @@ class HubMain:
         out = {"last_prompt": st.get("last_prompt_tokens") or 0, "window": getattr(comp, "full_context", None) or self.sess.backend.max_context,
                "compact_at": round(at) if isinstance(at, (int, float)) and at != float("inf") else None,
                "prompt_total": st.get("prompt_tokens_total") or 0, "completion_total": st.get("completion_tokens") or 0,
-               "steps": st.get("steps") or 0, "compactions": st.get("compactions") or 0, "model_s": round(st.get("model_time_s") or 0, 1)}
+               "steps": st.get("steps") or 0, "compactions": st.get("compactions") or 0, "summaries": st.get("summaries") or 0, "model_s": round(st.get("model_time_s") or 0, 1)}
         t0 = self._turn0
         if t0 is not None:
             out["turn"] = {"prompt": out["prompt_total"] - t0[0], "completion": out["completion_total"] - t0[1],

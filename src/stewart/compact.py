@@ -199,7 +199,7 @@ class Compactor:
         self.full_context = max_context
         # 최근 몫 상한: 남길 최근 메시지 글자 합이 창의 keep_share 만큼(토큰≈글자/3)을 넘으면 더 앞당겨 줄인다.
         # 큰 도구 결과 몇 개가 최근 keep_recent 안에 다 들어 있으면 줄일 것이 없어지기 때문(작은 모델 시험에서 본 것)
-        self.keep_chars = int(keep_share * self.max_context * 3)
+        self.keep_tokens = int(keep_share * self.max_context)   # 판 65: 글자/3 으로 재면 한글·숫자에서 최근 몫이 창 대부분이 됐다 — 토큰 어림으로
         self.ratio = ratio
         self.keep_recent = keep_recent
         self.clip = clip
@@ -225,9 +225,12 @@ class Compactor:
             end = max(self.upto, end)
         else:
             end = max(self.upto, len(messages) - k)
-            tail = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages[end:])
-            while end < len(messages) - 2 and tail > self.keep_chars:   # 마지막 2개(직전 호출과 그 결과)는 늘 남긴다
-                tail -= len(json.dumps(messages[end], ensure_ascii=False))
+            sizes = [est_tokens(json.dumps(m, ensure_ascii=False)) for m in messages[end:]]
+            tail = sum(sizes)
+            j = 0
+            while end < len(messages) - 2 and tail > self.keep_tokens:   # 마지막 2개(직전 호출과 그 결과)는 늘 남긴다
+                tail -= sizes[j]
+                j += 1
                 end += 1
         if end <= self.upto:
             return None

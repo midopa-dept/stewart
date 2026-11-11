@@ -115,6 +115,56 @@ def parse_reflect(text: str, tool_names) -> dict:
     return {"bans": bans, "next": nxt}
 
 
+# ── 같은 오류 되풀이·사람 경계(판 62, 실사용 사례: 키체인 -25308 을 다른 명령으로 거듭 부르고 추측을 원인으로 적음) ──
+SAME_ERROR_AT = 3       # 다른 명령이 같은 오류 꼴을 이만큼 내면 되짚기로
+_ERR_CODE = re.compile(r"(errSec[A-Za-z]+|OSStatus\s*-?\d+|(?<![\w.:/-])-\d{4,6}\b|\bE[A-Z]{3,}\b)")   # 코드(대소문자 그대로)
+_ERR_LINE = re.compile(r"\b(?:fatal|error|오류)\b[:\s]+([^\n]{0,80})", re.I)
+
+
+def err_sig(result: str) -> str:
+    """실패 결과의 오류 꼴(코드 우선, 없으면 오류 줄을 경로·따옴표 값을 지워). 없으면 빈 글."""
+    body = re.sub(r"^\[(exit -?\d+|시간 초과|셸 끝남)\][^\n]*\n?", "", str(result or "").split("\n\n[엔진]")[0])
+    m = _ERR_CODE.search(body)
+    if m:
+        return m.group(1).strip()[:80]
+    m = _ERR_LINE.search(body)
+    if not m:
+        return ""
+    s = m.group(0).strip().lower()
+    s = re.sub(r"(/[\w.@-]+)+", "<경로>", s)
+    s = re.sub(r"'[^']*'|\"[^\"]*\"", "<값>", s)
+    return s[:80]
+
+
+SAME_ERROR_NOTE = ("\n\n[엔진] 다른 명령인데 같은 오류({sig})가 {n}번째다. 같은 계열 명령을 또 돌리지 말고, 오류의 뜻부터 확인하라 — "
+                   "macOS 코드는 `security error <코드>`, 명령은 `<명령> --help`·`man <명령>`, errno 는 `python3 -c 'import os; print(os.strerror(N))'`, "
+                   "웹 도구가 있으면 오류 문구로 검색.")
+
+# 사람만 풀 수 있는 경계: 비밀번호·키체인 잠금/허용 창·sudo·로그인. 이 꼴이면 더 시도하지 말고 사람 손 카드로
+_HUMAN = [
+    (re.compile(r"errSecInteractionNotAllowed|-25308\b|User interaction is not allowed", re.I), "키체인 허용 창을 띄울 수 없는 자리(화면 없는 셸)"),
+    (re.compile(r"errSecAuthFailed|-25293\b|keychain is locked|-25295\b", re.I), "키체인 잠김·인증 실패"),
+    (re.compile(r"sudo: (a terminal is required|a password is required|no tty present)", re.I), "sudo 비밀번호"),
+    (re.compile(r"could not read (Username|Password) for|terminal prompts disabled|Authentication failed for", re.I), "git 인증(사람 로그인)"),
+    (re.compile(r"Permission denied \(publickey", re.I), "SSH 키 인증"),
+    (re.compile(r"\bgh auth login\b|not logged in(to)? any|You are not logged into", re.I), "로그인 필요"),
+]
+
+
+def human_boundary(result: str) -> str:
+    """실패 결과가 사람 경계 꼴이면 그 설명, 아니면 빈 글."""
+    body = str(result or "")
+    for rx, what in _HUMAN:
+        if rx.search(body):
+            return what
+    return ""
+
+
+HUMAN_NOTE = ("\n\n[엔진] 사람만 풀 수 있는 경계로 보인다({what}). 같은 계열 명령을 더 시도하지 말고, 긴 보고 대신 '사람 손 카드' 하나로 넘겨라: "
+              "```text 사람 손 카드``` 코드 블록에 어느 기기·어느 셸에서, 붙여 넣을 한 줄, 그 줄이 하는 일, 끝나면 무엇이 풀리는지. 비밀번호·토큰 값은 줄에 넣지 않는다"
+              "(묻게 두거나 -w 를 맨 끝에 두어 입력받게). {how}")
+
+
 def soft_exit(cmd: str, result: str) -> bool:
     """exit 1 이지만 출력이 있고, 끝이 조건식 && … 또는 grep 무매치·diff 다름 같은 '거짓이라 1' 꼴인가."""
     head, _, body = (result or "").partition("\n")

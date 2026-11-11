@@ -36,9 +36,11 @@ const marked = new Marked({
   gfm: true, breaks: true,
   renderer: {
     html({ text }) { return esc(text) },
-    code({ text, lang }) {
-      const l = (lang || '').trim().split(/\s+/)[0].toLowerCase()
-      return `<pre><code class="hljs">${highlight(text, l)}</code></pre>`
+    code({ text, lang }) {   // 블록마다 머리(언어·뒤에 적힌 기기·셸 이름)와 [복사] — 판 63
+      const info = (lang || '').trim().split(/\s+/), l = (info[0] || '').toLowerCase()
+      const label = [info[0] || '', info.slice(1).join(' ')].filter(Boolean).join(' · ')
+      return `<div class="cb"><div class="cb-head"><span>${esc(label)}</span><button type="button" class="cp-btn">복사</button></div>` +
+        `<pre><code class="hljs">${highlight(text, l)}</code></pre></div>`
     },
     link({ href, title, tokens }) {
       const inner = this.parser.parseInline(tokens)

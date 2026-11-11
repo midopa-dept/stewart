@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'preact/hooks'
 import { mdHtml, fmtK, fmtSecs, estTokens, post } from './lib.js'
 import { diffRows } from './diffrows.js'
+import { copyText, flash } from './copy.js'
 import { ThinkBlock } from './think.jsx'
 import { hub, tick, clockSkew, busy, refresh, toast } from './state.js'
 
@@ -100,7 +101,8 @@ function Step({ s, running }) {
           {(full || s.out).length > 0 && !shown.length && <button class="underline-offset-2 hover:underline" onClick={toggle}>출력 {(full || s.out).length}줄 ▾</button>}
           {open && full && <span title="모델에게 간 결과 그대로">모델이 받은 결과 그대로</span>}
           {code != null && code !== 0 && <span class="text-bad font-semibold" title="셸 끝 코드">exit {code}</span>}
-          {(full || s.out).length > 0 && <button class="hover:underline" title="결과 전문 복사(잘리지 않은 것)" onClick={() => copyText(s.result || s.out.join('\n'))}>복사</button>}
+          {name === 'run_shell' && <button class="hover:underline" title="명령 복사" onClick={e => { const b = e.currentTarget; copyText(s.command || rest.replace(/^\$\s*/, '')).then(ok => flash(b, ok)) }}>명령 복사</button>}
+          {(full || s.out).length > 0 && <button class="hover:underline" title="결과 전문 복사(잘리지 않은 것)" onClick={e => { const b = e.currentTarget; copyText(s.result || s.out.join('\n')).then(ok => flash(b, ok)) }}>결과 복사</button>}
           {running && <span>도는 중</span>}
         </div>
         {s.think && <ThinkBlock text={s.think.text} secs={s.think.secs} chars={s.think.chars} cut={s.think.cut} />}
@@ -127,17 +129,6 @@ export function stepSummary(steps) {
   return [...n].map(([k, c]) => { const [w, verb] = k.split('\0'); return `${w} ${c}개${verb ? ' ' + verb : ''}` }).join(' · ')
 }
 export const exitOf = s => { const m = /^\[exit (-?\d+)\]/.exec(s.result || (s.out || [])[0] || ''); return m ? +m[1] : null }
-
-function copyText(t) {
-  const done = () => toast('복사함')
-  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t).then(done, () => fallbackCopy(t, done))
-  fallbackCopy(t, done)
-}
-function fallbackCopy(t, done) {   // http(테일넷 주소 등)에서는 clipboard API 가 없다
-  const a = document.createElement('textarea'); a.value = t; a.style.position = 'fixed'; a.style.opacity = '0'
-  document.body.appendChild(a); a.select()
-  try { document.execCommand('copy'); done() } catch (e) { toast('복사 못 함') } finally { a.remove() }
-}
 
 function StepsCard({ g, last }) {
   const steps = g.steps
