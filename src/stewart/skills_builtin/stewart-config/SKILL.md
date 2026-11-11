@@ -5,7 +5,7 @@ description: 사람이 stewart 자체 설정을 바꾸고 싶어 할 때 — 모
 
 # stewart 설정 바꾸기 안내
 
-## 어느 파일인가(사용자 설정 폴더 = $XDG_CONFIG_HOME/stewart, 보통 ~/.config/stewart)
+## 어느 파일인가(사용자 설정 폴더 = $XDG_CONFIG_HOME/stewart, 보통 `~/.config/stewart`)
 | 바꿀 것 | 파일 |
 |---|---|
 | 모델 서버·모델 이름·문맥 길이·이미지 받기(vision) | `backends.toml`(또는 STEWART_BACKENDS) — `[backends.<이름>]` 절, 맨 위 `default` |

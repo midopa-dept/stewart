@@ -1,5 +1,6 @@
 // 허브와 말하는 길(오류를 종류별로 나눠 화면에 알기 쉽게), 마크다운, 작은 도우미.
 import { Marked } from 'marked'
+import { tildeTokenizer } from './mdtilde.js'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
@@ -34,6 +35,7 @@ export function highlight(code, lang) {
 // 모델 답은 믿지 않는 글: 원시 HTML 은 글자로, 링크는 http(s)·상대 경로만
 const marked = new Marked({
   gfm: true, breaks: true,
+  tokenizer: tildeTokenizer,   // 물결표 한 개는 취소선이 아니다(판 84, mdtilde.js)
   renderer: {
     html({ text }) { return esc(text) },
     code({ text, lang }) {   // 블록마다 머리(언어·뒤에 적힌 기기·셸 이름)와 [복사] — 판 63

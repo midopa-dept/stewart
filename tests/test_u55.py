@@ -46,7 +46,7 @@ class TBundle(unittest.TestCase):
 
     @unittest.skipUnless(_node_ok(), "node 없음")
     def test_node_imgprep(self):
-        r = subprocess.run(["node", "--test", "test/imgprep.test.mjs"], cwd=ROOT / "ui", capture_output=True, text=True, timeout=60,
+        r = subprocess.run(["node", "--test", "test/imgprep.test.mjs", "test/mdtilde.test.mjs"], cwd=ROOT / "ui", capture_output=True, text=True, timeout=60,
                            env={**os.environ, "MISE_OFFLINE": "1"})
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
 

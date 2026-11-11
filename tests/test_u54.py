@@ -1,5 +1,6 @@
 """연결 오류의 예외 사슬: 단계 error·events 에 종류·메시지 전체(비밀 가림). openai 꼴(urllib)·Anthropic SDK 둘 다."""
 
+import errno
 import json
 import os
 import socket
@@ -42,7 +43,7 @@ class TChain(unittest.TestCase):
     def test_chain_walks_cause_and_context(self):
         try:
             try:
-                raise OSError(61, "Connection refused")
+                raise OSError(errno.ECONNREFUSED, "Connection refused")   # 61(맥)·111(리눅스) — 운영체제 번호로(리눅스 러너에서 61 은 다른 오류)
             except OSError as inner:
                 raise RuntimeError("Connection error.") from inner
         except RuntimeError as e:

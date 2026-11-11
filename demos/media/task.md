@@ -4,5 +4,5 @@ library-layout.md 의 라이브러리 구조를 먼저 읽고, 파일마다 옮�
 - 파일 이름만으로 판단한다(파일 내용·웹 검색 없음). 파일은 옮기지 않는다(제안만).
 - inbox.txt 의 모든 줄을 빠짐없이, 원래 이름 그대로 file 에 쓴다.
 - destination 은 라이브러리 루트 아래 상대 경로(폴더)로 쓴다.
-- confidence 는 0~1. 이름만으로 확실하지 않으면 _review/ 로 보내고 confidence 를 낮게.
+- confidence 는 0–1. 이름만으로 확실하지 않으면 _review/ 로 보내고 confidence 를 낮게.
 - reason 은 한국어 한 문장.
