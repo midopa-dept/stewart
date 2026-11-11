@@ -53,10 +53,40 @@ class Backend:
     dropped_params: list = field(default_factory=list)   # 서버가 모른다고 거절해 빼고 보내는 샘플링 칸(think.py)
     vision: bool = False        # 이미지 입력을 받는 모델인가(images.py). 기본 끔 — 꺼진 백엔드에는 이미지를 붙이지 않는다
     kind: str = "openai"        # openai(chat/completions 호환) | anthropic(Messages API, 판 69 — anthropic_backend.py)
+    tool_mode: str = "native"   # native(요청의 tools) | text(tools 를 못 받는 API — 글 꼴로 부르고 꺼낸다, texttools.py)
+    provider: str = ""          # 바깥 API 제공자 이름(허브 화면 "바깥 API: …" 표시). 비면 주소로 판단
+    api_key_keychain: str | None = None   # macOS 키체인 항목 이름(service). 환경 변수보다 뒤, 파일보다 앞(값은 기록·출력하지 않는다)
+    thinking_control: str = "chat_template"   # 생각 켜고 끄기를 보내는 꼴: chat_template(vLLM·llama.cpp) | none(보내지 않음 — 생각 고정 API)
+    price: dict = field(default_factory=dict)  # {input, output, cache_read?} 달러/1M 토큰 — 있으면 응답 usage 에 cost_usd
+
+    def external(self) -> bool:
+        """작업 내용이 바깥 회사로 나가는 백엔드인가: provider 를 적었거나, 주소가 이 기계·사설망·tailnet 이 아니면."""
+        if self.provider:
+            return True
+        from urllib.parse import urlsplit
+        h = (urlsplit(self.base_url).hostname or "").lower()
+        if h in ("localhost", "127.0.0.1", "::1") or h.endswith((".local", ".ts.net", ".lan", ".internal", ".home")):
+            return False
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(h)
+            return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip in ipaddress.IPv4Network((0x64400000, 10)))   # 공유 주소(CGNAT·tailnet) 대역
+        except ValueError:
+            return True
+
+    def provider_label(self) -> str:
+        if self.provider:
+            return self.provider
+        from urllib.parse import urlsplit
+        return urlsplit(self.base_url).hostname or self.base_url
 
     def api_key(self) -> str | None:
         if self.api_key_env and os.environ.get(self.api_key_env):
             return os.environ[self.api_key_env]
+        if self.api_key_keychain:
+            k = keychain_secret(self.api_key_keychain)
+            if k:
+                return k
         if self.api_key_file:
             try:
                 return Path(os.path.expanduser(self.api_key_file)).read_text(encoding="utf-8").strip() or None
@@ -79,6 +109,9 @@ class Backend:
             "concurrency": self.concurrency,
             "configured_context": self.configured_context,
             "context_source": self.context_source,
+            **({"kind": self.kind} if self.kind != "openai" else {}),
+            **({"tool_mode": self.tool_mode} if self.tool_mode != "native" else {}),
+            **({"provider": self.provider_label(), "external": True} if self.external() else {}),
         }
 
 
@@ -97,6 +130,27 @@ def backends_path() -> Path:
         ex = Path(__file__).resolve().parent / "_data" / "backends.example.toml"   # wheel 로 깐 경우
     raise ConfigError(f"백엔드 설정이 없다: {ex} 을 {user} 로 복사해 고치거나 "
                       "STEWART_BACKENDS=<파일> 을 준다")
+
+
+_KEYCHAIN: dict = {}
+
+
+def keychain_secret(service: str) -> str | None:
+    """macOS 키체인에서 비밀 하나(service 이름, 지금 사용자 계정). 다른 OS·없으면 None. 값은 프로세스 메모리에만(기록 안 함)."""
+    if service in _KEYCHAIN:
+        return _KEYCHAIN[service]
+    import shutil
+    import subprocess
+    import sys
+    if sys.platform != "darwin" or not shutil.which("security"):
+        return None
+    try:
+        r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    val = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+    _KEYCHAIN[service] = val or None
+    return _KEYCHAIN[service]
 
 
 def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
@@ -121,9 +175,18 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 api_key_file=b.get("api_key_file"),
                 vision=bool(b.get("vision", False)),
                 kind=str(b.get("kind") or "openai"),
+                tool_mode=str(b.get("tool_mode") or "native"),
+                provider=str(b.get("provider") or ""),
+                api_key_keychain=b.get("api_key_keychain"),
+                thinking_control=str(b.get("thinking_control") or "chat_template"),
+                price=dict(b.get("price") or {}),
             )
             if out[name].kind not in ("openai", "anthropic"):
                 raise ConfigError(f"{path}: backends.{name}.kind 는 openai 또는 anthropic")
+            if out[name].tool_mode not in ("native", "text"):
+                raise ConfigError(f"{path}: backends.{name}.tool_mode 는 native 또는 text")
+            if out[name].thinking_control not in ("chat_template", "none"):
+                raise ConfigError(f"{path}: backends.{name}.thinking_control 는 chat_template 또는 none")
         except KeyError as e:
             raise ConfigError(f"{path}: backends.{name}에 {e} 가 없다") from None
     default = data.get("default") or next(iter(out), "")

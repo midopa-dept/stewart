@@ -658,6 +658,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             for k2 in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
                 ac[k2] += int(usage["anthropic"].get(k2) or 0)
             ac["cost_usd"] = round(ac["cost_usd"] + float(usage.get("cost_usd") or 0), 6)
+        elif usage.get("cost_usd"):   # 가격표를 단 OpenAI 호환 API(백엔드 price)
+            st["cost_usd"] = round(st.get("cost_usd", 0.0) + float(usage["cost_usd"]), 6)
         st["last_prompt_tokens"] = usage.get("prompt_tokens") or st["last_prompt_tokens"]
         prompt_mark = len(messages)
         rt = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
@@ -1167,6 +1169,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "web_result_urls": sorted({u for e in env.search_log for u in e["urls"]}),  # 나중 web_fetch 허용 목록
         "completion_tokens": st["completion_tokens"], "prompt_tokens_total": st["prompt_tokens_total"],
         **({"anthropic_usage": st["anthropic_usage"], "cost_usd": st["anthropic_usage"]["cost_usd"]} if st.get("anthropic_usage") else {}),
+        **({"cost_usd": st["cost_usd"]} if st.get("cost_usd") and not st.get("anthropic_usage") else {}),
         "last_prompt_tokens": st["last_prompt_tokens"],
         "gen_tok_per_s": (st["pred_n"] / (st["pred_ms"] / 1000)) if st["pred_ms"] else None,
         "prompt_tok_per_s": (st["prompt_n"] / (st["prompt_ms"] / 1000)) if st["prompt_ms"] else None,

@@ -1,0 +1,114 @@
+# 바깥 AI API 를 stewart 에 붙이는 예시(제공자 프리셋). 쓰는 법: 이 파일을 복사해 쓸 항목만 enabled = true 로 두고
+#   STEWART_BACKENDS=<복사한 파일> stewart chat -b <이름>     (허브는 stewart hub -b <이름>)
+# 키는 파일에 적지 않는다. 둘 중 하나:
+#   ① 환경 변수 — api_key_env 에 이름만(값은 셸에서 export)
+#   ② macOS 키체인 — api_key_keychain 에 항목 이름. 사용자가 한 번 넣는다(값은 화면에 입력, 명령 줄에 적지 않음):
+#        security add-generic-password -a "$USER" -s <항목 이름> -w
+#      (-w 뒤를 비우면 키를 묻는다. 지우기: security delete-generic-password -s <항목 이름>)
+#   환경 변수가 있으면 그것이 먼저다. 어느 쪽이든 키 값은 모델의 셸·도구 자식 환경에 넘기지 않는다.
+#
+# 공통 칸: kind(openai | anthropic), base_url, model, max_context, api_key_env·api_key_keychain,
+#   provider(허브 화면 "바깥 API: …" 이름 — 바깥 회사로 작업 내용이 나간다는 표시),
+#   tool_mode(native = 요청의 tools / text = 함수 호출 칸이 없는 API 에서 글 꼴로 부르기),
+#   thinking_control(chat_template = vLLM·llama.cpp 의 생각 켜고 끄기 / none = 생각이 고정인 API 에 보내지 않음),
+#   price({input, output, cache_read} 달러/1M — 있으면 기록에 cost_usd), [….params](요청에 그대로 붙는 칸).
+# 모델 이름·주소·가격은 바뀐다 — 각 제공자 문서에서 지금 값을 확인한다.
+
+default = "exaone"
+
+# LG AI연구원 EXAONE API(문서 https://docs.exaone.ai — 2026-11 확인). OpenAI 호환 chat/completions.
+# 약관: 입력·결과를 모델 학습에 쓸 수 있다(제2.3조, "내 프로필 > 동의 및 알림 관리"에서 거부 가능), 비상업 이용(제2.1조).
+[backends.exaone]
+kind = "openai"
+provider = "EXAONE(LG AI연구원)"
+base_url = "https://api.exaone.ai/v1"
+model = "k-exaone_v2.5"
+precision = "api"
+max_context = 524288          # 입력 + max_tokens 가 넘으면 400
+timeout_s = 600
+concurrency = 2
+api_key_env = "EXAONE_API_KEY"
+api_key_keychain = "stewart-exaone"
+thinking_control = "none"     # 생각은 늘 켜져 있다(enable_thinking 자동) — 세기는 reasoning_effort
+tool_mode = "native"          # 도구 호출이 거절되면 "text" 로
+enabled = true
+[backends.exaone.params]
+max_tokens = 32000            # 생각 토큰 포함
+reasoning_effort = "high"     # low | high | max(기본 max — 느리다)
+temperature = 1.0
+top_p = 0.95
+# chat_template_kwargs = { preserve_thinking = true }   # 앞 차례 생각을 다음 입력에 남김(문서 권장, 문맥이 빨리 찬다)
+
+# OpenAI
+[backends.openai]
+kind = "openai"
+provider = "OpenAI"
+base_url = "https://api.openai.com/v1"
+model = "<모델 이름>"
+precision = "api"
+max_context = 200000
+api_key_env = "OPENAI_API_KEY"
+api_key_keychain = "stewart-openai"
+thinking_control = "none"
+enabled = false
+
+# Anthropic(Messages API — kind = "anthropic", 선택 꾸러미 stewart[anthropic])
+[backends.claude]
+kind = "anthropic"
+provider = "Anthropic"
+model = "claude-opus-5-5"
+precision = "api"
+max_context = 1000000
+api_key_env = "ANTHROPIC_API_KEY"
+api_key_keychain = "stewart-anthropic"
+concurrency = 4
+enabled = false
+[backends.claude.params]
+effort = "high"
+max_tokens = 32000
+
+# Google Gemini(OpenAI 호환 주소)
+[backends.gemini]
+kind = "openai"
+provider = "Google Gemini"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "<모델 이름>"
+precision = "api"
+max_context = 1000000
+api_key_env = "GEMINI_API_KEY"
+api_key_keychain = "stewart-gemini"
+thinking_control = "none"
+enabled = false
+
+# OpenRouter(여러 회사 모델을 한 주소로)
+[backends.openrouter]
+kind = "openai"
+provider = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "<제공자/모델 이름>"
+precision = "api"
+max_context = 128000
+api_key_env = "OPENROUTER_API_KEY"
+api_key_keychain = "stewart-openrouter"
+thinking_control = "none"
+enabled = false
+
+# 이 기계의 llama.cpp(llama-server) — 바깥으로 나가지 않는다
+[backends.llamacpp]
+kind = "openai"
+base_url = "http://127.0.0.1:8080/v1"
+model = "local"
+precision = "gguf"
+max_context = 32768
+enabled = false
+
+# 이 기계·집 안 vLLM — 바깥으로 나가지 않는다
+[backends.vllm]
+kind = "openai"
+base_url = "http://127.0.0.1:8000/v1"
+model = "<served-model-name>"
+precision = "?"
+max_context = 65536
+enabled = false
+[backends.vllm.params]
+chat_template_kwargs = { enable_thinking = false }

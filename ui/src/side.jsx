@@ -220,6 +220,13 @@ export function ModelDot({ withText }) {
   return <span class="chip" title={tip}><span class={'dot ' + (MCLS[m.state] || '')} />{withText !== false && `모델 ${m.label}`}</span>
 }
 
+// 바깥 API(회사 서버로 작업 내용이 나간다): 늘 보이게 — 제공자 이름
+export function ExternalChip() {
+  const ext = hub.value?.backend?.external
+  if (!ext) return null
+  return <span class="chip !text-warn" title={`이 대화의 글·파일 내용·도구 결과가 ${ext} 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)`}>바깥 API: {ext}</span>
+}
+
 export function Sidebar() {
   const [newOpen, setNewOpen] = useState(false)
   const ss = sessions.value

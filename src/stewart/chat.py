@@ -1060,7 +1060,7 @@ class ChatSession:
                 tim = resp.get("timings") or {}
                 self.st["completion_tokens"] += usage.get("completion_tokens") or 0
                 self.st["prompt_tokens_total"] += usage.get("prompt_tokens") or 0
-                if usage.get("cost_usd"):   # Messages API 백엔드(판 69)
+                if usage.get("cost_usd"):   # Messages API 백엔드(판 69)·가격표를 단 OpenAI 호환 API
                     self.st["cost_usd"] = round(self.st.get("cost_usd", 0.0) + float(usage["cost_usd"]), 6)
                 self.st["last_prompt_tokens"] = usage.get("prompt_tokens") or self.st["last_prompt_tokens"]
                 done = self.comp.observe(usage.get("prompt_tokens"))

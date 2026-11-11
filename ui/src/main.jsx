@@ -8,7 +8,7 @@ import { get, post, fmtK, estTokens } from './lib.js'
 import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
 import { Thread, Md, TodoItems } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
-import { Sidebar, ConnDot, ModelDot } from './side.jsx'
+import { Sidebar, ConnDot, ModelDot, ExternalChip } from './side.jsx'
 import { Panel } from './panel.jsx'
 import { useWorker, WorkerThread, WorkerControls, WorkerInfo } from './worker.jsx'
 
@@ -115,7 +115,8 @@ function Center() {
         <button class="btn btn-ghost !px-2 max-md:hidden" onClick={toggleSide} title="사이드바 접기·펴기">☰</button>
         <span class="font-[650] truncate">{title}</span>
         {isMain && main?.workdir && <span class="chip max-lg:hidden truncate max-w-64" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span>}
-        <span class="max-md:hidden flex gap-1.5"><ConnDot /><ModelDot /></span>
+        <span class="max-md:hidden flex gap-1.5"><ConnDot /><ModelDot /><ExternalChip /></span>
+        <span class="md:hidden"><ExternalChip /></span>
         <span class="md:hidden flex gap-1"><ConnDot withText={false} /><ModelDot withText={false} /></span>
         {!isMain && <WorkerControls name={v} />}
         {isMain ? <CtxBar /> : <span class="ml-auto" />}

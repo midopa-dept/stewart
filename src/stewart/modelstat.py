@@ -68,10 +68,14 @@ def probe(backend, timeout: float = 4.0, pod: bool = True) -> dict:
             pass
         out["state"] = "loading" if e.code == 503 else "auth" if e.code in (401, 403) else "error"
         out["detail"] = f"HTTP {e.code}" + (f": {body}" if body else "")
+        ext = getattr(backend, "external", None)
+        if e.code in (404, 405) and ext is not None and ext() and backend.api_key():   # 목록 주소가 없는 바깥 API: 키가 있으면 준비된 것으로
+            out["state"], out["served"], out["detail"] = "ok", [backend.model], ""
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
         out["state"], out["detail"] = "down", _down_reason(e)
     host = urlsplit(backend.base_url).hostname or ""
-    if pod and host and host not in LOOPBACK:   # 빌린 장비면 감시기가 별칭·어댑터를 안다(읽기 전용, 인증 없음)
+    ext = getattr(backend, "external", None)
+    if pod and host and host not in LOOPBACK and not (ext is not None and ext()):   # 바깥 API 회사 주소는 찌르지 않는다   # 빌린 장비면 감시기가 별칭·어댑터를 안다(읽기 전용, 인증 없음)
         u = urlsplit(backend.base_url)
         try:
             code, text = _get(f"{u.scheme}://{host}:{POD_STATUS_PORT}/status", {}, min(timeout, 3.0))

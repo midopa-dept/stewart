@@ -146,8 +146,24 @@ def _body(backend: Backend, messages, tools=None, response_format=None, **extra)
     return body
 
 
+def add_cost(backend: Backend, data: dict) -> None:
+    """백엔드에 price({input, output, cache_read?} 달러/1M)가 있으면 응답 usage 에 cost_usd 를 단다(OpenAI 꼴 usage)."""
+    pr = getattr(backend, "price", None) or {}
+    u = data.get("usage") if isinstance(data, dict) else None
+    if not pr or not isinstance(u, dict) or "cost_usd" in u:
+        return
+    cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+    inp = max(0, (u.get("prompt_tokens") or 0) - cached)
+    cost = (inp * float(pr.get("input", 0)) + cached * float(pr.get("cache_read", pr.get("input", 0)))
+            + (u.get("completion_tokens") or 0) * float(pr.get("output", 0))) / 1e6
+    u["cost_usd"] = round(cost, 6)
+
+
 def thinking_kwargs(backend: Backend, thinking: bool | None) -> dict:
-    """백엔드 params 의 chat_template_kwargs 에 enable_thinking 만 바꿔 끼운 덮어쓰기 값(None 이면 빈 dict)."""
+    """백엔드 params 의 chat_template_kwargs 에 enable_thinking 만 바꿔 끼운 덮어쓰기 값(None 이면 빈 dict).
+    thinking_control = none 이면(생각이 고정인 API) 보내지 않는다."""
+    if getattr(backend, "thinking_control", "chat_template") == "none":
+        return {}
     if thinking is None:
         return {}
     kw = dict(backend.params.get("chat_template_kwargs") or {})
@@ -387,6 +403,11 @@ def _open(backend: Backend, path: str, body: dict | None, timeout: float):
 def _send(backend: Backend, body: dict, overrides: dict | None):
     """요청을 연다. 덮어쓴 샘플링 칸을 서버가 모른다고 400 으로 거절하면 그 칸을 빼고 한 번 다시(그 백엔드에서는 이후에도 뺀다)."""
     from .think import SAMPLING_KEYS
+    ext = getattr(backend, "external", None)
+    if ext is not None and ext() and (backend.api_key_env or getattr(backend, "api_key_keychain", None)) and not backend.api_key():
+        where = " 또는 ".join(x for x in (f"환경 변수 {backend.api_key_env}" if backend.api_key_env else "",
+                                          f"키체인 항목 {backend.api_key_keychain}" if getattr(backend, "api_key_keychain", None) else "") if x)
+        raise BackendError(f"API 키가 없다: {where}", 401, "")
     for k in backend.dropped_params:
         body.pop(k, None)
     try:
@@ -419,6 +440,10 @@ def chat(
         with slot(backend):
             return AB.chat(backend, messages, tools, max_tokens, thinking)
     messages = _openai_only(messages)
+    text_mode = getattr(backend, "tool_mode", "native") == "text" and tools
+    if text_mode:   # 함수 호출 칸이 없는 API: 도구를 글로(texttools.py)
+        from . import texttools as TT
+        messages, tools = TT.to_text(messages, tools), None
     extra = {"max_tokens": max_tokens} if max_tokens else {}
     extra.update(thinking_kwargs(backend, thinking))
     extra.update(overrides or {})   # 생각 켬 샘플링 묶음(think.py)
@@ -439,6 +464,9 @@ def chat(
             if isinstance(e, BackendError):
                 raise
             raise conn_error("연결 실패", e) from None
+        if text_mode:
+            data = TT.apply_response(data, len(messages))
+        add_cost(backend, data)
         return data, time.monotonic() - t0
 
 
@@ -652,6 +680,10 @@ def chat_stream(
         with slot(backend):
             return AB.chat(backend, messages, tools, max_tokens, thinking, on_delta=on_delta, on_first=on_first)
     messages = _openai_only(messages)
+    text_mode = getattr(backend, "tool_mode", "native") == "text" and tools
+    if text_mode:   # 함수 호출 칸이 없는 API: 도구를 글로(texttools.py)
+        from . import texttools as TT
+        messages, tools = TT.to_text(messages, tools), None
     extra = {"stream": True, "stream_options": {"include_usage": True}}
     if max_tokens:
         extra["max_tokens"] = max_tokens
@@ -696,4 +728,8 @@ def chat_stream(
             if isinstance(e, BackendError):
                 raise
             raise conn_error("연결 실패", e) from None
-        return asm.response(), time.monotonic() - t0
+        data = asm.response()
+        if text_mode:
+            data = TT.apply_response(data, len(messages))
+        add_cost(backend, data)
+        return data, time.monotonic() - t0

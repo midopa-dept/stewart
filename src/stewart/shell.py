@@ -38,7 +38,9 @@ def own_venv() -> str | None:
     return os.path.realpath(sys.prefix) if sys.prefix != getattr(sys, "base_prefix", sys.prefix) else None
 
 
-HIDDEN_ENV: set = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}   # 모델의 셸에 넘기지 않는 키 변수(판 69 — 백엔드 api_key_env 도 여기에)
+HIDDEN_ENV: set = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                   "OPENROUTER_API_KEY", "EXAONE_API_KEY", "FRIENDLI_TOKEN", "MISTRAL_API_KEY", "GROQ_API_KEY",
+                   "DEEPSEEK_API_KEY", "TOGETHER_API_KEY", "XAI_API_KEY"}   # 모델의 셸에 넘기지 않는 키 변수(판 69 — 백엔드 api_key_env 도 여기에)
 
 
 def hide_env(name: str | None) -> None:
