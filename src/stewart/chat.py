@@ -277,6 +277,9 @@ class ChatSession:
         self.env = T.ToolEnv(workdir=profile.workdir, shell_timeout_s=profile.shell_timeout_s, web=web,
                               artifacts_dir=rec.dir, **T.secret_options(profile))
         self.env.vision = bool(backend.vision)
+        from . import webnudge as WN
+        self.nudge = WN.Nudger(search=self.web_status["search"] and "web_search" in self.tool_names,
+                               fetch=self.web_status["fetch"] and "web_fetch" in self.tool_names, on=WN.enabled())
         if self.mem is not None:   # 웹 글 캐시(판 64): 받은 본문을 기억 폴더에 남겨 doc_search 로 다시 찾게(30일·200개)
             self.env.web_cache_dir = self.mem.dir / "web-cache"
         self.check = load_check(profile.action_check)
@@ -901,11 +904,19 @@ class ChatSession:
             tc["human_boundary"] = hb
             self.rec.event("human_boundary", what=hb)
         sig = ST.err_sig(result)
+        n = 0
         if sig:
             cmds = self._err_sigs.setdefault(sig, [])
             if cmd not in cmds:
                 cmds.append(cmd)
             n = len(cmds)
+        wn = self.nudge.on_error(sig, n, result)   # 웹 넛지(판 80): 같은 오류 두 번째·처음 보는 이름 오류
+        if wn:
+            note += wn
+            tc["web_nudge"] = True
+            self.rec.event("web_nudge", why_kind="error", step=self.st.get("steps", 0), why=self.nudge.log[-1]["why"])
+            self.comps.fire("web_nudge", self.st.get("steps", 0), "error", "nudge")
+        if sig:
             if n >= ST.SAME_ERROR_AT:
                 note += ST.SAME_ERROR_NOTE.format(sig=sig, n=n)
                 tc["same_error"] = n
@@ -987,6 +998,12 @@ class ChatSession:
         todos_open = [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
         if getattr(self.ui, "goal_notes", False) and (todos_open or self.bans or self._last_reason not in (None, "answered", "asked")):
             text = text + "\n\n" + NEW_GOAL_NOTE   # 앞 차례의 미완 걸음·목록·되짚기 계획이 이 말을 덮지 않게
+        self.nudge.reset_turn()
+        rn = self.nudge.on_turn(self._raw_text)   # 웹 넛지: 최신 사실을 묻는 말이면 "먼저 웹으로 확인"
+        if rn:
+            text += rn
+            self.rec.event("web_nudge", why_kind="recent", why=self.nudge.log[-1]["why"])
+            self.comps.fire("web_nudge", self.st.get("steps", 0), "recent", "nudge")
         self.messages.append({"role": "user", "content": IMG.content(text, images or [])})
         self.rec.event("user", turn=self.st["turns"], content=text, images=len(images or []) or None)
         self.rec.md(f"## 사람 (차례 {self.st['turns']})\n\n```\n{text}\n```\n")
