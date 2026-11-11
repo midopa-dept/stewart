@@ -12,6 +12,58 @@
 
 [한국어](README.md) · English
 
+## Screenshots
+
+![Hub: reproducing and fixing a checkout-total bug](docs/images/hero.en.png)
+*The hub confirming a checkout-total bug with a reproducing test, explaining the cause and fixing it (taken with a demo model that returns scripted answers).*
+
+More: [demo page](docs/demo.en.md) — release prep and a hand-off card in the hub, the terminal, and what each part of the screen is.
+
+## Compared with Claude Code
+
+With the same Claude models on the same coding tasks, stewart used 0.69–0.77× the cost per run, 0.72–0.80× the wall-clock time and 0.25–0.29× the billed tokens of Claude Code. Success rates showed no meaningful difference. This is an exploratory measurement on 16 of our own tasks and should not be read as general performance. The table, conditions and limits are in [the comparison section below](#same-model-different-runner).
+
+## Research and direction
+
+- **Context compaction:** following work showing that masking old tool output is as efficient as summarizing (The Complexity Trap), stewart masks first and summarizes only when that is not enough. The summary format draws on ACON and on writing from Anthropic and OpenHands.
+- **Memory:** building on MemGPT and Mem0 (a small always-loaded core plus searchable storage; checking new facts against old memories), memory is split three ways: policy, profile and knowledge.
+- **Working with a person:** step plans with check-ins, reflection and hand-off cards came from failures seen in real use, not from papers.
+- [docs/research-notes.md](docs/research-notes.md) lists what each source contributed and where it is in stewart (in, partial, planned).
+
+## How it differs from other runners
+
+Feature differences checked against each project's official docs and repository on 2026-11-11. Sources are listed in [docs/research-notes.md](docs/research-notes.md#다른-실행기-비교의-근거).
+
+| | stewart | OpenCode | Pi | Claude Code | Codex CLI |
+|---|---|---|---|---|---|
+| License | Apache-2.0 | MIT | MIT | Not open source | Apache-2.0 |
+| Models | Any OpenAI-compatible server, Anthropic API | Many providers, OpenAI-compatible | Many providers, OpenAI-compatible | Claude models only | Many providers, Ollama and LM Studio |
+| Interfaces | Terminal, web hub (phone browser and notifications) | Terminal, desktop (beta), IDE | Terminal, SDK | Terminal, IDE, desktop, web, mobile | Terminal, IDE, desktop, web |
+| MCP | No | Yes | Yes | Yes | Yes |
+| LSP (language servers) | No | Built in (off by default) | Not confirmed | Plugins | Not confirmed |
+| Plugins / extensions | No (skills and hooks only) | JS/TS plugins | TS extensions | Plugin marketplace | Plugins |
+| Skills (SKILL.md) | Yes | Yes | Yes | Yes | Yes |
+| OS sandbox for shell commands | Not per command; the whole hub can run in the macOS sandbox | No | No | Yes (off by default) | Yes (on by default) |
+| GitHub stars | Early-stage project | 226k | 121k | 155k (issues repo) | 135k |
+
+- **When stewart fits:** when you work with a small open model you host, or an API with weak function calling. The runner carries guards for that: compaction that masks first and summarizes only when needed, turning reflection into enforced prohibitions, hand-off cards, repeated-error detection, nudges to check the web, text-form tool calls, and repair of broken tool calls. It also fits when you want to approve work from a browser or phone across several conversations and workers, or prefer Korean instructions.
+- **When another runner fits better:** when you need MCP servers, language servers or IDE integration; when a plugin ecosystem, a large user base and frequent releases matter; or when every shell command must run in an OS sandbox by default (Codex CLI). If you only use Claude models, Claude Code is the most closely tuned to them.
+- There is no side-by-side measurement against OpenCode or Pi on the same model yet (planned). The only measurement is the [efficiency comparison with Claude Code](#same-model-different-runner).
+
+## Background
+
+stewart started as a way to get a Claude Code style workflow from small open models you run yourself, roughly the size that fits a 24 GB graphics card at 4 bits. Such models tend to break tool calls, repeat the same attempt and drift on long context, so the runner gained guards for those one at a time. It now connects to OpenAI-compatible servers, the Anthropic API and other API providers.
+
+Each run records when each guard fired, so you can measure which ones actually help. Guards such as retries, memory, skills and reflection are on only in chat and the hub; `run` (the evaluation path) keeps the older behavior so comparisons stay stable.
+
+## Direction
+
+- A test that a person's prohibitions survive compaction
+- Measuring on public benchmarks such as Terminal-Bench, and baselines against other runners on the same model
+- Optional embedding re-ranking for document search
+
+## How it works
+
 ```mermaid
 flowchart LR
     U["You"] -->|terminal| C["stewart chat"]
@@ -97,7 +149,11 @@ stewart runs shell commands the model chooses on your machine. The guards below 
 ## Memory
 
 - On by default in chat and the hub, off in `run` and `bench`. `STEWART_MEMORY=0|1` or the profile key `memory` overrides this.
-- When you say something the model should keep doing next time, it saves a note, scoped to all projects (user) or this project (project). The hub's memory tab lets you view, edit and delete them.
+- Memory is split three ways and kept in Markdown files you can open and edit, scoped to all projects or to this project.
+  - Policy (`policy.md`): lasting instructions such as "from now on …" or "don't …". Always loaded into the prompt.
+  - Profile (`profile.md`): short facts such as language, role and preferences. Always loaded, within a small cap.
+  - Knowledge (`knowledge/`): facts the model did not know or got wrong and you corrected. Not loaded into the prompt; found with `doc_search`.
+- Instructions marked as lasting ("from now on") are offered as policy; instructions for the current turn only are not saved. The hub's memory tab lets you view, edit and delete entries.
 - `stewart dream` gathers notes into a proposed `MEMORY.md` per subject. Nothing changes until you take it with `--accept`. The hub makes proposals by itself when idle (`STEWART_DREAM_AUTO=0` turns that off).
 - Hand-written rule files (`AGENTS.md`, `STEWART.md`) win over memory when they conflict.
 - The memory folder is `~/.local/share/stewart/memory` (`STEWART_MEMORY_DIR`).
@@ -239,6 +295,7 @@ url = "<SearXNG address>"   # SearXNG with JSON output enabled. backend = "none"
 
 ## Credits and references
 
+- How research sources map to stewart: [docs/research-notes.md](docs/research-notes.md) (Korean)
 - Parts of the web UI (`ui/`) adapt layouts and code from the MIT-licensed projects [llama.cpp](https://github.com/ggml-org/llama.cpp), [opencode](https://github.com/anomalyco/opencode) and [OpenHands](https://github.com/OpenHands/OpenHands). The parts and full license texts are in [ui/THIRD_PARTY.md](ui/THIRD_PARTY.md); bundled packages are listed in [NOTICE](NOTICE).
 - Anthropic [Claude Code](https://docs.anthropic.com/en/docs/claude-code) docs: run modes, hooks, todos, memory files, sub-agents
 - Anthropic, "The components of agent memory": memory layers (records, notes, pages, injected index)
