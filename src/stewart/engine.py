@@ -488,6 +488,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     repeat_stop = False
     rf = RF.settings(profile, interactive=False) if not parent else {**RF.settings(profile, False), "on": False}   # 작업자는 끔
     rstate = RF.State()
+    from . import toolrepair as TR   # 견고성(판 81): 평가 길은 기본 끔(등록 판 보호) — STEWART_TOOLCALL_REPAIR·EDIT_FEEDBACK=1 로 켬
+    repair_on, edit_fb, passback = TR.on("STEWART_TOOLCALL_REPAIR", False), TR.on("STEWART_EDIT_FEEDBACK", False), TR.passback()
+    st["toolcall_repaired"] = {}
     fail_steps: list[list[dict]] = []   # 모두 실패한 단계들의 호출(성공 단계가 오면 비움) — 되짚기의 거부만 판정
     recent_fail: list[dict] = []        # 최근 실패 호출(되짚기에 붙일 사실)
     force_format = False
@@ -686,6 +689,13 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             st["prompt_ms"] += tim.get("prompt_ms") or 0
         content = msg.get("content") or ""
         raw_calls = msg.get("tool_calls") or []
+        if not raw_calls and repair_on and content and tool_names and not force_final and not force_format:   # 본문 툴콜(가-1)
+            rest, fixed = TR.extract(content, tool_names)
+            if fixed:
+                _broken(st, rec, step, "in_content", content, repaired=True)
+                st["toolcall_repaired"]["in_content"] = st["toolcall_repaired"].get("in_content", 0) + 1
+                comps.fire("broken_toolcall", step, "in_content", "rewrite", repaired=True, how="parse", n=len(fixed))
+                content, raw_calls = rest, fixed
         if choice.get("finish_reason") == "length":
             st["length_stops"] = st.get("length_stops", 0) + 1
         srec = {"elapsed_s": dt, "content": content, "timings": tim, "usage": usage,
@@ -705,7 +715,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             for rc in raw_calls:
                 rc.setdefault("id", "call_" + uuid.uuid4().hex[:8])
                 rc.setdefault("type", "function")
-            messages.append({"role": "assistant", "content": content or None, "tool_calls": raw_calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})   # 생각 블록 되보내기(판 69)
+            messages.append({"role": "assistant", "content": content or None, "tool_calls": raw_calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
+                             **({"reasoning_content": think} if TR.keep_reasoning(passback, think, True) else {})})   # 생각 블록 되보내기(판 69)·OpenAI 길 손잡이(판 81)
             step_ok = False
             ask_hold = False     # 되묻기 점검을 건 단계: 같은 응답의 뒤 호출도 돌리지 않는다
             for rc in raw_calls:
@@ -714,9 +725,19 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 tc = {"id": rc["id"], "name": name, "raw_arguments": raw_args if isinstance(raw_args, str) else json.dumps(raw_args, ensure_ascii=False)}
                 st["tool_calls"] += 1
                 try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-                    if not isinstance(args, dict):
-                        raise ValueError("인자가 객체가 아니다")
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+                        if not isinstance(args, dict):
+                            raise ValueError("인자가 객체가 아니다")
+                    except Exception:
+                        fixed = TR.repair_args(raw_args) if repair_on and choice.get("finish_reason") != "length" else None
+                        if fixed is None:
+                            raise
+                        args = fixed   # 깨진 인자 JSON 한 번 고침(가-2) — 잘린 인자는 고치지 않는다
+                        tc["args_repaired"] = True
+                        _broken(st, rec, step, "args_json", tc["raw_arguments"], name=name, repaired=True)
+                        st["toolcall_repaired"]["args_json"] = st["toolcall_repaired"].get("args_json", 0) + 1
+                        comps.fire("broken_toolcall", step, "args_json", "rewrite", repaired=True, how="json_repair")
                 except Exception as e:
                     tc["parse_error"] = str(e)
                     st["parse_failures"] += 1
@@ -820,6 +841,13 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                                 ok, result = T.execute(env, name, args)
                                 comps.drain(env.component_notes, step, tool=name)
                                 cps.after_write(name, args, ok)
+                                if ok and edit_fb and name in ("edit_file", "write_file", "multi_edit"):   # 고친 자리·문법(가-3)
+                                    fb = TR.edit_feedback(profile.workdir, name, args)
+                                    if fb:
+                                        result += fb
+                                        tc["edit_feedback"] = True
+                                        bad = "오류 —" in fb
+                                        comps.fire("edit_feedback", step, "syntax_error" if bad else "edit_ok", "nudge", syntax_error=bad)
                                 post = hk.post(name, args, ok, result, step) if hk.has("PostToolUse") else None
                                 if post is not None:   # PostToolUse exit 2 → 까닭을 결과 뒤에 붙여 모델에
                                     tc["hook_note"] = True
@@ -923,7 +951,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             srec["note"] = "생각 끔으로 다시 보냈어도 상한에 닿아 빈 답 → length_empty 로 끝"
         else:
             # 최종 답
-            messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})
+            messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
+                             **({"reasoning_content": think} if TR.keep_reasoning(passback, think, False) else {})})
             lang_bad = _language_problem(profile, content)
             chk = None
             # (hooks Stop 첫 꼴): 이번 실행이 파일을 바꿨으면 끝내기 전 확인 명령. 실패면 출력을 돌려주고 다시(상한까지)
@@ -1135,7 +1164,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "skills_loaded": skills_loaded,
         "length_stops": st.get("length_stops", 0), "backend_timeouts": st.get("backend_timeouts", 0),
         **({"cut_toolcalls": st["cut_toolcalls"]} if st.get("cut_toolcalls") else {}),
-        "tool_error_kinds": st["tool_error_kinds"], "broken_toolcalls": st["broken_toolcalls"],
+        "tool_error_kinds": st["tool_error_kinds"], "broken_toolcalls": st["broken_toolcalls"], "toolcall_repaired": st["toolcall_repaired"],
         **({"components": comps.summary()} if comps.on else {}),
         "reasoning_tokens": st["reasoning_tokens"],
         "same_call_same_result": st["same_call_same_result"], "same_call_diff_result": st["same_call_diff_result"],

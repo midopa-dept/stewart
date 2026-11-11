@@ -184,6 +184,11 @@ def _one_line(s: str, n: int = 100) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def TR_keep(mode: str, think, has_calls: bool) -> bool:
+    from .toolrepair import keep_reasoning
+    return keep_reasoning(mode, think, has_calls)
+
+
 def _arg_summary(name: str, args: dict) -> str:
     if name == "run_shell":
         return "$ " + _one_line(args.get("command", ""), 140)
@@ -280,6 +285,10 @@ class ChatSession:
         from . import webnudge as WN
         self.nudge = WN.Nudger(search=self.web_status["search"] and "web_search" in self.tool_names,
                                fetch=self.web_status["fetch"] and "web_fetch" in self.tool_names, on=WN.enabled())
+        from . import toolrepair as TR   # 견고성(판 81): 본문 툴콜·깨진 인자 복구·편집 되먹임(실사용 켬), 생각 되돌려 보내기(기본 끔)
+        self.repair_on = TR.on("STEWART_TOOLCALL_REPAIR", True)
+        self.edit_fb = TR.on("STEWART_EDIT_FEEDBACK", True)
+        self.passback = TR.passback()
         if self.mem is not None:   # 웹 글 캐시(판 64): 받은 본문을 기억 폴더에 남겨 doc_search 로 다시 찾게(30일·200개)
             self.env.web_cache_dir = self.mem.dir / "web-cache"
         self.check = load_check(profile.action_check)
@@ -504,9 +513,20 @@ class ChatSession:
         tc = {"id": rc["id"], "name": name, "raw_arguments": raw_s}
         self.st["tool_calls"] += 1
         try:
-            args = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            if not isinstance(args, dict):
-                raise ValueError("인자가 객체가 아니다")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                if not isinstance(args, dict):
+                    raise ValueError("인자가 객체가 아니다")
+            except Exception:
+                from . import toolrepair as TR
+                fixed = TR.repair_args(raw) if self.repair_on and not getattr(self, "_cut", False) else None
+                if fixed is None:
+                    raise
+                args = fixed      # 깨진 인자 JSON 을 한 번 고쳐 읽었다(가-2) — 잘린 인자는 고치지 않는다
+                tc["args_repaired"] = True
+                self.st["toolcall_repaired"] = self.st.get("toolcall_repaired", 0) + 1
+                self.rec.event("broken_toolcall", step=step, form="args_json", repaired=True, name=name, raw=raw_s[:2000])
+                self.comps.fire("broken_toolcall", step, "args_json", "rewrite", repaired=True, how="json_repair")
         except Exception as e:
             cut = getattr(self, "_cut", False)   # 생성 상한에서 끊긴 응답의 툴콜(cutoff.py)
             tc.update(parse_error=str(e), ok=False, elapsed_s=0.0, cut=cut or None,
@@ -638,6 +658,14 @@ class ChatSession:
             self.cps.before_write(name, args)
             ok, result = T.execute(self.env, name, args)
             self.cps.after_write(name, args, ok)
+            if ok and self.edit_fb and name in ("edit_file", "write_file", "multi_edit"):   # 고친 자리·문법 한 줄(가-3)
+                from . import toolrepair as TR
+                fb = TR.edit_feedback(self.profile.workdir, name, args)
+                if fb:
+                    result += fb
+                    tc["edit_feedback"] = True
+                    bad = "오류 —" in fb
+                    self.comps.fire("edit_feedback", step, "syntax_error" if bad else "edit_ok", "nudge", syntax_error=bad)
             post = self.hk.post(name, args, ok, result, step) if self.hk.has("PostToolUse") else None
             if post is not None:
                 tc["hook_note"] = True
@@ -1103,12 +1131,22 @@ class ChatSession:
                     self.st[k_dst] += tim.get(k_src) or 0
                 content = msg.get("content") or ""
                 calls = msg.get("tool_calls") or []
+                if not calls and self.repair_on and content and self.tool_names:   # 본문에 쓴 툴콜을 툴콜로(가-1)
+                    from . import toolrepair as TR
+                    rest, fixed = TR.extract(content, self.tool_names)
+                    if fixed:
+                        self.st["toolcall_repaired"] = self.st.get("toolcall_repaired", 0) + 1
+                        self.rec.event("broken_toolcall", step=step, form="in_content", repaired=True, raw=content[:2000],
+                                       names=[c["function"]["name"] for c in fixed])
+                        self.comps.fire("broken_toolcall", step, "in_content", "rewrite", repaired=True, how="parse", n=len(fixed))
+                        content, calls = rest, fixed
                 srec = {"elapsed_s": dt, "ttft_s": self._ttft, "content": content, "timings": tim, "usage": usage,
                         "finish_reason": choice.get("finish_reason"), "mode": None, "tool_calls": []}
                 think = msg.get("reasoning_content") or msg.get("reasoning")
                 if think:
                     srec["reasoning_content"] = think
-                    self.ui.dim(f"  (생각 {len(think)}자)")
+                    if not self.stream:   # 스트리밍이면 화면이 이미 생각을 보였다(허브 생각 블록·TUI 글자 수)
+                        self.ui.dim(f"  (생각 {len(think)}자)")
                 if content.strip() and not streamed:   # 도구와 함께 온 글: 허브 화면은 그대로(걸음 사이 말), 터미널은 한 줄
                     self.ui.assistant(content.strip() if not calls or getattr(self.ui, "full_narration", False) else _one_line(content, 300))
                 self._cut = choice.get("finish_reason") == "length"
@@ -1116,7 +1154,8 @@ class ChatSession:
                     for rc in calls:
                         rc.setdefault("id", "call_" + uuid.uuid4().hex[:8])
                         rc.setdefault("type", "function")
-                    self.messages.append({"role": "assistant", "content": content or None, "tool_calls": calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})   # 생각 블록 되보내기(판 69)
+                    self.messages.append({"role": "assistant", "content": content or None, "tool_calls": calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
+                                          **({"reasoning_content": think} if TR_keep(self.passback, think, True) else {})})   # 생각 블록 되보내기(판 69)·OpenAI 길 손잡이(판 81)
                     any_ok = False
                     for rc in calls:
                         tc = self._exec(rc, step)
@@ -1206,7 +1245,8 @@ class ChatSession:
                     self.ui.warn("  생각 끄고 다시 보냈어도 생성 상한에 닿아 답이 비었다. 다시 묻거나 /think off 로 바꿔 본다.")
                     reason = "length_empty"
                     break
-                self.messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {})})
+                self.messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
+                                      **({"reasoning_content": think} if TR_keep(self.passback, think, False) else {})})
                 if self._cut and content.strip() and self._continued < CO.CONTINUE_MAX:   # 끊긴 글 답: 최종 답으로 받지 않고 잇게 한다
                     self._continued += 1
                     self.messages.append({"role": "user", "content": CO.CONTINUE_NOTE.format(mt=CO.limit_of(self.profile, self.backend))})
