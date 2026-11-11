@@ -452,6 +452,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "started": datetime.now().isoformat(timespec="seconds"),
     }
     rec.event("run_start", meta=meta, messages=messages)
+    if tool_defs:   # 학습 내보내기(판 90): 보낸 도구 정의 그대로(대화형은 chat 이 바뀔 때마다 남긴다)
+        rec.event("tool_defs", step=0, defs=tool_defs)
     if parent.get("cps") is not None:   # 작업자: 부모의 지금 체크포인트에 쓴다(/undo·rewind 가 덮는다)
         cps = parent["cps"]
     else:

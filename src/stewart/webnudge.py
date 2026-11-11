@@ -3,6 +3,7 @@
 - 같은 오류(오류 꼴 err_sig)가 다른 명령에서 두 번째로 나면 — 되짚기(세 번째) 앞에서 오류 문구 검색을 권한다.
 - 처음 보는 모듈·명령·속성·옵션 오류(ModuleNotFoundError·command not found·has no attribute·unrecognized arguments …)는 첫 번에.
 - 사람 말이 학습 뒤에 바뀌었을 사실(최신·요즘·가격 — 또는 현재·버전·출시를 묻는 물음, 폴더·커밋 같은 작업 말은 빼고)을 물으면 차례 시작에 "답하기 전에 웹으로 확인".
+- 끝맺기(판 90): 웹을 부른 차례에서 남은 걸음이 WRAP_AT 이하가 되면 한 번 "더 찾지 말고 지금까지 찾은 것으로 답하라"(작은 모델이 검색만 되풀이하다 상한에 걸림).
 - 웹 도구가 있을 때만(검색이 없으면 web_fetch 로 공식 문서를). 상한: 차례당 PER_TURN, 세션당 PER_SESSION.
 - 켜기: STEWART_WEB_NUDGE=0|1 이 이긴다, 없으면 실사용(chat·허브) 켬 — 평가 run 에는 붙이지 않는다(엔진은 이 모듈을 쓰지 않음).
 """
@@ -48,6 +49,11 @@ NOTE_RECENT = ("[엔진] 이 물음은 학습 뒤에 바뀌었을 수 있는 사
                "먼저 {tool} 로 확인한 뒤, 확인한 주소를 붙여 답하라.")
 
 
+WRAP_AT = 2
+NOTE_WRAP = ("\n\n[엔진] 남은 걸음이 {left}개다. 더 찾지 말고 지금까지 찾은 것으로 답하라 — 확인한 것은 주소를 붙이고, "
+             "확인하지 못한 것은 확인하지 못했다고 적는다.")
+
+
 def enabled(env=None) -> bool:
     env = os.environ if env is None else env
     return env.get("STEWART_WEB_NUDGE", "1") != "0"
@@ -64,6 +70,15 @@ class Nudger:
 
     def reset_turn(self) -> None:
         self.turn_n = 0
+        self.wrapped = False
+
+    def on_budget(self, left: int, web_calls: int) -> str:
+        """이 차례에 웹을 불렀고 남은 걸음이 WRAP_AT 이하면 끝맺기 글(차례에 한 번, 차례·세션 상한과 따로)."""
+        if not self.on or getattr(self, "wrapped", False) or web_calls <= 0 or left > WRAP_AT or left < 1:
+            return ""
+        self.wrapped = True
+        self.log.append({"kind": "wrap", "why": f"left {left}"})
+        return NOTE_WRAP.format(left=left)
 
     def _room(self) -> bool:
         return self.on and self.turn_n < PER_TURN and self.session_n < PER_SESSION

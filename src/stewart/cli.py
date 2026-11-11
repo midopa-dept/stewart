@@ -72,12 +72,18 @@ def _train(a) -> int:
     ex = None
     if a.exclude_hashes:
         ex = {ln.strip() for ln in Path(a.exclude_hashes).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
-    st = TRAIN.export(Path(a.runs_dir), out, a.select, since, a.keep_engine, ex)
+    inc = {"train-ok", *(a.include_tier or [])}
+    st = TRAIN.export(Path(a.runs_dir), out, a.select, since, a.keep_engine, ex, track=a.track, include_tiers=inc,
+                      tier_file=Path(a.tier_file) if a.tier_file else None)
     lb = " · ".join(f"{k} {v}" for k, v in sorted(st["labels"].items())) or "없음"
     print(f"기록 {st['runs']}개 · 차례 {st['turns_seen']}개 (표시: {lb})")
     print(f"고름({a.select}) {st['picked']}개 → 씀 {st['written']}개" + (f" · 평가 과제라 뺌 {st['excluded_eval']}개" if st["excluded_eval"] else ""))
-    print(f"걸러 냄: 엔진 넛지 {st['engine_notes']} · 실패한 도구 호출 {st['failed_calls']} · 큰 결과 줄임 {st['clipped']} · 그림 자리표 {st['images']}")
-    print(f"메시지 {st['messages']}개 · {st['chars']}자 → {out / 'train.jsonl'}  (훑기: stewart train show {out})")
+    if st["excluded_tier"]:
+        print("약관 등급으로 뺌: " + " · ".join(f"{k} {v}" for k, v in sorted(st["excluded_tier"].items()))
+              + f" (표 {TRAIN.LICENSE_TABLE} — 비교용으로만 풀려면 --include-tier)")
+    print(f"걸러 냄: 엔진 넛지 {st['engine_notes']} · 실패한 도구 호출 {st['failed_calls']} · 큰 결과 줄임 {st['clipped']} · 그림 자리표 {st['images']}"
+          f" · 가린 비밀 {st['secrets_masked']} · 손실에서 가린 차례 {st['train_false_turns']}")
+    print(f"메시지 {st['messages']}개 · {st['chars']}자 → {out / 'train.jsonl'} (sha256 {st['sha256'][:16]}…)  (훑기: stewart train show {out})")
     if not st["written"] and a.select == "good":
         print("  (👍·/good 표시가 아직 없다 — 허브 답 줄의 👍 나 chat 의 /good 으로 고르거나 --select after_fix|all)")
     return 0
@@ -416,6 +422,10 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--since", help="export: 이 날(YYYY-MM-DD) 이후 기록만")
     tr.add_argument("--keep-engine", action="store_true", help="export: 엔진 넛지([엔진] 줄)도 남김")
     tr.add_argument("--exclude-hashes", help="export: 평가 과제 첫 말 해시(줄마다 하나) 파일 — 같은 차례는 뺀다")
+    tr.add_argument("--include-tier", action="append", choices=["train-ok", "private-eval-only", "unknown"],
+                    help="export: 이 약관 등급도 싣는다(기본은 train-ok 만 — 비교·분석용으로만 풀 것)")
+    tr.add_argument("--tier-file", help="export: 약관 등급 규칙 덮기(TOML [[rule]] match = \"정규식\", tier = \"…\")")
+    tr.add_argument("--track", choices=["live", "teacher", "self"], default="live", help="export: meta.track(기본 live = 실사용)")
     tr.add_argument("-n", type=int, default=3, help="show: 몇 건")
     tr.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
     og = sub.add_parser("organize", help="폴더 정리 계획 검토·실행·되돌리기(review|apply|undo)", add_help=False)

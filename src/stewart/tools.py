@@ -905,8 +905,15 @@ def _quota_warn(env: ToolEnv, level: str, text: str) -> None:
 
 ZERO_STREAK_WARN = 2
 SIMILAR_MIN = 0.6
-ZERO_MSG = ("[0건이 {n}번 이어졌다] 같은 꼴의 검색은 그만한다. 다른 꼴(제작사·제목 단어·한글 이름·상위 폴더 이름)로 바꾸거나, "
-            "이 묶음은 검색 없이 미확정으로 계획에 넣는다(confidence < 0.5, reason '미확정:', evidence name_only).")
+ZERO_MSG = ("[0건이 {n}번 이어졌다] 같은 꼴의 검색은 그만한다. 낱말을 줄이거나(영어 핵심어 둘셋) 공식 문서 주소를 web_fetch 로 바로 열고, "
+            "그래도 없으면 확인하지 못했다고 적고 아는 것으로 답한다.")
+ZERO_MSG_PLAN = ("[0건이 {n}번 이어졌다] 같은 꼴의 검색은 그만한다. 다른 꼴(제작사·제목 단어·한글 이름·상위 폴더 이름)로 바꾸거나, "
+                 "이 묶음은 검색 없이 미확정으로 계획에 넣는다(confidence < 0.5, reason '미확정:', evidence name_only).")
+
+
+def _zero_msg(env, n: int) -> str:
+    """폴더 정리(계획이 있는 실행)면 계획용 안내, 아니면 일반 안내(판 90 — 일반 물음에 정리 문구가 섞였다)."""
+    return (ZERO_MSG_PLAN if getattr(env, "plan", None) is not None else ZERO_MSG).format(n=n)
 
 
 def _qkey(q: str) -> tuple[frozenset, str]:
@@ -951,7 +958,7 @@ def web_search(env: ToolEnv, query: str, for_file: str = "", categories: str = "
             env.last_search_zero = True
             out = f"검색 결과 없음(묻지 않음): '{query}' 는 앞서 0건이었던 '{prev_q}' 와 거의 같다. 검색 횟수에 넣지 않았다."
             if env.zero_streak >= ZERO_STREAK_WARN:
-                out += "\n" + ZERO_MSG.format(n=env.zero_streak)
+                out += "\n" + _zero_msg(env, env.zero_streak)
             return True, out
     if len(env.search_log) >= total:
         env.web_limit_hits += 1
@@ -990,7 +997,7 @@ def web_search(env: ToolEnv, query: str, for_file: str = "", categories: str = "
         env.last_search_zero = True
         out = f"검색 결과 없음: {query} ({left})" + eng_note
         if env.zero_streak >= ZERO_STREAK_WARN:
-            out += "\n" + ZERO_MSG.format(n=env.zero_streak)
+            out += "\n" + _zero_msg(env, env.zero_streak)
         env.search_cache[nq] = out
         return True, out
     env.zero_streak, env.last_search_zero = 0, False

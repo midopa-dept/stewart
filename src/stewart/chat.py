@@ -530,6 +530,9 @@ class ChatSession:
         if prev is not None and prev != h:
             self.st["prefix_changes"] = self.st.get("prefix_changes", 0) + 1
             self.rec.event("prefix_changed", step=step)
+        if getattr(self, "_defs_h", None) != (dh := hashlib.sha256(json.dumps(self.tool_defs or [], ensure_ascii=False).encode()).hexdigest()[:16]):
+            self._defs_h = dh   # 학습 내보내기(판 90): 그 걸음에 실제로 보낸 도구 정의 — 바뀔 때만 남긴다
+            self.rec.event("tool_defs", step=step, hash=dh, defs=self.tool_defs or [])
 
     def _todo_open(self) -> list:
         return [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
@@ -1279,6 +1282,11 @@ class ChatSession:
                             RF.append_user(self.messages, NARRATE_NOTE)
                             self.rec.event("narrate_nudge", step=step, silent=self._silent)
                     self._todo_watch(step, srec["tool_calls"])   # 할 일 목록이 걸음을 따라오는지(판 85)
+                    wn = self.nudge.on_budget(budget - n, sum(1 for c in self._turn_calls if c.get("name") in T.WEB_TOOLS))
+                    if wn:   # 웹 끝맺기(판 90): 남은 걸음이 거의 없으면 찾은 것으로 답하게
+                        RF.append_user(self.messages, wn)
+                        self.rec.event("web_nudge", why_kind="wrap", why=f"left {budget - n}")
+                        self.comps.fire("web_nudge", step, "wrap", "nudge")
                     self._attach_viewed()
                     if any_ok:
                         self._fail_steps.clear()
