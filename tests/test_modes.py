@@ -41,7 +41,7 @@ class TModes(unittest.TestCase):
         ui = FakeUI(answers=["n"])
         s = self.sess(ui, mode="edits")
         seq = [_resp(calls=[("edit_file", '{"path": "a.py", "old": "x = 1", "new": "x = 2"}'),
-                            ("run_shell", '{"command": "echo hi"}')]),
+                            ("run_shell", '{"command": "uname"}')]),
                _resp("고쳤고 셸은 거부됐다.")]
         with mock.patch.object(C, "chat", side_effect=seq):
             s.turn("고쳐")

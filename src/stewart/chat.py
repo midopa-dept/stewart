@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import os
 import sys
 import time
@@ -35,13 +36,22 @@ from .record import Recorder
 from .resume import prepare, save_messages
 from . import bounds as BND, hooks as HK, memory as MEM, modes as M, think as TH
 from . import facts as FX
+from . import reflect as RF
+from . import cutoff as CO
+from . import intent as IN
+from . import images as IMG
 from . import manager as MG
 from . import guard as G
+from . import steer as ST
+from . import forge as FG
 from . import clarify
 from . import envinfo
 from . import skills as SK
 from . import delegate as DG
 from . import config_guard as CG
+from . import projcfg as PC
+from . import allowrules as AR
+from . import components as CM
 from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
@@ -144,6 +154,17 @@ def _read(p: Path | None) -> str | None:
         return None
 
 
+DIFF_KEEP = 2000   # 기록·화면에 남기는 diff 줄 상한(U2-5: 대화 안에서 펼쳐 본다)
+
+
+def diff_stat(lines: list[str]) -> dict:
+    """{"path", "plus", "minus"} — unified diff 줄에서 센다(머리 줄 +++/--- 는 빼고)."""
+    path = next((l[6:] if l.startswith("+++ b/") else l[4:] for l in lines if l.startswith("+++ ")), "")
+    plus = sum(1 for l in lines if l.startswith("+") and not l.startswith("+++"))
+    minus = sum(1 for l in lines if l.startswith("-") and not l.startswith("---"))
+    return {"path": path, "plus": plus, "minus": minus}
+
+
 def make_diff(before: str | None, after: str | None, name: str, max_lines: int = 80) -> list[str]:
     a = (before or "").splitlines()
     b = (after or "").splitlines()
@@ -172,11 +193,21 @@ def _arg_summary(name: str, args: dict) -> str:
     return _one_line(json.dumps(args, ensure_ascii=False), 120)
 
 
+NEW_GOAL_NOTE = ("[엔진] 이 사람 말이 지금 목표다. 앞 차례의 미완 걸음·할 일 목록·되짚기 계획 중 이 말과 맞지 않는 것은 버리고, "
+                 "할 일 목록이 있으면 이 말에 맞게 먼저 고쳐라(todo_write). 사람이 그만두라고 한 걸음으로 돌아가지 마라.")
+SILENT_STEPS = 5
+NARRATE_NOTE = "[엔진] 사람은 말 없이 도구만 도는 것을 보고 있다. 다음 답에 지금 무엇을 하고 있고 무엇을 알아냈는지 한 문장으로 먼저 말하고 이어 가라."
+INTERJECT_NOTE = "[엔진] 사람이 일하는 중에 새로 말했다. 이 말이 지금 목표를 바꾸면 하던 걸음을 멈추고 이 말을 따른다."
+
+
 class ChatSession:
     def __init__(self, profile: Profile, backend: Backend, rec: Recorder, ui: UI | None = None, confirm: bool | None = None,
                  history: list[dict] | None = None, resumed_from: str | None = None, stream: bool = False,
-                 mode: str | None = None, default_mode: str = "auto", think: bool | None = None):
+                 mode: str | None = None, default_mode: str = "auto", think: bool | None = None,
+                 extra_tools: tuple[list[dict], object] | None = None):
         self.profile, self.backend, self.rec = profile, backend, rec
+        # 더 여는 도구(허브의 메인 세션 도구 등): (정의 목록, execute(name, args) -> (ok, 글)). delegate 처럼 확인 없이 돈다
+        self.extra_defs, self.extra_exec = (list(extra_tools[0]), extra_tools[1]) if extra_tools else ([], None)
         self.ui = ui or UI()
         # 모드 우선순위: 명령줄 --mode > 명령줄 --confirm/--no-confirm(ask/auto) > 프로필 mode > 프로필 confirm > 기본.
         # 기본은 cli chat 이 edits 를 준다(일반 터미널에는 셸 격리가 없다). 시험 등에서 직접 만들면 auto.
@@ -193,16 +224,33 @@ class ChatSession:
         if profile.tools and clarify.wanted(profile.tools):
             defs.append(clarify.DEFINITION)   # 되묻기: 질문을 보이고 그 차례를 끝낸다(다음 사람 입력이 답)
         if profile.tools and DG.wanted(profile.tools, 0):
-            defs.append(DG.DEFINITION)   # 작업자에게 맡기기(확인 질문은 같은 화면에 "[작업자 N]")
+            defs.append(DG.CHAT_DEFINITION)   # 작업자에게 맡기기(확인 질문은 같은 화면에 "[작업자 N]"). 기본 읽기 전용
         if not web:
             defs = [d for d in defs if d["function"]["name"] not in T.WEB_TOOLS]
-        self.skills = SK.discover(profile.workdir) if (profile.skills is not False and profile.tools) else []   # 세션 시작 때 한 번
+        if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(실사용 기본 도구 목록은 그대로)
+            defs = [d for d in defs if d["function"]["name"] != "view_image"]
+        self.pfl = PC.flags(profile, interactive=True)   # 대화형: Claude Code 꼴 호환 기본 켬(사용자 전역 ~/.claude 는 기본 끔)
+        self.skills = SK.discover(profile.workdir, self.pfl) if (profile.skills is not False and profile.tools) else []   # 세션 시작 때 한 번
+        # 프로젝트 구성: .stewart/commands·agents(호환 .claude/…), 세션 시작 때 한 번
+        self.commands = PC.discover_commands(profile.workdir, self.pfl, set(COMMANDS))
+        self.agents = PC.discover_agents(profile.workdir, self.pfl) if profile.tools else []
         if self.skills:
             defs.append(SK.DEFINITION)
-        self.mem = MEM.Memory(profile, rec.dir) if MEM.enabled(profile) else None   # 기억 M1
+        self.mem = MEM.Memory(profile, rec.dir) if MEM.enabled(profile, interactive=True) else None   # 기억 M1(chat·허브 기본 켬)
         if self.mem is not None and profile.tools:
             defs += MEM.tool_defs()
-        self.all_tool_names = [d["function"]["name"] for d in defs if d["function"]["name"] not in MEM.NAMES]   # 작업자에게 넘길 수 있는 것
+        self.forge = None
+        if profile.tools:   # 원격 저장소 설정(hub.toml [forge], 판 48): 있으면 도구 둘 + 지시 한 단락 + 셸 막이
+            try:
+                self.forge = FG.load()
+            except FG.ForgeError as e:
+                self.ui.warn(f"  forge 설정을 쓰지 않는다: {e}")
+        if self.forge is not None:
+            defs += FG.DEFINITIONS
+        defs += self.extra_defs
+        self.extra_names = {d["function"]["name"] for d in self.extra_defs}
+        self.all_tool_names = [d["function"]["name"] for d in defs
+                               if d["function"]["name"] not in MEM.NAMES and d["function"]["name"] not in self.extra_names]   # 작업자에게 넘길 수 있는 것
         if profile.manager_tools is not None:   # 관리자 모드: 모델에 보이는 자기 도구만
             if MG.NAME in profile.manager_tools:
                 defs.append(MG.DEFINITION)
@@ -212,16 +260,20 @@ class ChatSession:
         self.ledger = MG.Ledger(rec.dir / "ledger.json", "(대화)") if MG.NAME in self.tool_names else None
         self.env = T.ToolEnv(workdir=profile.workdir, shell_timeout_s=profile.shell_timeout_s, web=web,
                               artifacts_dir=rec.dir, **T.secret_options(profile))
+        self.env.vision = bool(backend.vision)
         self.check = load_check(profile.action_check)
-        mem_text, mem_log = memory_for(profile)
+        mem_text, mem_log = memory_for(profile, interactive=True)
         self.env_info = envinfo.measure(profile.workdir)   # 세션 시작 때 한 번(이어 하기는 새로 잰다)
         system = profile.system.strip() + (f"\n\n{mem_text}" if mem_text else "") \
-            + (f"\n\n{SK.list_text(self.skills)}" if self.skills else "")
+            + (f"\n\n{SK.list_text(self.skills)}" if self.skills else "") \
+            + (f"\n\n{PC.agents_text(self.agents)}" if self.agents else "")
         self.mem_inject: list = []
         if self.mem is not None:   # L3 주입
             mtext, self.mem_inject = self.mem.inject()
             system += "\n\n" + mtext
         self._env_note: str | None = envinfo.user_note(self.env_info)   # 다이어트 안 a: 이 세션 첫 사람 입력 앞에 붙인다
+        if self.forge is not None:
+            system += "\n\n" + FG.note(self.forge)
         if profile.language == "ko":
             system += "\n\n사람에게 하는 말은 한국어로 쓴다. 코드·파일 이름·명령은 원문 그대로 둔다."
         self.system = system
@@ -240,7 +292,20 @@ class ChatSession:
         self._repeat_stop = False
         self.guard = G.LoopGuard()
         self._guard_hit = 0
+        self._guard_tc = None
+        self._blocked = {}
+        self._last_reflect = ""
+        self.bans: list = []              # 되짚기 결론으로 건 금지(세션 동안 — 사람이 화면에서 푼다, steer.py)
+        self._last_reason = None
         self._asked: str | None = None
+        self.rf = RF.settings(profile, interactive=True)   # 실패 문턱에서 도구 없는 되짚기(기본 켬, STEWART_REFLECT=0 이면 끔)
+        self._rstate = RF.State()
+        self._fail_steps: list[list[dict]] = []
+        self._recent_fail: list[dict] = []
+        self._reflect_log: list[dict] = []   # 차례마다 되짚기 요약(했거나 건너뛴 차례만)
+        # 이 세션에서 사람이 한 번 허용한 셸 명령(글자 그대로 같은 것만 다시 묻지 않는다). STEWART_ASK_SAME_COMMAND=1 이면 늘 묻는다
+        self._approved_cmds: set[str] = set()
+        self._same_cmd_on = os.environ.get("STEWART_ASK_SAME_COMMAND") != "1"
         self.t0 = time.monotonic()
         self.meta = {
             "engine": "stewart", "engine_version": __version__, "engine_git": _git_rev(), "mode": "chat",
@@ -249,6 +314,11 @@ class ChatSession:
             "thinking": self.think, "max_consecutive_errors": profile.max_consecutive_errors, "output_format": "free",
             "action_check": profile.action_check or "stewart.check:allow_all", "exec_mode": self.mode,
             "memory_files": mem_log, "env_info": self.env_info, "skills": SK.meta_log(self.skills),
+            **({"project_config": {"commands": [{"name": c.name, "scope": c.scope, "origin": c.origin, "path": str(c.path),
+                                                 "shadowed": c.shadowed,
+                                                 **({"ignored_keys": c.ignored_keys} if c.ignored_keys else {})}
+                                                for c in self.commands],
+                                   "agents": PC.agents_log(self.agents)}} if (self.commands or self.agents) else {}),
             "resumed_from": resumed_from, "resumed_messages": len(self.messages) - 1 if history else 0,
             "started": datetime.now().isoformat(timespec="seconds"),
         }
@@ -258,7 +328,8 @@ class ChatSession:
             self.ui.dim(f"이어 감: {resumed_from} (메시지 {len(self.messages) - 1}개, 사람 입력 {n_user}개)")
         save_messages(rec.dir, self.messages)
         if mem_log:
-            self.ui.dim("프로젝트 기억 파일: " + ", ".join(f"{m['path']} ({m['used']}자{', 잘림' if m['truncated'] else ''})" for m in mem_log))
+            self.ui.dim("프로젝트 기억 파일: " + ", ".join(f"{m['path']} ({m['used']}자{', 잘림' if m['truncated'] else ''})"
+                                                          for m in mem_log if "used" in m))
         if self.skills:
             self.ui.dim(f"스킬 {len(self.skills)}개: " + ", ".join(f"{k.name}({'프로젝트' if k.scope == 'project' else '사용자'})" for k in self.skills))
             proj = sorted({str(k.dir.parent) for k in self.skills if k.scope == "project"})
@@ -270,6 +341,10 @@ class ChatSession:
         self.skills_loaded: list[str] = []
         self._skill_note: str | None = None
         self.cps = Checkpoints(rec.dir, profile.workdir)
+        # 셸 허용 규칙(사용자 rules.toml·저장소 deny/ask·허브 "늘 허용"). 셸 확인 자리에서만 쓴다
+        self.rules = AR.RuleSet(profile.workdir, compat=self.pfl.compat, hub_rules=getattr(self.ui, "hub_rules", None))
+        self.comps = CM.Components(rec)
+        self._ttft: float | None = None
         self._rewind_note: str | None = None
         self.delegations: list[dict] = []
         self._dg_budget = DG.Budget(self.max_steps, profile.delegate_budget)
@@ -311,8 +386,44 @@ class ChatSession:
         if r:
             return BND.READ_DENY.format(path=r) if self.bd.read_outside == "deny" else self._ask_outside([r], "read")
         if d == "run":
+            if name == "run_shell":   # auto 에서도 deny 규칙은 건다(allow·ask 는 auto 에 뜻이 없다)
+                verdict, text = self.shell_rule(args, deny_only=True)
+                if verdict == "deny":
+                    return text
             return None
-        return self._ask_permission("    실행할까? [y/n/모델에 할 말] ")
+        cmd = str(args.get("command") or "") if name == "run_shell" else None
+        if name == "run_shell":
+            verdict, text = self.shell_rule(args)
+            if verdict == "allow":
+                return None
+            if verdict == "deny":
+                return text
+            if self._same_cmd_on and cmd in self._approved_cmds:   # 같은 명령을 이 세션에서 이미 허용했다
+                self.st["same_cmd_skips"] = self.st.get("same_cmd_skips", 0) + 1
+                self.rec.event("same_command_allowed", step=self.st["steps"], chars=len(cmd))
+                self.comps.fire("allow_rule", self.st["steps"], "shell_confirm", "allow", rule="same_command", source="session")
+                self.ui.dim("    (이 세션에서 허용한 같은 명령이라 묻지 않음)")
+                return None
+        d = self._ask_permission("    실행할까? [y/n/모델에 할 말] ")
+        if d is None and cmd:
+            self._approved_cmds.add(cmd)
+        return d
+
+    def shell_rule(self, args: dict, deny_only: bool = False) -> tuple[str | None, str]:
+        """셸 허용 규칙. ("allow", "") | ("deny", 까닭) | (None, "") — None 이면 지금처럼 묻는다.
+        deny_only(auto 모드): deny 만 보고 나머지는 (None, "")."""
+        cwd = getattr(self.env.shell, "cwd", None) if self.env.shell is not None else None
+        ctx = AR.Ctx(self.profile.workdir, Path(cwd or self.profile.workdir), self.env.is_secret,
+                     allow_redirect=self.mode == "edits")   # 작업 폴더 안 > 는 편집을 묻지 않는 edits 에서만
+        r = self.rules.decide(str(args.get("command") or ""), ctx)
+        if r.effect not in ("allow", "deny") or (deny_only and r.effect != "deny"):
+            return None, ""
+        self.comps.fire("allow_rule", self.st["steps"], "shell_confirm", "allow" if r.effect == "allow" else "block",
+                        rule=":".join(r.rule_ids[:3]), source=":".join(r.sources), pieces_ok=r.effect == "allow")
+        if r.effect == "allow":
+            self.ui.dim(f"    (허용 규칙으로 실행: {', '.join(r.rule_ids[:3])})")
+            return "allow", ""
+        return "deny", f"셸 규칙(deny {r.rule_ids[0]})이 이 명령을 막았다. 다른 방법을 쓰거나 사용자에게 물어라."
 
     def _outside_writes(self, name: str, args: dict) -> list[str]:
         paths = [p for p in [self.bd.tool_write(name, args)] if p]
@@ -374,12 +485,52 @@ class ChatSession:
             if not isinstance(args, dict):
                 raise ValueError("인자가 객체가 아니다")
         except Exception as e:
-            tc.update(parse_error=str(e), ok=False, result=f"인자 JSON 파싱 실패: {e}. 올바른 JSON 객체로 다시 호출하라.",
-                      elapsed_s=0.0)
+            cut = getattr(self, "_cut", False)   # 생성 상한에서 끊긴 응답의 툴콜(cutoff.py)
+            tc.update(parse_error=str(e), ok=False, elapsed_s=0.0, cut=cut or None,
+                      result=(CO.cut_note(self.profile, self.backend, name, raw_s) if cut
+                              else f"인자 JSON 파싱 실패: {e}. 올바른 JSON 객체로 다시 호출하라."))
+            if cut:
+                self.st["cut_toolcalls"] = self.st.get("cut_toolcalls", 0) + 1
+                self.rec.event("toolcall_cut", step=step, name=name, chars=len(raw_s))
             self.st["parse_failures"] += 1
             self.ui.tool(name, f"인자 파싱 실패: {e}")
             return tc
         self.ui.tool(name, _arg_summary(name, args))
+        if name + "\0" + raw_s in self._blocked:   # 되짚기 뒤 같은 호출: 돌리지 않는다(결과는 앞과 같다)
+            tc.update(ok=False, result=RF.BLOCKED_NOTE, elapsed_s=0.0, blocked=True)
+            self.ui.warn("    되짚기 뒤 같은 호출이라 돌리지 않았다")
+            return tc
+        cmd = str(args.get("command") or "") if name == "run_shell" else None
+        ban = next((b for b in self.bans if b.matches(name, raw_s, cmd)), None)
+        if ban is not None:   # 되짚기에서 다시 하지 않기로 한 호출(같은 프로그램·같은 대상이면 글자가 달라도)
+            ban.hits += 1
+            tc.update(ok=False, elapsed_s=0.0, banned=ban.id,
+                      result=f"[엔진] 되짚기에서 다시 하지 않기로 한 호출이다({ban.text}). 돌리지 않았다 — 다른 길로 가라. "
+                             "이 걸음이 목표에 꼭 필요하지 않으면 건너뛰고 본 목표로 가라.")
+            self.ui.warn(f"    되짚기에서 금지한 호출이라 돌리지 않았다: {ban.text[:80]}")
+            return tc
+        if cmd and self.forge is not None:
+            why = FG.outside(self.forge, cmd, Path(self.profile.workdir))
+            if why:   # forge 밖으로 올리기·원격 바꾸기
+                tc.update(ok=False, elapsed_s=0.0, denied=True, result=FG.BLOCK_NOTE.format(base=self.forge.base, why=why))
+                self.ui.warn(f"    forge 밖이라 돌리지 않았다: {why}")
+                return tc
+        if cmd:
+            sec = ST.secret_reads(cmd, lambda n: ST.is_secret_name(n, self.env.secret_globs, self.env.secret_allow))
+            if sec and not ST.user_named(getattr(self, "_raw_text", ""), sec):
+                ok_read = False
+                if self.mode != "auto":
+                    try:
+                        ans = self.ui.ask(f"  비밀 꼴 파일({', '.join(sec[:3])})의 내용을 셸로 읽으려 한다: {cmd[:160]}\n"
+                                          "  기본은 읽지 않는다(이름·크기만). 이번만 읽게 할까? [y/n/모델에 할 말] ").strip()
+                    except EOFError:
+                        ans = "n"
+                    ok_read = ans.lower() in ("y", "yes", "ㅇ", "네")
+                if not ok_read:
+                    tc.update(ok=False, elapsed_s=0.0, denied=True, secret=True,
+                              result=f"[엔진] {', '.join(sec[:3])} 은 비밀 꼴 파일이다. {ST.NAMES_ONLY_HINT}")
+                    self.ui.warn(f"    비밀 꼴 파일 내용 읽기라 돌리지 않았다: {', '.join(sec[:3])}")
+                    return tc
         if name not in self.tool_names:
             tc.update(ok=False, result=T.unknown_tool(name, self.tool_names), elapsed_s=0.0)
             self.ui.warn("    없는 도구")
@@ -391,6 +542,15 @@ class ChatSession:
                 return tc
             self._asked = self._asked or q
             tc.update(ok=True, result=clarify.TOOL_RESULT, elapsed_s=0.0, question=q)
+            return tc
+        if name in FG.NAMES and self.forge is not None:   # 원격 저장소(forge) 도구
+            if self.mode == "plan":
+                tc.update(ok=False, result="계획 모드에서는 원격을 걸거나 협력자를 넣지 않는다", elapsed_s=0.0)
+                return tc
+            ok, result = FG.execute(self.forge, self.profile.workdir, name, args)
+            self.rec.event("forge_tool", step=step, name=name, ok=ok)
+            self.ui.dim(f"    {'✓' if ok else '✗'} {_one_line(result, 160)}")
+            tc.update(ok=ok, result=result, elapsed_s=0.0)
             return tc
         if name in MEM.NAMES and self.mem is not None:   # 기억 도구
             ok, result = MEM.execute(self.mem, name, args)
@@ -426,7 +586,16 @@ class ChatSession:
                 self.st["tool_errors"] += 1
             tc.update(ok=ok, result=result, elapsed_s=0.0)
             return tc
+        if self.extra_exec is not None and name in self.extra_names:
+            ok, result = self.extra_exec(name, args)
+            self.ui.dim(f"    {'✓' if ok else '✗'} {_one_line(result, 160)}")
+            if not ok:
+                self.st["tool_errors"] += 1
+            tc.update(ok=ok, result=result, elapsed_s=0.0)
+            return tc
         call = ToolCall(id=rc["id"], name=name, arguments=args, raw_arguments=raw_s)
+        if hasattr(self.ui, "call_context"):   # 허브 작업자 화면: 묻기 전에 어떤 호출인지 넘긴다(판정은 그대로)
+            self.ui.call_context(name, args)
         denied = self.check(call, CheckContext(profile=self.profile.name, workdir=self.profile.workdir, step=step)) \
             or self._confirm(name, args)
         if denied:
@@ -451,6 +620,10 @@ class ChatSession:
                 tc["hook_note"] = True
                 result += HK.POST_NOTE.format(why=post)
         tc["elapsed_s"] = time.monotonic() - t1
+        if name == "run_shell" and not ok and ST.soft_exit(str(args.get("command") or ""), result):
+            ok = True                      # 출력은 받았고 마지막 조건식 거짓·grep 무매치라 1 — 실패로 세지 않는다
+            result += ST.SOFT_NOTE
+            tc["soft_exit"] = True
         if not ok:
             sig = name + "\0" + raw_s
             self.fail_count[sig] = self.fail_count.get(sig, 0) + 1
@@ -462,18 +635,29 @@ class ChatSession:
                     self._repeat_stop = True
         same = self.guard.observe(name, raw_s, ok, result)
         g_note = self.guard.note(same)
+        if g_note is None and same == 2 and getattr(self.ui, "goal_notes", False):   # 허브: 두 번째부터 "이미 받은 결과"
+            g_note = G.EARLY_NOTE
         if g_note:
             if same >= G.STRONG:   # chat 은 도구를 빼지 않고 사람에게 묻는다
                 g_note = G.NOTE.format(n=same)
             result += "\n\n" + g_note
             tc["guard"] = same
-            if same >= G.STOP:
-                self._guard_hit = same
+            if same >= G.REFLECT_AT:     # 같은 호출·같은 결과: 되짚기로(남은 되짚기가 없으면 G.STOP 에서 사람에게)
+                if same >= G.STOP or (self.rf["on"] and self._rstate.used < self.rf["max"]):
+                    self._guard_hit = same
+                    self._guard_tc = tc
+        if self.mem is not None:   # 기억 대상 가르기·차례 셸 메모(판 54) — 깨져도 도구 흐름은 그대로
+            try:
+                result += self._mem_seen(name, args, ok, result)
+            except Exception:
+                pass
         tc.update(ok=ok, result=result)
         if target is not None and ok:
             after = _read(target)
-            d = make_diff(before, after, os.path.relpath(target, self.profile.workdir) if target.is_absolute() else str(target))
+            d = make_diff(before, after, os.path.relpath(target, self.profile.workdir) if target.is_absolute() else str(target),
+                          max_lines=DIFF_KEEP)
             tc["diff"] = "\n".join(d)
+            tc["diff_stat"] = diff_stat(d)
             self.st["files_changed"].add(str(target))
             self.ui.diff(d or ["(바뀐 내용 없음)"])
         elif name == "run_shell":
@@ -531,7 +715,7 @@ class ChatSession:
         extra = [t for t in self.ui.take_interjections() if t.strip()]
         if not extra:
             return
-        text = "\n\n".join(extra)
+        text = "\n\n".join(extra) + ("\n\n" + INTERJECT_NOTE if getattr(self.ui, "goal_notes", False) else "")
         self.messages.append({"role": "user", "content": text})
         self.st["interjections"] = self.st.get("interjections", 0) + len(extra)
         self.rec.event("interject", step=step, n=len(extra), chars=len(text), content=text)
@@ -552,13 +736,17 @@ class ChatSession:
             try:
                 if self.stream:
                     self.ui.stream_start()
-                    try:
+                    t_req, first = time.monotonic(), []
+                    try:   # 첫 조각(본문·생각·툴콜)까지 시간 = ttft
                         resp, dt = chat_stream(self.backend, self._clean(), self.tool_defs or None,
-                                               on_delta=self.ui.stream_piece, **kw)
+                                               on_delta=self.ui.stream_piece,
+                                               on_first=lambda: first.append(time.monotonic() - t_req), **kw)
                     finally:
                         streamed = self.ui.stream_end()
+                    self._ttft = round(first[0], 3) if first else None
                 else:
                     resp, dt = chat(self.backend, self._clean(), self.tool_defs or None, **kw)
+                    self._ttft = None   # 비스트리밍은 첫 토큰 시각을 모른다
             except BackendError as e:
                 c = self.comp.maybe(self.messages, self.st["last_prompt_tokens"], step, force=True, keep=1) \
                     if not overflow_done and is_context_overflow(e) else None
@@ -584,9 +772,53 @@ class ChatSession:
             mt["thinking"] = False
 
     # ---- 한 차례 ---------------------------------------------------------
-    def turn(self, text: str) -> str:
+    def _mem_seen(self, name: str, args: dict, ok: bool, result: str) -> str:
+        """도구 한 번: 만진 경로로 대상 프로젝트를 고르고(바뀌면 그 프로젝트 색인을 결과 끝에 한 번), 실패한 셸은 차례 끝 메모로 모은다."""
+        paths = []
+        for k in ("path", "file", "dir"):
+            if isinstance(args.get(k), str) and args[k]:
+                paths.append(args[k])
+        if name == "run_shell":
+            cwd = getattr(self.env.shell, "cwd", None) if self.env.shell is not None else None
+            if cwd:
+                paths.append(cwd)
+            m = re.match(r"\[exit (-?\d+)\]", result or "")
+            if m and not ok:
+                self.__dict__.setdefault("_mem_shells", []).append({"command": str(args.get("command") or ""), "exit": int(m.group(1))})
+        if paths and self.mem.retarget(paths) is not None:
+            note = self.mem.target_note()
+            if note:
+                self.rec.event("memory_target", subject=self.mem.target["key"])
+                return "\n\n" + note
+        return ""
+
+    def turn(self, text: str, images: list | None = None) -> str:
+        self._mem_shells = []
+        try:
+            return self._turn(text, images)
+        finally:
+            if self.mem is not None and self._mem_shells:   # 실사용에서도 엔진 자동 메모가 쌓이게(판 54)
+                try:
+                    n = self.mem.turn_notes(self._mem_shells)
+                    if n:
+                        self.rec.event("memory_auto", notes=n, subject=self.mem.here()["key"])
+                except OSError:
+                    pass
+
+    def _turn(self, text: str, images: list | None = None) -> str:
         """사람 입력 하나를 처리한다. 종료 사유: answered | asked | length_empty | max_steps | repeated_call | repeated_failure | backend_error | context_overflow | interrupted | consecutive_errors"""
         self.st["turns"] += 1
+        self._raw_text = text   # 사람 말 그대로(말만 하고 멈춤 되돌리기 판정용, intent.py)
+        if self.mem is not None and getattr(self.ui, "memory_writes", True):   # 스스로 기억(사용자 전역): 다음에도 지킬 지시·선호
+            for kind, sent in MEM.detect(text):
+                item = self.mem.remember(kind, sent)
+                if item is not None:
+                    self.rec.event("remember", id=item["id"], what=kind)
+                    hook = getattr(self.ui, "remembered", None)
+                    if hook is not None:
+                        hook(item)
+                    else:
+                        self.ui.dim(f"  (기억함: {sent[:80]} — 지우기: 허브 화면 또는 기억 폴더)")
         cp = self.cps.begin(text.splitlines()[0] if text else "")
         self.rec.event("checkpoint", id=cp, turn=self.st["turns"])
         if self._skill_note:    # /skill 로 사람이 고른 스킬 본문(다음 사람 입력 앞에)
@@ -608,8 +840,14 @@ class ChatSession:
         if self._env_note:      # 세션 첫 입력 맨 앞에 환경 블록(시스템 지시문을 과제 사이에 같게)
             text = self._env_note + "\n\n" + text
             self._env_note = None
-        self.messages.append({"role": "user", "content": text})
-        self.rec.event("user", turn=self.st["turns"], content=text)
+        if images and not self.backend.vision:   # 꺼진 백엔드에는 이미지를 붙이지 않는다(까닭을 말하고 글만)
+            self.ui.warn(f"  이 백엔드({self.backend.name})는 이미지를 받지 않는다(backends 표 vision = false). 이미지는 빼고 글만 보낸다.")
+            images = None
+        todos_open = [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
+        if getattr(self.ui, "goal_notes", False) and (todos_open or self.bans or self._last_reason not in (None, "answered", "asked")):
+            text = text + "\n\n" + NEW_GOAL_NOTE   # 앞 차례의 미완 걸음·목록·되짚기 계획이 이 말을 덮지 않게
+        self.messages.append({"role": "user", "content": IMG.content(text, images or [])})
+        self.rec.event("user", turn=self.st["turns"], content=text, images=len(images or []) or None)
         self.rec.md(f"## 사람 (차례 {self.st['turns']})\n\n```\n{text}\n```\n")
         consecutive = 0
         reason = "max_steps"
@@ -619,7 +857,15 @@ class ChatSession:
         self._repeat_stop = False
         self.guard.reset()
         self._guard_hit = 0
+        self._guard_tc = None
+        self._silent, self._narrate_nudged = 0, False
+        self._blocked: dict = {}          # 되짚기 뒤 이 차례에 막은 호출 서명
+        self._last_reflect = ""
         self._asked = None
+        self._rstate = RF.State()     # 되짚기 횟수는 차례마다(사람이 "계속" 하면 다시 한 번 쓸 수 있다)
+        self._fail_steps, self._recent_fail = [], []
+        self._cut, self._continued = False, 0
+        self._intent_nudged = False
         budget, n = self.max_steps, 0
         try:
             while True:
@@ -640,14 +886,22 @@ class ChatSession:
                 try:
                     resp, dt, streamed = self._call(step, mt)
                 except BackendError as e:
-                    self.ui.warn(f"백엔드 오류: {e} {(e.body or '')[:300]}")
+                    be = getattr(self.ui, "backend_error", None)   # 허브 화면: 까닭을 사람 말 한 줄로 + 모델 서버 점을 곧바로
+                    if be is not None:
+                        be(e)
+                    else:
+                        self.ui.warn(f"백엔드 오류: {e} {(e.body or '')[:300]}")
                     self.rec.event("step", step=step, error=str(e), status=e.status, body=(e.body or "")[:2000])
                     self.rec.md_step(step, {"elapsed_s": 0.0, "note": f"백엔드 오류 {e}"})
                     if e.status and "parse" in (e.body or "").lower():
                         self.st["parse_failures"] += 1
                         consecutive += 1
                         self.messages.append({"role": "user", "content": "도구 호출 형식이 깨졌다. 정해진 tool call 형식으로 다시 호출하라."})
+                        self._fail_steps.append([])
                         if consecutive < self.profile.max_consecutive_errors:
+                            continue
+                        if self._reflect("consecutive_errors", step, consecutive):
+                            consecutive = 0
                             continue
                         reason = "consecutive_errors"
                         break
@@ -672,14 +926,15 @@ class ChatSession:
                     self.st[k_dst] += tim.get(k_src) or 0
                 content = msg.get("content") or ""
                 calls = msg.get("tool_calls") or []
-                srec = {"elapsed_s": dt, "content": content, "timings": tim, "usage": usage,
+                srec = {"elapsed_s": dt, "ttft_s": self._ttft, "content": content, "timings": tim, "usage": usage,
                         "finish_reason": choice.get("finish_reason"), "mode": None, "tool_calls": []}
                 think = msg.get("reasoning_content") or msg.get("reasoning")
                 if think:
                     srec["reasoning_content"] = think
                     self.ui.dim(f"  (생각 {len(think)}자)")
-                if content.strip() and not streamed:
-                    self.ui.assistant(content.strip() if not calls else _one_line(content, 300))
+                if content.strip() and not streamed:   # 도구와 함께 온 글: 허브 화면은 그대로(걸음 사이 말), 터미널은 한 줄
+                    self.ui.assistant(content.strip() if not calls or getattr(self.ui, "full_narration", False) else _one_line(content, 300))
+                self._cut = choice.get("finish_reason") == "length"
                 if calls:
                     for rc in calls:
                         rc.setdefault("id", "call_" + uuid.uuid4().hex[:8])
@@ -688,16 +943,41 @@ class ChatSession:
                     any_ok = False
                     for rc in calls:
                         tc = self._exec(rc, step)
+                        done = getattr(self.ui, "tool_done", None)   # 허브 화면: 모든 길(일찍 끝난 것 포함)의 끝 — ✓/✕ 표시
+                        if done is not None:
+                            done(tc)
+                        if not tc["ok"]:
+                            self._recent_fail.append(tc)
+                            del self._recent_fail[:-RF.RECENT_KEEP]
                         srec["tool_calls"].append(tc)
                         self._turn_calls.append(tc)
                         any_ok = any_ok or tc["ok"]
                         self.messages.append({"role": "tool", "tool_call_id": rc["id"], "name": tc["name"],
                                               "content": tc["result"]})
                     consecutive = 0 if any_ok else consecutive + 1
+                    if getattr(self.ui, "goal_notes", False):   # 허브: 말 없이 도구만 5걸음 넘게 → 한 번 "지금 무엇을 하는지 한 문장으로"
+                        self._silent = 0 if content.strip() else getattr(self, "_silent", 0) + 1
+                        if self._silent >= SILENT_STEPS and not getattr(self, "_narrate_nudged", False):
+                            self._narrate_nudged = True
+                            RF.append_user(self.messages, NARRATE_NOTE)
+                            self.rec.event("narrate_nudge", step=step, silent=self._silent)
+                    self._attach_viewed()
+                    if any_ok:
+                        self._fail_steps.clear()
+                    else:
+                        self._fail_steps.append(srec["tool_calls"])
                     self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec,
                                    consecutive_errors=consecutive)
                     self.rec.md_step(step, srec)
                     if consecutive >= self.profile.max_consecutive_errors:
+                        if self._reflect("consecutive_errors", step, consecutive):
+                            consecutive = 0
+                            self.compact()
+                            continue
+                        if self._ask_loop(n, step, "consecutive_errors", f"도구 호출이 모두 실패한 단계가 {consecutive}번 이어졌다"):
+                            consecutive = 0
+                            self.compact()
+                            continue
                         reason = "consecutive_errors"
                         break
                     if self._asked:   # 질문을 보이고 그 차례를 끝낸다(다음 사람 입력이 답)
@@ -707,11 +987,29 @@ class ChatSession:
                         reason = "asked"
                         break
                     if self._repeat_stop:
+                        if self._reflect("repeated_failure", step, consecutive):
+                            self._block(self._recent_fail[-1:])
+                            consecutive = 0
+                            self.compact()
+                            continue
+                        if self._ask_loop(n, step, "repeated_failure", f"똑같은 도구 호출이 {REPEAT_STOP}번 실패했다"):
+                            self._repeat_stop = False
+                            RF.lower_hot(self.fail_count, REPEAT_NUDGE, REPEAT_STOP)
+                            consecutive = 0
+                            continue
                         reason = "repeated_failure"
                         break
                     if self._guard_hit:
                         hit, self._guard_hit = self._guard_hit, 0
-                        if self._ask_more(n, f"같은 호출을 결과가 같은 채로 {hit}번 되풀이했다", "repeated_call"):
+                        gtc, self._guard_tc = self._guard_tc, None
+                        if self._reflect("repeated_call", step, consecutive, calls=[gtc] if gtc else [],
+                                         facts=RF.facts_same(gtc, hit) if gtc else None, label=f"같은 호출 {hit}번"):
+                            self._block([gtc] if gtc else [])
+                            self.guard.reset()
+                            consecutive = 0
+                            self.compact()
+                            continue
+                        if self._ask_loop(n, step, "repeated_call", f"같은 호출을 결과가 같은 채로 {hit}번 되풀이했다"):
                             self.guard.reset()
                         else:
                             reason = "repeated_call"
@@ -725,6 +1023,32 @@ class ChatSession:
                     reason = "length_empty"
                     break
                 self.messages.append({"role": "assistant", "content": content})
+                if self._cut and content.strip() and self._continued < CO.CONTINUE_MAX:   # 끊긴 글 답: 최종 답으로 받지 않고 잇게 한다
+                    self._continued += 1
+                    self.messages.append({"role": "user", "content": CO.CONTINUE_NOTE.format(mt=CO.limit_of(self.profile, self.backend))})
+                    srec["note"] = "답이 생성 상한에서 끊김 → 이어 쓰게 함"
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    self.rec.event("length_continue", step=step, n=self._continued)
+                    self.ui.dim("  (답이 생성 상한에서 끊겨 이어 쓰게 한다)")
+                    continue
+                if (self._intent_nudged and IN.on() and self.tool_names
+                        and IN.intent_only(self._raw_text, content, len(self._turn_calls))
+                        and self._reflect("intent_only", step, 0, calls=[], label="말만 하고 멈춤 2번")):   # 두 번째: 되짚기
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    continue
+                if (not self._intent_nudged and IN.on() and self.tool_names
+                        and IN.intent_only(self._raw_text, content, len(self._turn_calls))):   # 말만 하고 멈춤: 한 번 되돌린다
+                    self._intent_nudged = True
+                    self.st["intent_nudges"] = self.st.get("intent_nudges", 0) + 1
+                    self.messages.append({"role": "user", "content": IN.NOTE})
+                    srec["note"] = "할 일을 말로만 하고 끝냄 → 도구로 하게 되돌림"
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    self.rec.event("intent_nudge", step=step)
+                    self.ui.dim("  (할 일을 말로만 하고 끝내 도구로 하게 되돌린다)")
+                    continue
                 why = (self.hk.stop(content, step) if self.hk.has("Stop")
                        and self._hook_stops < self.profile.check_on_stop_max else None)
                 if why is not None:   # [hooks] Stop exit 2: 끝내지 않고 까닭을 돌려준다(차례당 check_on_stop_max 번)
@@ -764,12 +1088,136 @@ class ChatSession:
             self.ui.warn(f"  이번 차례에 바꾼 파일 {len(self.cps.cur['files'])}개는 그대로다. 되돌리려면 /undo(셸이 바꾼 것은 못 되돌림).")
         if reason == "repeated_failure":
             self.ui.warn(f"  똑같은 도구 호출이 {REPEAT_STOP}번 실패해 멈췄다. 방향을 알려 주거나 '계속' 이라고 친다.")
+        self._last_reason = reason
+        rsum = self._rstate.summary(reason, self.st["steps"])
+        if rsum is not None:
+            rsum["turn"] = self.st["turns"]
+            self._reflect_log.append(rsum)
+            if self._rstate.log:
+                self.rec.event("reflect_end", **rsum)
+                if reason in ("consecutive_errors", "repeated_failure"):
+                    self.ui.warn("  (되짚기를 한 번 했지만 다시 같은 꼴로 실패해 멈췄다)")
         self.ui.dim(f"  [{reason} · 단계 {self.st['steps']} · 프롬프트 {self.st['last_prompt_tokens']}/{self.backend.max_context} tok"
                     f" · 생성 합 {self.st['completion_tokens']} tok · 모델 {self.st['model_time_s']:.0f}초]")
-        self.rec.event("turn_end", turn=self.st["turns"], reason=reason)
+        changed = sorted({e["path"] for e in self.cps.cur["files"]}) if (self.cps.cur and self.cps.cur.get("files")) else []
+        if changed and hasattr(self.ui, "turn_files"):   # 허브 화면: "이번 차례에 바뀐 파일" 한 줄
+            self.ui.turn_files([os.path.relpath(f, self.profile.workdir) if os.path.isabs(f) else f for f in changed])
+        self.rec.event("turn_end", turn=self.st["turns"], reason=reason, **({"reflect": rsum} if rsum else {}),
+                       **({"files": [os.path.relpath(f, self.profile.workdir) if os.path.isabs(f) else f for f in changed][:50]}
+                          if changed else {}))
         self._last_reason = reason
         save_messages(self.rec.dir, self.messages)
         return reason
+
+    def _attach_viewed(self) -> None:
+        """view_image 가 연 이미지를 다음 user 메시지로 붙인다(도구 결과는 글 — 백엔드가 tool 메시지 이미지를 못 받아서)."""
+        if not self.env.pending_images:
+            return
+        parts, self.env.pending_images = list(self.env.pending_images), []
+        self.messages.append({"role": "user", "content": IMG.content(f"[엔진] view_image 로 연 이미지 {len(parts)}장", parts)})
+        self.rec.event("image_attach", n=len(parts))
+
+    def _block(self, calls: list) -> None:
+        """되짚기 뒤 이 차례에 같은 호출을 막는다(결과가 앞과 같을 것이라 돌리지 않는다)."""
+        for tc in calls or []:
+            if tc:
+                self._blocked[str(tc.get("name", "")) + "\0" + str(tc.get("raw_arguments", ""))] = True
+                self._add_ban(ST.ban_from_call(tc))
+
+    def _add_ban(self, b) -> None:
+        if b is not None and all(x.id != b.id for x in self.bans):
+            self.bans.append(b)
+            self.rec.event("ban", id=b.id, tool=b.tool, text=b.text, source=b.source)
+
+    def unban(self, ban_id: str) -> bool:
+        """사람이 화면에서 금지를 푼다."""
+        n = len(self.bans)
+        self.bans = [b for b in self.bans if b.id != ban_id]
+        if len(self.bans) != n:
+            self.rec.event("unban", id=ban_id)
+            return True
+        return False
+
+    def _ask_loop(self, n: int, step: int, kind: str, why: str) -> bool:
+        """스스로 되짚기를 다 쓰고도 같은 고리: 사람에게 묻는다 — 무엇을 해 봤고 왜 막혔는지 + 고를 길.
+        y = 그대로 계속, n = 멈춤, 그 밖의 글 = 그 방향을 모델에 전하고 이어 감. auto 모드는 묻지 않고 멈춘다."""
+        if self.mode == "auto":
+            self.rec.event(kind, steps=n, asked=False, more=False)
+            return False
+        tried = self._last_reflect.strip()
+        msg = (f"  {why}. 스스로 되짚기 {self._rstate.used}번으로도 풀리지 않았다."
+               + (f"\n  마지막 되짚기(앞부분):\n    " + "\n    ".join(tried.splitlines()[:12]) if tried else "")
+               + "\n  고를 길: y = 같은 방향으로 계속 · n = 여기서 멈춤 · 다른 말 = 그 방향을 모델에 전하고 이어 감")
+        try:
+            ans = self.ui.ask(msg + "\n  [y/n/모델에 할 말] ").strip()
+        except EOFError:
+            ans = "n"
+        low = ans.lower()
+        more = low in ("", "y", "yes", "ㅇ", "네", "계속")
+        if not more and low not in ("n", "no", "ㄴ", "아니"):
+            self.messages.append({"role": "user", "content": f"[사람] {ans}"})
+            more = True
+        self.rec.event(kind, steps=n, asked=True, more=more, said=bool(ans and low not in ("y", "n", "yes", "no")))
+        return more
+
+    def _reflect(self, trigger: str, step: int, consecutive: int, calls: list | None = None, facts: str | None = None,
+                 label: str | None = None) -> bool:
+        """막히기 직전(오류 누적·같은 실패·같은 호출 되풀이·말만 하고 멈춤) 도구 없는 되짚기 한 번(reflect.py). 했으면 True(이어 간다)."""
+        if calls is None:
+            calls = ([tc for s in self._fail_steps[-consecutive:] for tc in s] if trigger == "consecutive_errors"
+                     else self._recent_fail[-1:])
+        why = RF.skip_reason(self.rf, self._rstate.used, calls)
+        if why is not None:
+            if why != "off":
+                self._rstate.skipped.append({"trigger": trigger, "at_step": step, "why": why})
+                self.rec.event("reflect_skip", step=step, trigger=trigger, why=why)
+            return False
+        self._interject(step)   # 허브 긴급 지시·사람이 끼워 넣은 말은 되짚기 앞에(멈춤 요청도 여기서 걸린다)
+        self._rstate.used += 1
+        self.st["reflects"] = self.st.get("reflects", 0) + 1
+        RF.append_user(self.messages, RF.CHAT_PROMPT.format(why=RF.WHY[trigger],
+                                                       facts=facts or RF.facts(self.fail_count, self._recent_fail)))
+        self.rec.event("reflect_start", step=step, trigger=trigger, last_k=consecutive,
+                       fails={RF._hash(k): v for k, v in self.fail_count.items()})
+        label = label or RF.LABEL.get(trigger, trigger)
+        card = getattr(self.ui, "reflect_card", None)   # 허브 화면: 작업 카드에 "되짚는 중 — …" 줄
+        if card is not None:
+            card("start", trigger, label, "")
+        else:
+            self.ui.dim(f"  ({label} — 도구 없이 한 번 되짚는다)")
+        kw = {"thinking": self.think} if self.think is not None else {}
+        cap = RF.cap_tokens(self.rf, self.tks["max_tokens"], TH.is_on(self.backend, self.think))
+        r = RF.call(chat, self.backend, self._clean(), kw, cap)
+        u = r["usage"]
+        self.st["model_time_s"] += r["elapsed_s"]
+        self.st["completion_tokens"] += u.get("completion_tokens") or 0
+        self.st["prompt_tokens_total"] += u.get("prompt_tokens") or 0
+        self.st["last_prompt_tokens"] = u.get("prompt_tokens") or self.st["last_prompt_tokens"]
+        self._pmark = len(self.messages)
+        self.rec.event("reflect", step=step, trigger=trigger, **r)
+        self.comps.fire("reflect", step, trigger, "return_to_model", ok=r["ok"], last_k=consecutive)
+        entry = {"trigger": trigger, "at_step": step, "ok": r["ok"], "chars": len(r["content"]),
+                 "completion_tokens": u.get("completion_tokens")}
+        self._rstate.log.append(entry)
+        if not r["ok"]:
+            self.messages.append({"role": "assistant", "content": RF.FAILED_NOTE.format(why=r["error"])})
+            self.ui.warn(f"  되짚기 답을 받지 못했다({r['error']}). 원래 사유로 멈춘다.")
+            return False
+        self.messages.append({"role": "assistant", "content": r["content"]})
+        self.messages.append({"role": "user", "content": RF.CHAT_GO})
+        self._last_reflect = r["content"]
+        parsed = ST.parse_reflect(r["content"], self.tool_names)   # "금지: …" 줄 → 도구 층에서 거절
+        for b in parsed["bans"]:
+            self._add_ban(b)
+        if card is not None:
+            card("done", trigger, label, r["content"])
+        else:
+            self.ui.assistant("[되짚기]\n" + r["content"])
+        entry["hot"] = RF.lower_hot(self.fail_count, REPEAT_NUDGE, REPEAT_STOP)
+        self._repeat_stop = False
+        self._fail_steps.clear()
+        self.rec.md(f"> 실패가 이어져({trigger}) 도구 없이 되짚음\n\n{r['content']}\n")
+        return True
 
     def _ask_more(self, n: int, why: str | None = None, kind: str = "steps_limit") -> bool:
         """단계 상한(또는 반복 감지)에 닿았을 때 더 할지. 묻는 모드(edits·ask·plan)는 사람에게 묻고, auto 는 묻지 않고 끝낸다."""
@@ -783,6 +1231,15 @@ class ChatSession:
         more = ans in ("", "y", "yes", "ㅇ", "네", "계속")
         self.rec.event(kind, steps=n, asked=True, more=more)
         return more
+
+    def expand_command(self, text: str) -> str | None:
+        """.stewart/commands(호환 .claude/commands)의 "/이름 인자" → 모델에 보낼 글. 내장 명령과 겹친 이름·모르는 이름은 None."""
+        r = PC.expand_command(self.commands, text)
+        if r is None:
+            return None
+        c, body = r
+        self.rec.event("project_command", name=c.name, scope=c.scope, origin=c.origin, chars=len(body))
+        return body
 
     def plan_summary(self) -> str:
         """정리 계획(plan.json)의 요약과 두 파일 경로. 계획이 없으면 그렇다고 + 지금 모드."""
@@ -828,7 +1285,8 @@ class ChatSession:
                "exec_mode": self.mode, "tool_names": [t for t in self.all_tool_names if t != DG.NAME], "ledger": self.ledger,
                "budget": self._dg_budget, "log": self.delegations, "ask": ask, "on_call": on_call,
                "ask_cfg": lambda n, name, a, path: self._ask_cfg(f"    [작업자 {n}]" + CG.ASK_PROMPT.format(path=path)[3:]),
-               "bounds": self.bd,
+               "bounds": self.bd, "projcfg": self.pfl, "read_default": True,
+               "rule": lambda name, a, deny_only=False: self.shell_rule(a, deny_only) if name == "run_shell" else (None, ""),
                "ask_outside": lambda n, name, a, paths, kind: self._ask_outside(paths, kind, f"    [작업자 {n}] ")}
         self.ui.dim(f"  작업자에게 맡김: {_one_line(str(args.get('task') or ''), 120)}")
         ok, result = DG.run_child(ctx, args)
@@ -871,7 +1329,7 @@ class ChatSession:
             "stop_reason": "chat_end", "turns": st["turns"], "steps": st["steps"], "elapsed_s": time.monotonic() - self.t0,
             "model_time_s": st["model_time_s"], "tool_calls": st["tool_calls"], "tool_errors": st["tool_errors"],
             "parse_failures": st["parse_failures"], "format_failures": 0, "denied": st["denied"],
-            "interrupts": st["interrupts"], "compactions": st["compactions"], "compact_log": self.comp.log,
+            "interrupts": st["interrupts"], "reflects": st.get("reflects", 0), "compactions": st["compactions"], "compact_log": self.comp.log,
             "files_changed": sorted(st["files_changed"]), "skills_loaded": self.skills_loaded, "delegations": self.delegations,
             "ledger": self.ledger.brief() if self.ledger is not None else None,
             "completion_tokens": st["completion_tokens"], "prompt_tokens_total": st["prompt_tokens_total"],
@@ -926,6 +1384,7 @@ COMMANDS: dict[str, tuple[str, object]] = {
     "/rewind": ("/rewind [N] 체크포인트 목록·N 번 차례 시작 때로 되돌리기", lambda a: a == "" or a.isdigit()),
     "/ledger": ("/ledger 관리자 장부 보기(-p manager)", lambda a: a == ""),
     "/skill": ("/skill [이름 [글]] 스킬 목록·고른 스킬 본문을 다음 입력(또는 글)에 붙이기", lambda a: True),
+    "/image": ("/image <파일> 다음 입력에 이미지 붙이기(vision 백엔드만, 작업 폴더 밖도 됨)", lambda a: True),
 }
 
 HELP = (MODE_HELP + "\n"
@@ -998,6 +1457,7 @@ def repl(session: ChatSession, first: str | None = None) -> dict:
     except ImportError:
         pass
     pending = first
+    pending_images: list = []   # /image 로 붙인 것(다음 입력과 함께 간다)
     try:
         while True:
             if pending is not None:
@@ -1014,6 +1474,9 @@ def repl(session: ChatSession, first: str | None = None) -> dict:
             if not t:
                 continue
             kind = classify(t)
+            if kind[0] in ("msg", "typo") and (exp := session.expand_command(t)) is not None:
+                ui.dim(f"  ({t.split()[0]} → 프로젝트 명령 본문을 보낸다)")
+                kind, t, text = ("msg",), exp, exp
             if kind[0] == "usage":
                 ui.warn(f"쓰는 법: {COMMANDS[kind[1]][0]}")
                 continue
@@ -1025,7 +1488,7 @@ def repl(session: ChatSession, first: str | None = None) -> dict:
                 if cmd in ("/exit", "/quit", "/q"):
                     break
                 if cmd == "/help":
-                    ui.say(HELP)
+                    ui.say(HELP + ("\n" + PC.commands_help(session.commands) if session.commands else ""))
                 elif cmd == "/reset":
                     session.reset()
                     ui.info("대화를 지웠다.")
@@ -1047,6 +1510,18 @@ def repl(session: ChatSession, first: str | None = None) -> dict:
                 elif cmd == "/stream":
                     session.stream = arg.strip() != "off"
                     ui.info(f"스트리밍 {'켜짐' if session.stream else '꺼짐'}")
+                elif cmd == "/image":   # 다음 입력에 이미지 붙이기(images.py)
+                    if not arg.strip():
+                        ui.info(f"쓰는 법: {COMMANDS['/image'][0]} (붙인 것 {len(pending_images)}장)")
+                    elif not session.backend.vision:
+                        ui.warn(f"이 백엔드({session.backend.name})는 이미지를 받지 않는다(backends 표 vision = false).")
+                    else:
+                        try:
+                            part, desc = IMG.from_file(arg.strip(), session.rec.dir)
+                            pending_images.append(part)
+                            ui.info(f"이미지 {len(pending_images)}장 붙임: {desc} — 다음 입력과 함께 보낸다")
+                        except IMG.ImageError as e:
+                            ui.warn(f"이미지를 붙이지 않았다: {e}")
                 elif cmd == "/steps":
                     if arg.strip().isdigit() and int(arg) > 0:
                         session.max_steps = int(arg)
@@ -1100,8 +1575,35 @@ def repl(session: ChatSession, first: str | None = None) -> dict:
                                                          "last_prompt_tokens", "completion_tokens", "files_changed")},
                                       ensure_ascii=False, indent=1))
                 continue
-            session.turn(text)
+            if pending_images:
+                session.turn(text, images=pending_images)
+                pending_images = []
+            else:
+                session.turn(text)
     finally:
         s = session.close()
         ui.dim(f"\n기록: {session.rec.dir / 'transcript.md'}")
+        dream_at_close(session, ui)
     return s
+
+
+def dream_at_close(session, ui=None, ask_model=None, probe_fn=None) -> dict | None:
+    """chat 을 닫을 때 꿈꾸기 자동(판 54): 새 메모가 N개 넘은 대상만, 모델 서버가 이미 준비됐을 때만(찔러 보기 한 번 — 깨우지 않는다)."""
+    from . import dream as DR
+    mem = getattr(session, "mem", None)
+    if mem is None or not DR.auto_enabled() or not DR.due(mem.dir):
+        return None
+    from .modelstat import probe
+
+    def ready():
+        try:
+            return (probe_fn or probe)(session.backend, timeout=3.0, pod=False).get("state") == "ok"
+        except Exception:
+            return False
+    try:
+        r = DR.auto(mem.dir, ask_model or DR.model_caller(session.backend), mem.runs_dir, ready)
+    except Exception as e:
+        r = {"status": f"못 함: {type(e).__name__}", "results": []}
+    if ui is not None and r["status"] != "할 것 없음":
+        ui.dim(f"  기억 정리(꿈꾸기): {r['status']} " + ", ".join(f"{x['subject']} {x['status']}" for x in r["results"]))
+    return r

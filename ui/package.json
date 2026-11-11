@@ -1,0 +1,22 @@
+{
+  "name": "stewart-hub-ui",
+  "private": true,
+  "type": "module",
+  "description": "stewart 허브 웹 화면(빌드 결과는 src/stewart/web_ui 에 커밋, 받는 쪽은 Python 만)",
+  "scripts": {
+    "build": "vite build && node stamp.mjs",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@preact/signals": "2.11.4",
+    "highlight.js": "11.12.0",
+    "marked": "18.2.0",
+    "preact": "11.2.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "2.10.6",
+    "@tailwindcss/vite": "4.3.5",
+    "tailwindcss": "4.3.5",
+    "vite": "8.3.7"
+  }
+}

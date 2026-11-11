@@ -9,7 +9,9 @@
 - L3 주입 색인: <기억 폴더>/<대상>/MEMORY.md 를 지시문 끝에 넣는다(대상당 40줄·4 KB, 합 6 KB, 넘으면 자르고 표시).
   M1 에서는 사람이 쓰거나 비워 둔다. 쪽(L2)·꿈꾸기는 M2(쓰는 자는 꿈꾸기 하나).
 대상(코드가 정한다): 자리 = git 저장소 뿌리(있으면) 또는 작업 폴더 realpath / 종류 = 프로필 이름.
-켜기: 프로필 memory = true, 또는 STEWART_MEMORY=1. STEWART_MEMORY=0 이 이긴다. 기본은 끔(내장 프로필 모두 — 평가 기본 끔).
+켜기: STEWART_MEMORY=0|1 이 이긴다 > 프로필 memory = true|false > 정하지 않으면 chat·허브(실사용) 켬, run·평가 끔.
+스스로 기억(사용자 전역, 판 50): 사람 말에서 다음에도 지킬 지시·선호("앞으로는 …", "… 하지 마라", "기억해 …")를 알아채
+<기억 폴더>/user/remember.jsonl 에 남기고 모든 프로젝트의 지시문 맨 앞에 넣는다. 비밀 꼴은 남기지 않는다. 지우기는 forget(id).
 기억 폴더: STEWART_MEMORY_DIR, 없으면 ~/.local/share/stewart/memory. 작업자(delegate)는 기억을 쓰지 않는다.
 """
 
@@ -36,12 +38,17 @@ PURPOSE = ("[기억] 아래는 같은 대상(이 폴더·저장소, 이 종류�
            "기억의 주장은 지금 환경에서 확인한 뒤 쓴다. 확인한 사실·함정·결정은 note_add 로 남긴다(근거와 함께, 확인 못 했으면 unconfirmed).")
 
 
-def enabled(profile, env=None) -> bool:
+def enabled(profile, env=None, interactive: bool = False) -> bool:
+    """켜짐: STEWART_MEMORY=0|1 이 이기고, 다음은 프로필 memory = true|false, 정하지 않았으면 실사용(chat·허브, interactive)은 켬,
+    run·bench·평가는 끔 — 평가 결과에 기억이 섞이지 않게(시험이 못박는다)."""
     env = os.environ if env is None else env
     v = env.get(ENV_ON)
     if v in ("0", "1"):
         return v == "1"
-    return getattr(profile, "memory", None) is True
+    pv = getattr(profile, "memory", None)
+    if pv is not None:
+        return pv is True
+    return bool(interactive)
 
 
 def memory_dir(env=None) -> Path:
@@ -58,6 +65,58 @@ def _h(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
 
 
+def place_of(path: Path) -> dict:
+    """폴더 하나의 자리 대상: git 뿌리가 있으면 repo-…, 없으면 dir-…"""
+    from .memfile import git_root
+    wd = Path(path).resolve()
+    root = git_root(wd)
+    if root is not None:
+        return {"key": f"repo-{_slug(root.name)}-{_h(str(root))}", "kind": "repo", "name": root.name, "path": str(root)}
+    return {"key": f"dir-{_slug(wd.name)}-{_h(str(wd))}", "kind": "dir", "name": wd.name, "path": str(wd)}
+
+
+def projects_root_cfg(env=None) -> str:
+    """여러 프로젝트를 품은 작업 뿌리(예: 허브 작업 폴더): STEWART_PROJECTS_ROOT → hub.toml [memory] projects_root."""
+    env = os.environ if env is None else env
+    v = env.get("STEWART_PROJECTS_ROOT")
+    if v:
+        return os.path.realpath(os.path.expanduser(v))
+    try:
+        import tomllib
+        from .forge import config_path
+        p = config_path()
+        if p.is_file():
+            v = (tomllib.loads(p.read_text(encoding="utf-8")).get("memory") or {}).get("projects_root")
+            if isinstance(v, str) and v:
+                return os.path.realpath(os.path.expanduser(v))
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
+def project_of(workdir: Path, path, env=None) -> Path | None:
+    """작업 폴더가 여러 프로젝트의 뿌리일 때, path 가 든 첫 단계 하위 폴더(그 프로젝트). 아니면 None.
+    뿌리로 보는 때: 작업 폴더가 git 저장소 안이 아니고, (설정 projects_root 와 같거나) 그 하위 폴더가 git 저장소."""
+    from .memfile import git_root
+    wd = Path(workdir).resolve()
+    if git_root(wd) is not None or not path:
+        return None
+    p = Path(path)
+    p = (p if p.is_absolute() else wd / p).resolve()
+    try:
+        rel = p.relative_to(wd)
+    except ValueError:
+        return None
+    if not rel.parts or rel.parts[0].startswith("."):
+        return None
+    child = wd / rel.parts[0]
+    if not child.is_dir():
+        return None
+    if projects_root_cfg(env) == str(wd) or (child / ".git").exists():
+        return child
+    return None
+
+
 def subjects(profile) -> list[dict]:
     """[{key, kind, name, path}] — 자리 하나 + 종류 하나."""
     from .memfile import git_root
@@ -72,21 +131,223 @@ def subjects(profile) -> list[dict]:
     return out
 
 
+USER = {"key": "user", "kind": "user", "name": "사용자(모든 프로젝트)", "path": ""}
+USER_BYTES = 2048          # 지시문의 "스스로 기억함" 몫(합 INJECT_TOTAL 안)
+REMEMBER_MAX = 200
+_EXPLICIT = re.compile(r"^\s*(?:꼭\s*|이것?\s*)?기억해\s*(?:둬|줘|두어라|라|두라)?\s*[:：,.]?\s*(?P<a>.+)$|^(?P<b>.+?)\s*(?:을|를)?\s*(?:꼭\s*)?기억해\s*(?:둬|줘|두어라|라|두라)?\s*[.!]?$")
+_RULE = re.compile(r"(앞으로(?:는|도)?|다음부터(?:는)?|이제부터(?:는)?|항상|언제나|절대(?:로)?|매번|늘\s)|"
+                   r"(하지\s*(?:마|말)|쓰지\s*(?:마|말)|하면\s*안\s*(?:돼|된다)|금지|말고\s)")
+_PREF = re.compile(r"(나는|저는|내가|제가).{0,40}(좋아|싫어|선호|편하|불편)")
+_SECRETISH = re.compile(r"(?i)(password|passwd|token|secret|api[_-]?key|비밀번호|토큰\s*[:=]|[A-Za-z0-9_\-]{32,}|-----BEGIN)")
+
+
+def detect(text: str) -> list[tuple[str, str]]:
+    """사람 말에서 다음에도 지킬 것을 뽑는다(모델을 부르지 않는 규칙). [(kind, 문장)] — kind = explicit·feedback·user.
+    물음·짧은 말·비밀 꼴은 뺀다."""
+    out = []
+    t = (text or "").strip()
+    if not t:
+        return out
+    m = _EXPLICIT.match(t.split("\n", 1)[0])
+    if m:
+        body = (m.group("a") or m.group("b") or "").strip()
+        if 4 <= len(body) <= 300 and not _SECRETISH.search(body):
+            return [("explicit", body)]
+    for sent in re.split(r"(?<=[.!。])\s+|\n+", t):
+        s = sent.strip().strip("-*· ").strip()
+        if not (8 <= len(s) <= 220) or "?" in s or s.endswith("까") or _SECRETISH.search(s):
+            continue
+        if _PREF.search(s):
+            out.append(("user", s))
+        elif _RULE.search(s):
+            out.append(("feedback", s))
+    return out[:3]
+
+
 class Memory:
     """한 실행(또는 chat 세션)의 기억 손잡이. 도구(memory_search·note_add)와 엔진이 쓴다."""
 
     def __init__(self, profile, run_dir: Path, env=None):
-        self.dir = memory_dir(env)
+        # 계정 모드(U2-7): 사람마다 기억 폴더가 따로(profile.memory_root) — 같은 OS 계정을 여럿이 써도 섞이지 않게
+        root = getattr(profile, "memory_root", None)
+        self.dir = Path(root) if root else memory_dir(env)
         self.subjects = subjects(profile)
         self.place = self.subjects[0]
         self.run_dir = Path(run_dir)
         self.runs_dir = self.run_dir.parent
         self.run_id = self.run_dir.name
         self.notes_written = 0
+        self.workdir = Path(profile.workdir)
+        self.target = None           # 여러 프로젝트 뿌리에서 이번 대상 프로젝트(판 54) — 없으면 place
+        self._shown: set[str] = set()   # 대상 색인을 이미 대화에 넣은 프로젝트
+        self._shell_seen: set[str] = set()
+
+    # ---- 대상 가르기(판 54): stewart-work 같은 뿌리 아래 폴더별 프로젝트 기억 ----
+    def here(self) -> dict:
+        return self.target or self.place
+
+    def retarget(self, paths: list) -> dict | None:
+        """이번 차례에 만진 경로들에서 대상 프로젝트를 고른다(가장 많이 만진 첫 단계 하위 폴더). 바뀌면 새 대상."""
+        cnt: dict[str, int] = {}
+        for x in paths or []:
+            c = project_of(self.workdir, x)
+            if c is not None:
+                cnt[str(c)] = cnt.get(str(c), 0) + 1
+        if not cnt:
+            return None
+        best = max(cnt, key=lambda k: cnt[k])
+        t = place_of(Path(best))
+        if self.target is None or self.target["key"] != t["key"]:
+            self.target = t
+            return t
+        return None
+
+    def target_note(self) -> str:
+        """대상 프로젝트의 색인(MEMORY.md)을 대화에 한 번 넣을 글. 없거나 이미 넣었으면 빈 글."""
+        t = self.target
+        if t is None or t["key"] in self._shown:
+            return ""
+        self._shown.add(t["key"])
+        f = self.dir / t["key"] / "MEMORY.md"
+        body = ""
+        if f.is_file():
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[:INJECT_LINES]
+            body = "\n".join(lines)[:INJECT_BYTES]
+        head = f"[기억] 이번 대상 프로젝트: {t['name']} ({t['path']}) — 메모·검색은 이 대상으로 간다."
+        rem = [x for x in self.remembered() if x.get("scope") == "project" and x.get("place") == t["key"]][-10:]
+        if rem:
+            body = "이 프로젝트에서 스스로 기억함:\n" + "\n".join(f"- {x['text']}" for x in rem) + ("\n" + body if body else "")
+        return head + ("\n" + body if body else "\n(이 프로젝트의 색인은 아직 없다.)")
+
+    def turn_notes(self, shells: list[dict]) -> int:
+        """차례 끝 엔진 자동 메모(실사용에서 쌓이게): 실패한 셸(세션에서 같은 명령은 한 번). 남긴 수."""
+        n = 0
+        for c in shells or []:
+            cmd = str(c.get("command") or "")[:160]
+            if not cmd or c.get("exit") in (None, 0) or cmd in self._shell_seen or n >= 5:
+                continue
+            self._shell_seen.add(cmd)
+            self._append(self.here(), {"by": "engine", "status": "confirmed", "claim": f"셸 `{cmd}` → exit {c['exit']}",
+                                       "evidence": f"run {self.run_id} 차례 셸"})
+            n += 1
+        return n
+
+    # ---- 스스로 기억(사용자 전역) ----
+    def _rem_file(self) -> Path:
+        d = self.dir / USER["key"]
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "remember.jsonl"
+
+    def remembered(self) -> list[dict]:
+        f = self.dir / USER["key"] / "remember.jsonl"
+        if not f.is_file():
+            return []
+        items, gone = {}, set()
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                x = json.loads(line)
+            except ValueError:
+                continue
+            if x.get("forget"):
+                gone.add(x["forget"])
+            elif x.get("id"):
+                items[x["id"]] = x
+        return [x for k, x in items.items() if k not in gone][-REMEMBER_MAX:]
+
+    def _deny_file(self) -> Path:
+        return self.dir / USER["key"] / "deny.jsonl"
+
+    def denied(self) -> list[str]:
+        f = self._deny_file()
+        if not f.is_file():
+            return []
+        out = []
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                out.append(json.loads(line)["text"])
+            except (ValueError, KeyError):
+                continue
+        return out
+
+    def _is_denied(self, text: str) -> bool:
+        t = text.lower()
+        return any(d.lower() in t or t in d.lower() for d in self.denied() if d)
+
+    def remember(self, kind: str, text: str, source: str = "said", scope: str = "user") -> dict | None:
+        """남긴 것(dict) 또는 None(비었음·비밀 꼴·이미 있음·"기억하지 마" 목록에 걸림).
+        scope: user(모든 프로젝트) | project(이 대상 — git 뿌리 또는 작업 폴더)."""
+        text = " ".join(str(text or "").split())[:300]
+        if not text or _SECRETISH.search(text) or self._is_denied(text):
+            return None
+        if any(x["text"] == text for x in self.remembered()):
+            return None
+        x = scrub({"id": _h(text + datetime.now().isoformat()), "ts": datetime.now().isoformat(timespec="seconds"),
+                   "kind": kind, "text": text, "run": self.run_id, "source": source, "scope": scope,
+                   "place": self.here()["key"] if scope == "project" else None, "where": self.here()["name"] if scope == "project" else None})
+        with open(self._rem_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(x, ensure_ascii=False) + "\n")
+        return x
+
+    def update(self, item_id: str, text: str, source: str = "human") -> dict | None:
+        """같은 기억을 새 말로 덮는다(같은 id 로 한 줄 더 — 뒤의 것이 이긴다)."""
+        text = " ".join(str(text or "").split())[:300]
+        old = next((x for x in self.remembered() if x["id"] == item_id), None)
+        if old is None or not text or _SECRETISH.search(text):
+            return None
+        x = {**old, "text": text, "ts": datetime.now().isoformat(timespec="seconds"), "source": source, "run": self.run_id}
+        with open(self._rem_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(scrub(x), ensure_ascii=False) + "\n")
+        return x
+
+    def forget(self, item_id: str) -> bool:
+        if not any(x["id"] == item_id for x in self.remembered()):
+            return False
+        with open(self._rem_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"forget": item_id, "ts": datetime.now().isoformat(timespec="seconds")}) + "\n")
+        return True
+
+    def deny(self, item_id: str | None = None, text: str | None = None) -> bool:
+        """"이건 기억하지 마": 그 기억을 지우고, 같은 글은 앞으로 알아채도 남기지 않는다."""
+        if item_id:
+            x = next((x for x in self.remembered() if x["id"] == item_id), None)
+            if x is None:
+                return False
+            text = x["text"]
+            self.forget(item_id)
+        text = " ".join(str(text or "").split())[:300]
+        if not text:
+            return False
+        self._deny_file().parent.mkdir(parents=True, exist_ok=True)
+        with open(self._deny_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"text": text, "ts": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) + "\n")
+        return True
+
+    def _user_part(self) -> tuple[str, dict]:
+        # 사용자 전역 + 이 대상(git 뿌리 또는 작업 폴더)의 프로젝트 기억
+        items = [x for x in self.remembered() if x.get("scope", "user") == "user" or x.get("place") == self.place["key"]]
+        label = {"explicit": "기억해 달라 함", "feedback": "지적·지시", "user": "사용자", "project": "이 프로젝트", "reference": "참고"}
+        lines, size = [], 0
+        for x in reversed(items):   # 새것부터 상한까지
+            ln = f"- [{label.get(x['kind'], x['kind'])} {x['ts'][5:10]}] {x['text']}"
+            b = len((ln + "\n").encode("utf-8"))
+            if size + b > USER_BYTES:
+                break
+            lines.append(ln)
+            size += b
+        log = {"subject": USER["key"], "lines": len(lines), "bytes": size, "of_lines": len(items), "truncated": len(lines) < len(items)}
+        if not lines:
+            return "", log
+        return ("## 사용자(스스로 기억함 — 새것부터. 손으로 쓴 규칙 파일(STEWART.md·AGENTS.md)과 부딪히면 규칙 파일이 이긴다)\n"
+                + "\n".join(lines), log)
 
     # ---- L3 주입 ----
     def inject(self) -> tuple[str, list[dict]]:
         parts, log, total = [], [], 0
+        up, ulog = self._user_part()
+        if up:
+            parts.append(up)
+            total += ulog["bytes"]
+            log.append(ulog)
         for s in self.subjects:
             f = self.dir / s["key"] / "MEMORY.md"
             if not f.is_file():
@@ -132,7 +393,7 @@ class Memory:
             return False, f"status 는 {'|'.join(STATUSES)}"
         if scope not in ("place", "kind"):
             return False, "scope 는 place(이 폴더·저장소) 또는 kind(이 종류의 일)"
-        subj = self.place if scope == "place" else self.subjects[1]
+        subj = self.here() if scope == "place" else self.subjects[1]
         self._append(subj, {"by": "model", "claim": claim, "evidence": evidence[:500], "status": status})
         self.notes_written += 1
         return True, f"메모 남김({subj['key']}, {status}, 이 실행 {self.notes_written}/{NOTE_MAX})"
@@ -142,19 +403,19 @@ class Memory:
         n = 0
         v = summary.get("verify")
         if isinstance(v, dict) and v.get("command"):
-            self._append(self.place, {"by": "engine", "status": "confirmed",
+            self._append(self.here(), {"by": "engine", "status": "confirmed",
                                       "claim": f"판정 명령 `{v['command']}` → exit {v.get('exit')} ({'통과' if v.get('passed') else '실패'})",
                                       "evidence": f"run {self.run_id} 끝 판정"})
             n += 1
         cs = summary.get("check_on_stop") or {}
         if cs.get("fails"):
-            self._append(self.place, {"by": "engine", "status": "confirmed",
+            self._append(self.here(), {"by": "engine", "status": "confirmed",
                                       "claim": f"끝내기 전 확인 `{cs.get('command')}` 이 {cs['fails']}번 실패했다",
                                       "evidence": f"run {self.run_id} check_on_stop"})
             n += 1
         rb = summary.get("rolled_back")
         if isinstance(rb, dict) and not rb.get("error"):
-            self._append(self.place, {"by": "engine", "status": "confirmed",
+            self._append(self.here(), {"by": "engine", "status": "confirmed",
                                       "claim": f"끝내지 못해({summary.get('stop_reason')}) 바꾼 파일을 되돌렸다",
                                       "evidence": f"run {self.run_id} rollback"})
             n += 1
@@ -165,7 +426,7 @@ class Memory:
             n += 1
         for c in ((facts or {}).get("shell") or [])[:50]:
             if isinstance(c, dict) and isinstance(c.get("exit"), int) and c["exit"] != 0 and n < 12:
-                self._append(self.place, {"by": "engine", "status": "confirmed",
+                self._append(self.here(), {"by": "engine", "status": "confirmed",
                                           "claim": f"셸 `{str(c.get('command', ''))[:160]}` → exit {c.get('exit')}",
                                           "evidence": f"run {self.run_id} 셸 기록"})
                 n += 1
@@ -174,7 +435,7 @@ class Memory:
     # ---- L0 색인 ----
     def index_run(self, task: str, summary: dict, files: list[str]) -> None:
         rec = scrub({"run": self.run_id, "ts": datetime.now().isoformat(timespec="seconds"),
-                     "subjects": [s["key"] for s in self.subjects], "profile": summary.get("profile"),
+                     "subjects": [s["key"] for s in self.subjects] + ([self.target["key"]] if self.target else []), "profile": summary.get("profile"),
                      "task": (task or "").strip().splitlines()[0][:200] if (task or "").strip() else "",
                      "stop_reason": summary.get("stop_reason"), "files": files[:50]})
         with open(self.runs_dir / "index.jsonl", "a", encoding="utf-8") as f:
@@ -182,7 +443,7 @@ class Memory:
 
     def read_page(self, subject: str = "") -> tuple[bool, str]:
         """L2 쪽 읽기(쓰는 것은 stewart dream 하나). 대상 키를 안 주면 이 폴더·저장소 쪽."""
-        want = subject or self.place["key"]
+        want = subject or self.here()["key"]
         if not re.fullmatch(r"[\w.-]{1,80}", want):
             return False, f"subject 꼴이 아니다: {want}"
         f = self.dir / want / "page.md"
@@ -195,7 +456,7 @@ class Memory:
         words = [w.lower() for w in (query or "").split() if w.strip()]
         if not words:
             return False, "query 가 비었다"
-        want = subject or self.place["key"]
+        want = subject or self.here()["key"]
         if want not in [s["key"] for s in self.subjects] and not re.fullmatch(r"[\w.-]{1,80}", want):
             return False, f"subject 꼴이 아니다: {want}"
         limit = max(1, min(int(limit or SEARCH_MAX), SEARCH_MAX))
@@ -275,3 +536,71 @@ def execute(mem: Memory, name: str, args: dict) -> tuple[bool, str]:
         return mem.note_add(str(args.get("claim", "")), str(args.get("evidence", "")), str(args.get("status", "")),
                             str(args.get("scope") or "place"))
     return False, f"없는 기억 도구: {name}"
+
+
+# ── 모델로 알아채기(판 52): 차례 끝 도구 없는 짧은 한 번 ──
+EXTRACT_PROMPT = """[기억 고르기] 아래는 방금 끝난 차례의 사람 말과 그 차례의 마지막 답이다. 다음 세션에도 지켜야 할 것만 고른다.
+고를 것: ① 사용자(누구인지·선호·일하는 방식) ② 지적·지시(사람이 고쳐 준 것, "그렇게 하지 마라", "앞으로는 …" — 까닭이 있으면 함께)
+③ 이 프로젝트(진행 중인 일·결정·함정) ④ 참고(자리·이름 — 주소·토큰·비밀번호·비밀 파일 내용은 절대 넣지 않는다).
+고르지 않을 것: 이번 차례에만 해당하는 일, 이미 기억한 것과 같은 것, 추측.
+이미 기억한 것(id: 글):
+{known}
+기억하지 말라 한 것:
+{deny}
+답은 JSON 줄만(설명 없이, 없으면 아무것도 쓰지 않는다). 한 줄에 하나:
+{{"op":"add","kind":"user|feedback|project|reference","text":"한 문장(까닭이 있으면 '— 까닭' 으로)"}}
+{{"op":"update","id":"<이미 기억한 id>","text":"고친 한 문장"}}   (사람 말이 앞 기억을 바꾸거나 더 정확히 했을 때)
+{{"op":"drop","id":"<이미 기억한 id>"}}   (사람 말로 더는 맞지 않게 됐을 때)
+사람 말:
+{said}
+마지막 답(앞부분):
+{answer}"""
+EXTRACT_MAX_TOKENS = 400
+
+
+def extract_ops(text: str) -> list[dict]:
+    """모델 답에서 op 줄만 거른다(모르는 꼴·비밀 꼴은 버림)."""
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip().strip("`").strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            x = json.loads(line)
+        except ValueError:
+            continue
+        op = x.get("op")
+        if op == "add" and x.get("kind") in ("user", "feedback", "project", "reference") and isinstance(x.get("text"), str):
+            out.append({"op": "add", "kind": x["kind"], "text": x["text"]})
+        elif op == "update" and isinstance(x.get("id"), str) and isinstance(x.get("text"), str):
+            out.append({"op": "update", "id": x["id"], "text": x["text"]})
+        elif op == "drop" and isinstance(x.get("id"), str):
+            out.append({"op": "drop", "id": x["id"]})
+    return [o for o in out if not _SECRETISH.search(o.get("text", ""))][:6]
+
+
+def extract_prompt(mem: "Memory", said: list[str], answer: str) -> str:
+    known = "\n".join(f"{x['id']}: {x['text']}" for x in mem.remembered()[-40:]) or "(없음)"
+    deny = "\n".join(mem.denied()[-20:]) or "(없음)"
+    said_t = "\n".join(f"- {t[:800]}" for t in said[-6:])
+    return EXTRACT_PROMPT.format(known=known, deny=deny, said=said_t, answer=(answer or "")[:1500])
+
+
+def apply_ops(mem: "Memory", ops: list[dict]) -> list[dict]:
+    """op 를 적용하고 한 일을 돌려준다: [{op, item}]."""
+    done = []
+    for o in ops:
+        if o["op"] == "add":
+            scope = "project" if o["kind"] in ("project", "reference") else "user"
+            it = mem.remember(o["kind"], o["text"], source="model", scope=scope)
+            if it is not None:
+                done.append({"op": "add", "item": it})
+        elif o["op"] == "update":
+            it = mem.update(o["id"], o["text"], source="model")
+            if it is not None:
+                done.append({"op": "update", "item": it})
+        elif o["op"] == "drop":
+            it = next((x for x in mem.remembered() if x["id"] == o["id"]), None)
+            if it is not None and mem.forget(o["id"]):
+                done.append({"op": "drop", "item": it})
+    return done

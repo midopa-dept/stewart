@@ -34,7 +34,8 @@ def est_tokens(text: str) -> int:
                 o += 1
         else:
             n += 1
-    return int(d + 0.3 * a + 0.5 * o + 1.2 * n + 0.999)
+    from .images import IMAGE_TOKENS, SCHEME
+    return int(d + 0.3 * a + 0.5 * o + 1.2 * n + 0.999) + text.count(SCHEME) * IMAGE_TOKENS   # 이미지 자리표는 고정값
 
 
 def repeat_stats(text: str, n: int = 16, tail: int = 600) -> dict:

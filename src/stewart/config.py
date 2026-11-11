@@ -49,6 +49,7 @@ class Backend:
     context_source: str = "backends"        # max_context 를 어디서 얻었나: backends | server(/v1/models max_model_len)
     served_max_len: int | None = None       # 서버가 알려 준 max_model_len(없거나 못 물었으면 None)
     dropped_params: list = field(default_factory=list)   # 서버가 모른다고 거절해 빼고 보내는 샘플링 칸(think.py)
+    vision: bool = False        # 이미지 입력을 받는 모델인가(images.py). 기본 끔 — 꺼진 백엔드에는 이미지를 붙이지 않는다
 
     def api_key(self) -> str | None:
         if self.api_key_env and os.environ.get(self.api_key_env):
@@ -112,6 +113,7 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 model_file=b.get("model_file", ""),
                 concurrency=max(1, int(b.get("concurrency", 1))),
                 api_key_file=b.get("api_key_file"),
+                vision=bool(b.get("vision", False)),
             )
         except KeyError as e:
             raise ConfigError(f"{path}: backends.{name}에 {e} 가 없다") from None
@@ -140,7 +142,8 @@ class Profile:
     check_on_stop_max: int = 2                # 실패를 모델에 돌려주는 최대 횟수
     check_on_stop_skip_exit: list[int] = field(default_factory=lambda: [5])   # '확인할 것 없음' 종료 코드(unittest 시험 없음=5)
     hooks: dict = field(default_factory=dict)   # [hooks] SessionStart·PreToolUse·PostToolUse·Stop(hooks.py, 읽을 때 꼴 검사)
-    memory: bool | None = None                  # 기억 M1(memory.py). None·false = 끔(평가 기본), true = 켬. STEWART_MEMORY 가 이긴다
+    memory: bool | None = None                  # 기억(memory.py). None = chat·허브 켬·run(평가) 끔, true·false = 그대로. STEWART_MEMORY 가 이긴다
+    memory_root: str | None = None          # 기억 폴더를 이 프로필만 따로(계정 모드: 사람마다). 프로필 파일에서는 읽지 않는다
     think_max_tokens: int | None = None         # 생각 켬 차례의 단계당 생성 상한(think.py). STEWART_THINK_MAX_TOKENS 가 이긴다
     think_sampling: str | None = None           # 생각 켬 차례의 샘플링 묶음 이름(think.PRESETS). STEWART_THINK_SAMPLING 가 이긴다
     extra_write_dirs: list[str] = field(default_factory=list)   # 작업 폴더 밖에 미리 열어 둘 쓰기 폴더(bounds.py)
@@ -165,7 +168,12 @@ class Profile:
     manager_tools: list[str] | None = None  # 관리자 모드: 모델에 보이는 자기 도구(나머지 tools 는 작업자에게만 넘긴다)
     delegate_budget: int | None = None      # 작업자 단계 합 상한(None 이면 max_steps × 2)
     rollback_unfinished: bool | None = None  # run 이 끝내지 못하면(completed·asked 아님) 이번 실행 체크포인트로 되돌림
+    reflect_on_fail: bool | None = None    # 실패 문턱에서 끝내기 전 도구 없는 되짚기 한 번(reflect.py). None 이면 chat·허브 켬, run 끔. STEWART_REFLECT 가 이긴다
+    reflect_max: int | None = None         # 되짚기 횟수(run 실행당·chat 차례당, 기본 1)
+    reflect_max_tokens: int | None = None  # 되짚기 응답 상한(기본 1200)
     skills: bool | None = None             # 스킬(skills.py). None 이면 켬(chat·run 둘 다), false 면 끔
+    claude_compat: bool | None = None      # Claude Code 꼴(CLAUDE.md·.claude/) 호환 읽기. None 이면 chat·허브 켬, run 끔(projcfg)
+    claude_compat_user: bool | None = None  # 사용자 전역 ~/.claude 도 읽기. None 이면 끔
     secret_files: dict = field(default_factory=dict)  # [secret_files] globs(기본 목록 대신)·extra(기본에 더함)·allow(견본 허용)
     raw: dict = field(default_factory=dict)
 
@@ -206,10 +214,11 @@ TOP_KEYS = {"name", "description", "system", "tools", "workdir", "max_steps", "m
             "backend", "action_check", "verify_command", "language", "web_search", "output", "max_tokens", "confirm",
             "memory_files", "memory_max_chars",
             "compact_ratio", "compact_keep_recent", "compact_fold", "mode", "secret_files", "extends",
-            "skills", "manager_tools", "delegate_budget", "rollback_unfinished",
+            "skills", "claude_compat", "claude_compat_user", "manager_tools", "delegate_budget", "rollback_unfinished",
             "check_on_stop", "check_on_stop_max", "check_on_stop_skip_exit", "hooks", "memory",
             "think_max_tokens", "think_sampling", "extra_write_dirs", "read_outside",
-            "review_on_stop", "ask_check", "baseline_diff", "todo_check", "todo_remind_every"}
+            "review_on_stop", "ask_check", "baseline_diff", "todo_check", "todo_remind_every",
+            "reflect_on_fail", "reflect_max", "reflect_max_tokens"}
 SECRET_KEYS = {"globs", "extra", "allow"}
 
 
@@ -435,8 +444,13 @@ def load_profile(name_or_path: str) -> Profile:
         mode=_opt_mode(d, path),
         secret_files=dict(sec),
         skills=_opt_bool(d, "skills", path),
+        claude_compat=_opt_bool(d, "claude_compat", path),
+        claude_compat_user=_opt_bool(d, "claude_compat_user", path),
         manager_tools=_opt_names(d, "manager_tools", path),
         delegate_budget=_opt_int(d, "delegate_budget", path),
         rollback_unfinished=_opt_bool(d, "rollback_unfinished", path),
+        reflect_on_fail=_opt_bool(d, "reflect_on_fail", path),
+        reflect_max=_opt_int(d, "reflect_max", path),
+        reflect_max_tokens=_opt_int(d, "reflect_max_tokens", path),
         raw=d,
     )

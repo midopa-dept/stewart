@@ -3,6 +3,8 @@
 - 위치: 사용자 전역 STEWART_SKILLS_DIR(없으면 ~/.config/stewart/skills)/<이름>/SKILL.md,
   프로젝트 <작업 폴더 ~ git 뿌리 사이 폴더>/.stewart/skills/<이름>/SKILL.md (기억 파일과 같은 찾기 범위).
   같은 이름이면 작업 폴더에 가까운 프로젝트 것이 이긴다.
+- 공통 꼴 .agents/skills 와 호환 .claude/skills(projcfg 가 켜고 끈다)도 찾는다. 같은 이름이면 정본(.stewart·사용자 폴더)이
+  이기고, 정본이 아닌 것은 목록에 출처([.agents]·[.claude])를 붙인다.
 - 모양: SKILL.md 맨 앞 '---' 앞머리의 name·description(+ 본문). 다른 키(allowed-tools·model 등)는 무시하고 기록한다.
   같은 폴더의 다른 파일은 딸린 파일이다.
 - 지시문에는 이름·설명만 싣는다(30개·설명 200자·합 4,000자 상한). 본문은 load_skill(name) 이,
@@ -53,6 +55,7 @@ class Skill:
     scope: str                 # user | project
     body: str
     ignored_keys: list[str] = field(default_factory=list)
+    origin: str = "stewart"    # stewart | agents | claude
 
 
 def parse(text: str) -> tuple[dict, str]:
@@ -76,7 +79,7 @@ def parse(text: str) -> tuple[dict, str]:
     return {}, text   # 닫는 줄이 없으면 앞머리로 보지 않는다
 
 
-def _read_skill(d: Path, scope: str) -> Skill | None:
+def _read_skill(d: Path, scope: str, origin: str = "stewart") -> Skill | None:
     f = d / "SKILL.md"
     try:
         if not f.is_file() or f.stat().st_size > MAX_FILE_BYTES:
@@ -88,7 +91,7 @@ def _read_skill(d: Path, scope: str) -> Skill | None:
     desc = " ".join(str(meta.get("description") or "").split())
     if not name or not desc:
         return None     # 설명이 없으면 고를 수 없다
-    return Skill(name, desc, d, scope, body, sorted(k for k in meta if k not in KNOWN_KEYS))
+    return Skill(name, desc, d, scope, body, sorted(k for k in meta if k not in KNOWN_KEYS), origin)
 
 
 def project_dirs(workdir: Path) -> list[Path]:
@@ -96,16 +99,17 @@ def project_dirs(workdir: Path) -> list[Path]:
     return [d / ".stewart" / "skills" for d in search_dirs(Path(workdir))]
 
 
-def discover(workdir: Path) -> list[Skill]:
+def discover(workdir: Path, fl=None) -> list[Skill]:
+    from . import projcfg as PC
     found: dict[str, Skill] = {}
-    roots = [(user_dir(), "user")] + [(p, "project") for p in project_dirs(workdir)]
-    for root, scope in roots:          # 뒤(작업 폴더에 가까운 것)가 같은 이름을 덮는다
+    roots = PC.roots("skills", Path(workdir), fl or PC.Flags())   # 호환 → 정본(뒤가 같은 이름을 덮는다)
+    for root, scope, origin in roots:   # 뒤(정본, 작업 폴더에 가까운 것)가 같은 이름을 덮는다
         try:
             subs = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
         except OSError:
             subs = []
         for d in subs:
-            s = _read_skill(d, scope)
+            s = _read_skill(d, scope, origin)
             if s:
                 found.pop(s.name, None)
                 found[s.name] = s
@@ -121,7 +125,7 @@ def list_text(skills: list[Skill]) -> str:
     out, used = [], len(head)
     for s in skills:
         d = s.description if len(s.description) <= MAX_DESC else s.description[:MAX_DESC] + "…"
-        line = f"- {s.name}: {d}"
+        line = f"- {s.name}: {d}" + (f" [.{s.origin}]" if s.origin != "stewart" else "")
         if used + len(line) + 1 > MAX_LIST_CHARS:
             out.append(f"- …(상한 때문에 {len(skills) - len(out)}개 생략)")
             break
@@ -132,6 +136,7 @@ def list_text(skills: list[Skill]) -> str:
 
 def meta_log(skills: list[Skill]) -> list[dict]:
     return [{"name": s.name, "scope": s.scope, "dir": str(s.dir), "body_chars": len(s.body),
+             **({"origin": s.origin} if s.origin != "stewart" else {}),
              **({"ignored_keys": s.ignored_keys} if s.ignored_keys else {})} for s in skills]
 
 

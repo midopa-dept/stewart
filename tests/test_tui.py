@@ -234,7 +234,7 @@ class TApp(unittest.TestCase):
                 until(lambda: ui.state.inbox)
                 self.pipe.send_text("쓰던 글")          # Enter 없이 입력창에 남김
                 until(lambda: ui.buffer.text == "쓰던 글")
-                return _resp(calls=[("run_shell", '{"command": "echo hi"}')])
+                return _resp(calls=[("run_shell", '{"command": "uname"}')])
             return _resp("됐다.")
 
         waiting_log = []

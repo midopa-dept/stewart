@@ -14,7 +14,7 @@ from __future__ import annotations
 from .config import ConfigError
 
 MODES = ("auto", "edits", "ask", "plan")
-READ_TOOLS = frozenset({"read_file", "list_dir", "search", "glob", "web_search", "web_fetch", "todo_read", "todo_write",
+READ_TOOLS = frozenset({"read_file", "view_image", "list_dir", "search", "glob", "web_search", "web_fetch", "todo_read", "todo_write",
                         "shell_output", "ask_user", "load_skill", "delegate",
                         # 폴더 정리 도구: 사용자 파일을 바꾸지 않는다(계획 파일은 기록 폴더 안, 이동은 사람 검토 뒤 실행기가 한다)
                         "folder_scan", "scan_read", "scan_stats", "peek", "plan_add", "plan_show", "plan_drop",

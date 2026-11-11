@@ -58,8 +58,44 @@ def _headers(backend: Backend) -> dict:
     return headers
 
 
+BROKEN_ARGS = "{}"   # 깨진 툴콜 인자를 보낼 때 바꿔 넣는 값(그 호출의 도구 결과가 잘렸다·깨졌다고 이미 말한다)
+
+
+def safe_messages(messages) -> list:
+    """보낼 메시지 사본: assistant tool_calls 의 arguments 가 JSON 객체가 아니면 "{}" 로 바꾼다(원본은 그대로).
+    생성 상한에서 잘린 툴콜이 기록에 남으면 서버(llama-server·vLLM)가 다음 요청마다 인자 파싱 오류(HTTP 500)를 내
+    세션이 그 자리에서 망가진다(E-1 시험대 재현, U2-1). 그 호출의 결과 글이 무엇이 잘렸는지 모델에게 이미 알린다."""
+    out = None
+    for i, m in enumerate(messages):
+        tcs = m.get("tool_calls") if isinstance(m, dict) and m.get("role") == "assistant" else None
+        if not tcs:
+            continue
+        fixed = []
+        changed = False
+        for tc in tcs:
+            fn = tc.get("function") or {}
+            a = fn.get("arguments")
+            ok = isinstance(a, dict)
+            if isinstance(a, str):
+                try:
+                    ok = isinstance(json.loads(a), dict)
+                except ValueError:
+                    ok = False
+            if ok:
+                fixed.append(tc)
+            else:
+                fixed.append({**tc, "function": {**fn, "arguments": BROKEN_ARGS}})
+                changed = True
+        if changed:
+            if out is None:
+                out = list(messages)
+            out[i] = {**m, "tool_calls": fixed}
+    return messages if out is None else out
+
+
 def _body(backend: Backend, messages, tools=None, response_format=None, **extra) -> dict:
-    body: dict = {"model": backend.model, "messages": messages, "stream": False}
+    from .images import expand
+    body: dict = {"model": backend.model, "messages": expand(safe_messages(messages), backend.vision), "stream": False}
     body.update(backend.params)
     if tools:
         body["tools"] = tools
@@ -77,6 +113,199 @@ def thinking_kwargs(backend: Backend, thinking: bool | None) -> dict:
     kw = dict(backend.params.get("chat_template_kwargs") or {})
     kw["enable_thinking"] = bool(thinking)
     return {"chat_template_kwargs": kw}
+
+
+# ── 받는 중인 응답 끊기(Windows 중단, WIN-4) ──
+# POSIX 는 SIGINT 가 막혀 있는 소켓 읽기를 깨워 KeyboardInterrupt 가 난다. Windows 는 소켓 읽기가 신호로 깨지 않아
+# Ctrl-C·Esc 가 다음 조각이 올 때까지 늦는다. 그래서 중단하는 쪽(화면 스레드·콘솔 Ctrl-C 처리기)이 받는 중인 연결의
+# 소켓을 shutdown 해 읽기를 끝내고, 받는 쪽은 그 표시를 보고 KeyboardInterrupt 로 바꾼다.
+_LIVE: set = set()
+_LIVE_LOCK = threading.Lock()
+
+
+class _Aborted(Exception):
+    pass
+
+
+def _sock_of(r):
+    fp = getattr(r, "fp", None)
+    raw = getattr(fp, "raw", fp)
+    return getattr(raw, "_sock", None)
+
+
+_ABORT_GEN = [0]   # abort_streams 를 부를 때마다 늘린다 — 응답 머리를 기다리는 중인 요청도 이 값이 바뀌면 끊는다(U2-8)
+
+
+def _send_abortable(backend: Backend, body: dict, overrides: dict | None):
+    """_send 를 작은 스레드로 돌리고 기다린다. 기다리는 동안(긴 프롬프트를 서버가 읽는 중 등) abort_streams 가 불리면
+    곧바로 KeyboardInterrupt — 남은 요청은 응답이 오는 즉시 닫는다(서버 쪽 생성도 끊긴다)."""
+    gen = _ABORT_GEN[0]
+    box: dict = {}
+    done = threading.Event()
+
+    def run():
+        try:
+            box["r"] = _send(backend, body, overrides)
+        except BaseException as e:   # noqa: BLE001 — 기다리는 쪽으로 그대로 넘긴다
+            box["e"] = e
+        finally:
+            done.set()
+            if box.get("orphan") and box.get("r") is not None:
+                _close(box["r"])
+    threading.Thread(target=run, daemon=True).start()
+    while not done.wait(0.2):
+        if _ABORT_GEN[0] != gen:
+            box["orphan"] = True
+            if done.is_set() and box.get("r") is not None:
+                _close(box["r"])
+            e = KeyboardInterrupt()
+            e.partial = {"content": ""}
+            raise e
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
+
+
+def abort_streams() -> int:
+    """받는 중인 응답을 모두 끊는다(다른 스레드에서 부른다). 끊은 개수. 응답 머리를 기다리는 요청도 끊긴다(_send_abortable)."""
+    import socket
+    _ABORT_GEN[0] += 1
+    with _LIVE_LOCK:
+        live = list(_LIVE)
+    for r in live:
+        r._stewart_aborted = True
+        sk = _sock_of(r)
+        try:
+            if sk is not None:
+                sk.shutdown(socket.SHUT_RDWR)
+            else:
+                r.close()
+        except OSError:
+            pass
+    return len(live)
+
+
+class _Closing:
+    def __init__(self, r):
+        self.r = r
+
+    def __enter__(self):
+        return self.r
+
+    def __exit__(self, *exc):
+        _close(self.r)
+        return False
+
+
+class _live:
+    def __init__(self, r):
+        self.r = r
+
+    def __enter__(self):
+        with _LIVE_LOCK:
+            _LIVE.add(self.r)
+        return self.r
+
+    def __exit__(self, *exc):
+        with _LIVE_LOCK:
+            _LIVE.discard(self.r)
+        return False
+
+
+def _check_abort(r) -> None:
+    if getattr(r, "_stewart_aborted", False):
+        raise _Aborted
+
+
+# Windows: 다른 스레드의 shutdown 이 막혀 있는 소켓 읽기를 깨우지 못한다(VM 11-10 연기 시험 20번 — 바이트가 하나도
+# 안 오는 동안 끊기가 서버가 닫을 때까지 늦었다. 모델이 긴 문맥을 읽기만 하고 아직 한 글자도 안 낼 때가 그렇다).
+# 그래서 Windows 는 응답 읽기를 따로 스레드에서 하고, 받는 쪽(main)은 짧게 깨어 끊김 표시를 본다. 끊기면 main 은 바로
+# 돌아가고, 읽던 스레드는 읽기가 돌아오는 대로(서버가 다음 바이트를 쓰거나 닫을 때) 응답을 닫고 끝난다.
+# POSIX 는 지금처럼 main 이 직접 읽는다(신호·shutdown 이 막힌 읽기를 깨운다).
+_THREADED: bool | None = None      # None = Windows 에서만(시험이 바꿔 끼운다)
+_POLL = 0.1
+_LAST_READER: threading.Thread | None = None   # 연기 시험이 "끊긴 뒤 읽던 스레드가 언제 끝났나"를 본다
+
+
+def _threaded() -> bool:
+    if _THREADED is not None:
+        return _THREADED
+    from . import osdep
+    return osdep.IS_WIN
+
+
+def _reader(r, mode: str):
+    """읽는 스레드를 띄우고 큐를 돌려준다. 큐 항목: ("item", 값) · ("end", None) · ("err", 예외)."""
+    import queue
+    q: queue.Queue = queue.Queue()
+
+    def run():
+        try:
+            if mode == "lines":
+                for raw in r:
+                    q.put(("item", raw))
+                    if getattr(r, "_stewart_aborted", False):
+                        break
+            else:
+                q.put(("item", r.read()))
+            q.put(("end", None))
+        except BaseException as e:      # noqa: BLE001 — main 에 넘긴다
+            q.put(("err", e))
+        finally:
+            if getattr(r, "_stewart_close_late", False):
+                try:
+                    r.close()
+                except Exception:
+                    pass
+    t = threading.Thread(target=run, name="stewart-recv", daemon=True)
+    global _LAST_READER
+    _LAST_READER = t
+    r._stewart_reader = t
+    t.start()
+    return q
+
+
+def _take(r, q):
+    """큐에서 하나. 기다리는 동안 _POLL 마다 끊김 표시를 본다(그 사이 KeyboardInterrupt 도 main 에서 난다)."""
+    import queue
+    while True:
+        _check_abort(r)
+        try:
+            return q.get(timeout=_POLL)
+        except queue.Empty:
+            continue
+
+
+def _close(r) -> None:
+    """응답을 닫는다. 읽던 스레드가 아직 막혀 있으면 닫기를 그 스레드에 맡긴다(BufferedReader.close 가 읽는 쪽의
+    잠금을 기다려 main 이 다시 막히지 않게)."""
+    t = getattr(r, "_stewart_reader", None)
+    if t is not None and t.is_alive():
+        r._stewart_close_late = True
+        if t.is_alive():
+            return
+    try:
+        r.close()
+    except Exception:
+        pass
+
+
+def _read_all(r) -> bytes:
+    if not _threaded():
+        try:
+            raw = r.read()
+        except (OSError, ValueError):
+            _check_abort(r)
+            raise
+        _check_abort(r)
+        return raw
+    q = _reader(r, "read")
+    kind, v = _take(r, q)
+    if kind == "err":
+        _check_abort(r)
+        raise v
+    _check_abort(r)
+    return v
 
 
 def _open(backend: Backend, path: str, body: dict | None, timeout: float):
@@ -132,8 +361,15 @@ def chat(
     with slot(backend):
         t0 = time.monotonic()
         try:
-            with _send(backend, body, overrides) as r:
-                data = json.loads(r.read().decode("utf-8"))
+            r = _send(backend, body, overrides)
+            try:
+                with _live(r):
+                    raw = _read_all(r)
+            finally:
+                _close(r)
+            data = json.loads(raw.decode("utf-8"))
+        except _Aborted:
+            raise KeyboardInterrupt from None
         except (TimeoutError, ConnectionError, OSError) as e:
             if isinstance(e, BackendError):
                 raise
@@ -293,6 +529,34 @@ class StreamAssembler:
         return r
 
 
+def _lines(r):
+    """응답 줄. 끊긴(abort_streams) 연결이면 읽기 오류·조기 끝을 _Aborted 로 바꾼다. Windows 는 읽는 스레드를 거친다."""
+    if _threaded():
+        q = _reader(r, "lines")
+        while True:
+            kind, v = _take(r, q)
+            if kind == "end":
+                _check_abort(r)
+                return
+            if kind == "err":
+                _check_abort(r)
+                raise v
+            _check_abort(r)
+            yield v
+    it = iter(r)
+    while True:
+        try:
+            raw = next(it)
+        except StopIteration:
+            _check_abort(r)
+            return
+        except (OSError, ValueError):
+            _check_abort(r)
+            raise
+        _check_abort(r)
+        yield raw
+
+
 def chat_stream(
     backend: Backend,
     messages: list[dict],
@@ -302,8 +566,10 @@ def chat_stream(
     on_delta=None,
     thinking: bool | None = None,
     overrides: dict | None = None,
+    on_first=None,
 ) -> tuple[dict, float]:
     """chat() 과 같은 (응답, 초)를 돌려주지만 스트리밍으로 받는다. on_delta(본문 조각, 생각 조각)를 조각마다 부른다.
+    on_first() 는 첫 조각(본문·생각·툴콜 무엇이든)이 왔을 때 한 번 부른다(첫 토큰까지 시간).
     도중에 KeyboardInterrupt 가 나면 연결을 바로 닫고(서버도 생성을 멈춘다) 받은 데까지를 e.partial 에 붙여 다시 던진다."""
     extra = {"stream": True, "stream_options": {"include_usage": True}}
     if max_tokens:
@@ -315,8 +581,9 @@ def chat_stream(
     with slot(backend):
         t0 = time.monotonic()
         try:
-            with _send(backend, body, overrides) as r:
-                for raw in r:
+            r = _send_abortable(backend, body, overrides)
+            with _Closing(r), _live(r):
+                for raw in _lines(r):
                     line = raw.decode("utf-8", "replace").strip()
                     if not line.startswith("data:"):
                         continue
@@ -329,12 +596,21 @@ def chat_stream(
                         continue
                     if ev.get("error"):
                         raise BackendError(f"스트림 오류: {ev['error']}", 500, json.dumps(ev["error"], ensure_ascii=False)[:4000])
+                    if on_first is not None:
+                        dl = ((ev.get("choices") or [{}])[0] or {}).get("delta") or {}
+                        if dl.get("content") or dl.get("reasoning_content") or dl.get("reasoning") or dl.get("tool_calls"):
+                            on_first()
+                            on_first = None
                     text, think = asm.feed(ev)
                     if on_delta and (text or think):
                         on_delta(text, think)
         except KeyboardInterrupt as e:
             e.partial = asm.message()
             raise
+        except _Aborted:
+            e = KeyboardInterrupt()
+            e.partial = asm.message()
+            raise e from None
         except (TimeoutError, ConnectionError, OSError) as e:
             if isinstance(e, BackendError):
                 raise

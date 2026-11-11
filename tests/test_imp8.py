@@ -66,9 +66,10 @@ class TImp8(unittest.TestCase):
         s = C.ChatSession(prof, self.bk, Recorder(self.tmp / "runs", "chat-q"), ui, mode="edits")
         self.addCleanup(lambda: s.rec._ev.closed or s.rec._ev.close())
         cfg = self.tmp / "home" / ".config" / "stewart" / "profiles" / "x.toml"
-        seq_parent = [dcall(task="ls 를 돌려라"), _resp(calls=[("write_file", json.dumps({"path": str(cfg), "content": "x"}))]),
+        # chat 의 위임은 도구를 적어야 셸을 준다(U2-2)
+        seq_parent = [dcall(task="ls 를 돌려라", tools=["run_shell"]), _resp(calls=[("write_file", json.dumps({"path": str(cfg), "content": "x"}))]),
                       _resp("끝")]
-        with mock.patch.object(engine, "chat", side_effect=[_resp(calls=[("run_shell", '{"command": "ls"}')]), _resp("거부됨")]), \
+        with mock.patch.object(engine, "chat", side_effect=[_resp(calls=[("run_shell", '{"command": "uname"}')]), _resp("거부됨")]), \
                 mock.patch.object(C, "chat", side_effect=seq_parent):
             s.turn("해 줘")
         self.assertNotIn("[엔진이 붙인 환경 정보", ui.out.getvalue())           # 환경 블록은 화면에 안 보인다

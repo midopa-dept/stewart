@@ -8,6 +8,11 @@
 - 쓰기 허용 폴더: 작업 폴더 + 프로필 extra_write_dirs + 임시 폴더(tempfile.gettempdir()·/tmp·/var/tmp) + /dev/null 같은 장치.
 - chat 은 밖 쓰기를 모드와 관계없이 물어 본다(y 는 그 실제 경로 하나만 이 세션에서 연다). run 은 거부하고 까닭을 도구 결과로 돌려준다.
 
+Windows(WIN-3, osdep.win_path_kind): 경로를 풀기 전에 UNC·드라이브 상대(C:x)·대체 스트림(a:s)·끝 점/공백·CON 같은 예약 이름·
+흉내 내지 않는 /dev/… 는 "밖"으로 보고 묻는다. /dev/null·NUL 같은 버리는 장치는 안으로 본다. 임시 폴더는 tempfile.gettempdir() 하나다
+(/tmp 는 파이썬에서 C:/tmp 가 되어 busybox 의 뜻과 다를 수 있어 넣지 않는다). 보통 %LOCALAPPDATA%\\Temp(사용자별)로, macOS 의 사용자별
+$TMPDIR 과 같은 넓이다. 어느 플랫폼이든 임시 폴더가 드라이브 뿌리·홈·홈의 위로 잡히면(TEMP·TMPDIR 을 잘못 준 때) 허용에서 뺀다.
+
 셸(완전한 격리는 아니다 — 흔한 꼴만 본다)
 - 명령을 줄·; && || | & 로 나눠 마디마다 본다. cd 는 다음 마디의 기준 폴더를 바꾼다.
 - 쓰기 대상으로 보는 것: > >> &> >| 리다이렉트 대상, rm·rmdir·unlink·shred·touch·mkdir·truncate·chmod·chown·chgrp 의 인자,
@@ -23,6 +28,8 @@ import re
 import shlex
 import tempfile
 from pathlib import Path
+
+from . import osdep
 
 READ_TOOLS = frozenset({"read_file", "list_dir", "search", "glob"})
 WRITE_TOOLS = frozenset({"write_file", "edit_file", "multi_edit", "notebook_edit"})
@@ -43,9 +50,25 @@ _LAST_ARG = {"cp", "ln", "install", "rsync"}
 _PREFIX = {"sudo", "env", "command", "nice", "nohup", "time", "exec"}
 
 
+def _too_wide(d: str) -> bool:
+    """임시 폴더로 넘기기엔 너무 넓은 자리: 드라이브·파일 시스템 뿌리, 홈 또는 그 위(TEMP·TMPDIR 를 잘못 잡았을 때)."""
+    try:
+        r = os.path.normcase(os.path.realpath(d))
+        home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+    except (OSError, ValueError):
+        return True
+    if r == os.path.normcase(Path(r).anchor) or os.path.dirname(r) == r:
+        return True
+    return home == r or home.startswith(r.rstrip("\\/") + os.sep)
+
+
 def temp_dirs() -> list[str]:
-    """쓰기를 늘 허용하는 임시 폴더(시험은 이 함수를 바꿔 끼워 끈다)."""
-    return sorted({tempfile.gettempdir(), "/tmp", "/var/tmp"})
+    """쓰기를 늘 허용하는 임시 폴더(시험은 이 함수를 바꿔 끼워 끈다). 너무 넓은 자리(_too_wide)는 빼고 묻는 쪽에 둔다."""
+    if osdep.IS_WIN:
+        cands = [tempfile.gettempdir()]
+    else:
+        cands = sorted({tempfile.gettempdir(), "/tmp", "/var/tmp"})
+    return [d for d in cands if not _too_wide(d)]
 
 
 def _real(path: str, base: str) -> str:
@@ -87,7 +110,13 @@ class Bounds:
 
     def write_outside(self, path: str, base: str | None = None) -> str | None:
         """쓰기 대상이 허용 밖이면 그 실제 경로, 안(또는 이미 승인)이면 None."""
-        if path in DEVICES or path.startswith("/dev/fd/"):
+        if osdep.IS_WIN:
+            k = osdep.win_path_kind(path)
+            if k == "device":
+                return None
+            if k == "ask":
+                return path          # 판정하지 않고 밖으로(묻는 쪽)
+        elif path in DEVICES or path.startswith("/dev/fd/"):
             return None
         r = self.real(path, base)
         if r in self.approved or self._inside(r, self.write_roots):
@@ -95,6 +124,12 @@ class Bounds:
         return r
 
     def read_outside_path(self, path: str) -> str | None:
+        if osdep.IS_WIN:
+            k = osdep.win_path_kind(path or ".")
+            if k == "device":
+                return None
+            if k == "ask":
+                return path
         r = self.real(path or ".")
         if r in self.approved_read or self._inside(r, self.read_roots):
             return None
@@ -191,7 +226,7 @@ class Bounds:
                 continue
             if only_outside:
                 r = self.write_outside(t, base)
-            elif t in DEVICES or t.startswith("/dev/fd/"):
+            elif (osdep.win_path_kind(t) == "device") if osdep.IS_WIN else (t in DEVICES or t.startswith("/dev/fd/")):
                 r = None
             else:
                 r = self.real(t, base)

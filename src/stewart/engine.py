@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 from datetime import datetime
 
 from . import __version__, bounds as BND, hooks as HK, memfile, memory as MEM, selfcheck as SC, think as TH, tools as T
@@ -20,6 +21,9 @@ from .record import Recorder
 from .resume import prepare, save_messages
 from . import modes as M
 from . import facts as FX
+from . import reflect as RF
+from . import cutoff as CO
+from . import images as IMG
 from . import manager as MG
 from . import guard as G
 from . import clarify
@@ -27,8 +31,10 @@ from . import envinfo
 from . import skills as SK
 from . import delegate as DG
 from . import config_guard as CG
+from . import components as CM
 from .checkpoint import Checkpoints
 from .schema import validate
+from .osdep import run_command
 from .shell import tool_env
 
 REPEAT_NUDGE = 3  # 같은 호출이 이만큼 실패하면 결과에 경고를 붙인다
@@ -84,7 +90,8 @@ NUDGE_TOOLCALL = ("방금 응답에 도구 호출처럼 보이는 글이 있지�
 def _git_rev() -> str:
     from .config import REPO_ROOT
     try:
-        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=5)
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:
         return ""
@@ -207,17 +214,19 @@ def web_search_enabled(profile: Profile) -> int:
     return (c["max_per_file"] or c["max_total"]) if c else 0
 
 
-def memory_for(profile: Profile) -> tuple[str, list[dict]]:
+def memory_for(profile: Profile, interactive: bool = False) -> tuple[str, list[dict]]:
     """프로젝트 기억 파일(memfile). 프로필 memory_files=[] 이면 끔."""
     names = memfile.DEFAULT_NAMES if profile.memory_files is None else tuple(profile.memory_files)
     if not names:
         return "", []
-    return memfile.collect(profile.workdir, names, profile.memory_max_chars or memfile.DEFAULT_MAX_CHARS)
+    from . import projcfg as PC
+    return memfile.collect(profile.workdir, names, profile.memory_max_chars or memfile.DEFAULT_MAX_CHARS,
+                           fl=PC.flags(profile, interactive) if profile.memory_files is None else PC.Flags())
 
 
 def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps: int | None = None,
         history: list[dict] | None = None, resumed_from: str | None = None, mode: str | None = None,
-        parent: dict | None = None) -> dict:
+        parent: dict | None = None, images: list | None = None) -> dict:
     """history 가 있으면(--continue·--resume) 그 대화 뒤에 task 를 새 사람 입력으로 붙여 이어 간다.
     mode: auto(기본) 또는 plan(읽기 도구만, 계획을 최종 답으로). 사람에게 묻는 edits·ask 는 run 에서 쓸 수 없다.
     parent: 작업자(delegate)로 돌 때 부모가 주는 것 — cps(체크포인트 공유), env(웹 상한·기록 공유),
@@ -235,11 +244,30 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         tool_defs.append(DG.DEFINITION)   # 작업자에게 맡기기(작업자는 다시 맡기지 못한다)
     # 스킬: 부모는 도구가 있으면 켠다. 작업자는 부모가 load_skill 을 넘겨줬을 때만
     skill_on = bool(profile.tools) and profile.skills is not False and (depth == 0 or SK.NAME in profile.tools)
-    skill_list = SK.discover(profile.workdir) if skill_on else []   # 실행 시작 때 한 번
+    from . import projcfg as PC
+    pfl = PC.flags(profile, interactive=False)   # 무인 실행: Claude Code 꼴 호환은 기본 끔(정본은 그대로)
+    from . import allowrules as AR
+    own_rules = AR.RuleSet(profile.workdir, compat=pfl.compat)   # 부모(chat)가 규칙을 넘기지 않을 때(stewart run)
+
+    def own_rule(args: dict, deny_only: bool) -> tuple[str | None, str]:
+        cwd = getattr(env.shell, "cwd", None) if env.shell is not None else None
+        ctx = AR.Ctx(profile.workdir, Path(cwd or profile.workdir), env.is_secret, allow_redirect=exec_mode == "edits")
+        r = own_rules.decide(str(args.get("command") or ""), ctx)
+        if r.effect not in ("allow", "deny") or (deny_only and r.effect != "deny"):
+            return None, ""
+        comps.fire("allow_rule", st["steps"], "shell_confirm",   # comps·st 는 아래에서 만들고, 부를 때는 있다
+                   "allow" if r.effect == "allow" else "block", rule=":".join(r.rule_ids[:3]), source=":".join(r.sources),
+                   pieces_ok=r.effect == "allow")
+        if r.effect == "allow":
+            return "allow", ""
+        return "deny", f"셸 규칙(deny {r.rule_ids[0]})이 이 명령을 막았다. 다른 방법을 쓰거나 사용자에게 물어라."
+    skill_list = SK.discover(profile.workdir, pfl) if skill_on else []   # 실행 시작 때 한 번
     if skill_list:
         tool_defs.append(SK.DEFINITION)
     if not web:  # 검색 주소가 없으면 웹 도구(web_search·web_fetch)를 도구 목록에서 뺀다
         tool_defs = [d for d in tool_defs if d["function"]["name"] not in T.WEB_TOOLS]
+    if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(평가·실사용 기본 도구 목록은 그대로)
+        tool_defs = [d for d in tool_defs if d["function"]["name"] != "view_image"]
     mem = MEM.Memory(profile, rec.dir) if (not parent and MEM.enabled(profile)) else None   # 기억 M1(작업자는 없음)
     if mem is not None and profile.tools:
         tool_defs += MEM.tool_defs()
@@ -251,6 +279,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     tool_names = [d["function"]["name"] for d in tool_defs]
     env = T.ToolEnv(workdir=profile.workdir, shell_timeout_s=profile.shell_timeout_s, web=web,
                      artifacts_dir=rec.dir, **T.secret_options(profile))
+    env.vision = bool(backend.vision)
     if parent.get("env") is not None:   # 웹 검색 상한·가져오기 기록은 부모와 같은 수를 쓴다
         pe = parent["env"]
         env.search_log, env.search_counts, env.fetch_log, env.fetch_cache = pe.search_log, pe.search_counts, pe.fetch_log, pe.fetch_cache
@@ -283,6 +312,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     if mem is not None:   # L3: 대상 MEMORY.md(대상당 40줄·4 KB, 합 6 KB) + 무엇을 위한 기억인지
         mtext, mem_inject = mem.inject()
         system += "\n\n" + mtext
+    agents = PC.discover_agents(profile.workdir, pfl) if DG.NAME in tool_names else []
+    if agents:   # .stewart/agents(호환 .claude/agents): delegate 의 kind 로 고를 수 있는 정의(이름·설명만)
+        system += "\n\n" + PC.agents_text(agents)
     env_info = envinfo.measure(profile.workdir)   # 실행 시작 때 한 번
     # 다이어트 안 a: 과제마다 다른 환경 블록(작업 폴더·날짜)은 시스템 지시문이 아니라 첫 사람 입력 앞에 둔다.
     # 시스템 지시문 + 도구 정의가 과제 사이에 같아져 prefix cache 가 맞는다.
@@ -299,6 +331,16 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     hctx = hk.session_start("run", task) if hk.has("SessionStart") else ""
     if hctx:   # SessionStart 표준 출력은 첫 사람 입력 앞에 맥락으로(시스템 지시는 그대로 — prefix cache)
         messages[-1]["content"] = HK.SESSION_CTX.format(ctx=hctx) + messages[-1]["content"]
+    img_desc = []
+    if images:   # run --image: 첫 사람 입력에 이미지 자리표(파일은 기록 폴더 images/, 보낼 때만 펼친다 — images.py)
+        if not backend.vision:
+            raise IMG.ImageError(f"이 백엔드({backend.name})는 이미지를 받지 않는다(vision = false)")
+        parts = []
+        for path in images:
+            part, desc = IMG.from_file(path, rec.dir)
+            parts.append(part)
+            img_desc.append(desc)
+        messages[-1]["content"] = IMG.content(messages[-1]["content"], parts)
 
     meta = {
         "engine": "stewart", "engine_version": __version__, "engine_git": _git_rev(),
@@ -311,7 +353,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                       if web else ("꺼짐(검색 주소 없음)" if "web_search" in profile.tools else None),
         "memory_files": mem_log, "context": ctx, "think": tks,
         "memory": ({"dir": str(mem.dir), "subjects": [x["key"] for x in mem.subjects], "injected": mem_inject} if mem else None), "check_on_stop": stop_cfg, "env_info": env_info, "skills": SK.meta_log(skill_list),
+        **({"agents": PC.agents_log(agents)} if agents else {}),
         "resumed_from": resumed_from, "resumed_messages": len(messages) - 2 if history else 0,
+        **({"images": img_desc} if img_desc else {}),
         "started": datetime.now().isoformat(timespec="seconds"),
     }
     rec.event("run_start", meta=meta, messages=messages)
@@ -327,6 +371,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
               pred_n=0, pred_ms=0.0, prompt_n=0, prompt_ms=0.0)
     st.update(tool_error_kinds={}, broken_toolcalls={}, reasoning_tokens=None, call_results={}, same_call_same_result=0,
               same_call_diff_result=0)   # 결함 기록(도구 오류 유형·버린 툴콜·생각 토큰·같은 호출 결과)
+    comps = CM.Components(rec)            # 구성 요소 사건 기록(기록만, STEWART_COMPONENT_EVENTS=0 이면 끔)
     prompt_mark = 0                      # 마지막 응답 때의 메시지 수(그 뒤 붙은 것만 어림해 프롬프트 크기를 잰다)
     cset = compact_settings(profile, 0.7, 8)       # 프로필 + STEWART_COMPACT_*
     comp = Compactor(backend.max_context, cset["ratio"], cset["keep_recent"], fold=cset["fold"],
@@ -338,6 +383,10 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     consecutive = 0
     fail_count: dict[str, int] = {}  # 같은 (도구, 인자) 실패 횟수 — 성공 호출이 끼어도 누적
     repeat_stop = False
+    rf = RF.settings(profile, interactive=False) if not parent else {**RF.settings(profile, False), "on": False}   # 작업자는 끔
+    rstate = RF.State()
+    fail_steps: list[list[dict]] = []   # 모두 실패한 단계들의 호출(성공 단계가 오면 비움) — 되짚기의 거부만 판정
+    recent_fail: list[dict] = []        # 최근 실패 호출(되짚기에 붙일 사실)
     force_format = False
     guard = G.LoopGuard()   # 같은 호출·같은 결과 반복(성공 포함): 3·5 알림, 6 이면 도구 없이 최종 보고(force_final)
     force_final = False
@@ -349,9 +398,50 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     files_written: list[str] = []
     dg = {"profile": profile, "backend": backend, "rec": rec, "cps": cps, "env": env, "exec_mode": exec_mode,
           "tool_names": all_tool_names, "budget": DG.Budget(max_steps, profile.delegate_budget), "log": [], "ask": None,
-          "on_call": None, "bounds": bd, "ask_outside": None, "ledger": MG.Ledger(rec.dir / "ledger.json", task.splitlines()[0] if task else "")
+          "on_call": None, "bounds": bd, "ask_outside": None, "projcfg": pfl, "ledger": MG.Ledger(rec.dir / "ledger.json", task.splitlines()[0] if task else "")
           if MG.NAME in tool_names else None}
     t_start = time.monotonic()
+
+    def try_reflect(trigger: str, step: int) -> bool:
+        """실패 문턱에서 끝내기 전 도구 없는 되짚기 한 번. 했으면 True(이어 간다), 건너뛰거나 실패하면 False(지금처럼 끝)."""
+        nonlocal consecutive, repeat_stop
+        calls = ([tc for s in fail_steps[-consecutive:] for tc in s] if trigger == "consecutive_errors"
+                 else [tc for tc in recent_fail[-1:]])
+        busy = "force_final" if force_final else "force_format" if force_format else None
+        why = RF.skip_reason(rf, rstate.used, calls, busy)
+        if why is not None:
+            if why != "off":
+                rstate.skipped.append({"trigger": trigger, "at_step": step, "why": why})
+                rec.event("reflect_skip", step=step, trigger=trigger, why=why)
+            return False
+        rstate.used += 1
+        facts_text = RF.facts(fail_count, recent_fail)
+        RF.append_user(messages, RF.PROMPT.format(why=RF.WHY[trigger], facts=facts_text))
+        rec.event("reflect_start", step=step, trigger=trigger, last_k=consecutive,
+                  fails={RF._hash(k): v for k, v in fail_count.items()})
+        cap = RF.cap_tokens(rf, tks["max_tokens"], TH.is_on(backend, None))
+        r = RF.call(chat, backend, messages, mt, cap)
+        u = r["usage"]
+        st["model_time_s"] += r["elapsed_s"]
+        st["completion_tokens"] += u.get("completion_tokens") or 0
+        st["prompt_tokens_total"] += u.get("prompt_tokens") or 0
+        st["last_prompt_tokens"] = u.get("prompt_tokens") or st["last_prompt_tokens"]
+        rec.event("reflect", step=step, trigger=trigger, **r)
+        comps.fire("reflect", step, trigger, "return_to_model", ok=r["ok"], last_k=consecutive)
+        entry = {"trigger": trigger, "at_step": step, "ok": r["ok"], "chars": len(r["content"]),
+                 "completion_tokens": u.get("completion_tokens")}
+        rstate.log.append(entry)
+        if not r["ok"]:
+            messages.append({"role": "assistant", "content": RF.FAILED_NOTE.format(why=r["error"])})
+            rec.md(f"> 되짚기 실패({r['error']}) → 원래 사유로 끝냄\n")
+            return False
+        messages.append({"role": "assistant", "content": r["content"]})
+        messages.append({"role": "user", "content": RF.GO})
+        entry["hot"] = RF.lower_hot(fail_count, REPEAT_NUDGE, REPEAT_STOP)
+        consecutive, repeat_stop = 0, False
+        fail_steps.clear()
+        rec.md(f"> 실패가 이어져({trigger}) 도구 없이 되짚음\n\n{r['content']}\n")
+        return True
 
     baseline: dict = {"ran": False}
     base_ids = None
@@ -374,6 +464,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         try:
             overflow_done = length_done = False
             extra: dict = {}
+            est = think_tokens = None
+            u0 = {}
             while True:   # 문맥 넘침이면 한 번 접고 다시. 생각만 하다 잘린 빈 답이면 생각 끔 + 알림으로 한 번 다시
                 try:
                     kw = {**mt, **extra}
@@ -397,6 +489,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     overflow_done = True
                     st["overflow_retries"] = st.get("overflow_retries", 0) + 1
                     rec.event("compact", overflow_retry=True, **c)
+                    comps.fire("overflow_retry", step, "context_overflow", "compact", prompt_tokens=est, status=e.status)
+                    comps.fire("compact", step, "overflow", "compact", tokens_before=c.get("before_tokens"),
+                               clipped=c.get("clipped"), chars_before=c.get("chars_before"), chars_after=c.get("chars_after"))
                     rec.md(f"> 문맥 넘침({e.status}) → 접고 같은 단계 다시: 메시지 {c['from']}~{c['to'] - 1} 중 {c['clipped']}개 줄임"
                            f"({c['chars_before']}자 → {c['chars_after']}자)\n")
                     continue
@@ -411,11 +506,15 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 st["length_stops"] = st.get("length_stops", 0) + 1
                 m0 = ((resp.get("choices") or [{}])[0].get("message") or {})
                 t0 = m0.get("reasoning_content") or m0.get("reasoning") or ""
-                rec.event("length_retry", step=step, elapsed_s=dt, usage=u0, reasoning_content=t0,
+                think_tokens = (u0.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                rec.event("length_retry", step=step, elapsed_s=dt, usage=u0, reasoning_content=t0, think_tokens=think_tokens,
                           length_stats={"think": repeat_stats(t0), "content": repeat_stats(m0.get("content") or "")})
                 rec.md(f"> 생각만 하다 상한(max_tokens)에 닿아 빈 답 → 생각 끔 + 알림으로 같은 단계 다시\n")
                 messages.append({"role": "user", "content": LENGTH_NOTE})
                 extra = {"thinking": False}   # backend.chat 이 chat_template_kwargs.enable_thinking 만 바꿔 끼운다
+            if length_done:
+                comps.fire("length_retry", step, "length_empty", "retry", think_tokens=think_tokens,
+                           completion_tokens=u0.get("completion_tokens"), recovered=not empty_length(resp))
         except BackendError as e:
             body = e.body or ""
             if "timed out" in str(e) or "timeout" in str(e).lower():
@@ -425,16 +524,21 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             if e.status and "parse" in body.lower():  # llama-server가 툴콜 파싱에 실패한 경우
                 st["parse_failures"] += 1
                 _broken(st, rec, step, "server_parse", body)
+                comps.fire("broken_toolcall", step, "server_parse", "return_to_model", repaired=False, how="nudge")
                 consecutive += 1
                 messages.append({"role": "user", "content": NUDGE_TOOLCALL})
                 st_rec["note"] += " → 툴콜 파싱 실패로 셈, 다시 요청"
                 rec.md_step(step, st_rec)
-                if consecutive >= profile.max_consecutive_errors:
+                fail_steps.append([])
+                if consecutive >= profile.max_consecutive_errors and not try_reflect("consecutive_errors", step):
                     stop_reason = "consecutive_errors"
+                    comps.fire("failure_stop", step, "consecutive_errors", "stop", reason=stop_reason, last_k=consecutive)
                     break
                 continue
             rec.md_step(step, st_rec)
             stop_reason = "context_overflow" if is_context_overflow(e) else "backend_error"
+            if stop_reason == "context_overflow":
+                comps.fire("overflow_retry", step, "context_overflow", "stop", prompt_tokens=est, status=e.status)
             break
 
         st["model_time_s"] += dt
@@ -494,7 +598,13 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     tc["parse_error"] = str(e)
                     st["parse_failures"] += 1
                     _broken(st, rec, step, "args_json", tc["raw_arguments"], name=name)
-                    result, ok = f"인자 JSON 파싱 실패: {e}. 인자를 올바른 JSON 객체로 다시 호출하라.", False
+                    comps.fire("broken_toolcall", step, "args_json", "return_to_model", repaired=False, how="error_result")
+                    if choice.get("finish_reason") == "length":   # 생성 상한에서 끊긴 툴콜: 끊겼다·나눠 써라(cutoff.py)
+                        tc["cut"] = True
+                        st["cut_toolcalls"] = st.get("cut_toolcalls", 0) + 1
+                        result, ok = CO.cut_note(profile, backend, name, tc["raw_arguments"]), False
+                    else:
+                        result, ok = f"인자 JSON 파싱 실패: {e}. 인자를 올바른 JSON 객체로 다시 호출하라.", False
                 else:
                     if ask_hold:
                         result, ok = SC.ASK_HOLD, True
@@ -507,6 +617,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                         result, ok = SC.ASK_CHECK, True
                         tc["ask_check"] = True
                         rec.event("ask_check", step=step, tool=name)
+                        comps.fire("ask_check", step, "first_change", "return_to_model", decision="hold", returned_to_model=True,
+                                   tool=name)
                     elif name not in tool_names:
                         result, ok = T.unknown_tool(name, tool_names), False
                     elif name == clarify.NAME:
@@ -538,23 +650,38 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                         if parent.get("on_call"):
                             parent["on_call"](name, args)
                         denied = check(call, CheckContext(profile=profile.name, workdir=profile.workdir, step=step))
+                        dsrc = "check" if denied else None   # 거부한 곳(구성 요소 기록용)
                         if not denied and M.decide(exec_mode, name) == "deny":
-                            denied = M.PLAN_DENY
+                            denied, dsrc = M.PLAN_DENY, "mode"
                         cg = None
                         if not denied:
                             cg = CG.hit(profile.workdir, name, args)   # stewart 사용자 설정 폴더: 무인 실행은 거부, chat 작업자는 매번 묻기
                             if cg is not None:
                                 denied = (parent["ask_cfg"](name, args, cg) if parent.get("ask_cfg")
                                           else CG.RUN_DENY.format(path=cg))
+                                dsrc = "config" if denied else None
                         if not denied and cg is None:   # 작업 폴더 밖: 쓰기는 run 거부(chat 작업자는 물음), 읽기는 read_outside 대로
                             denied, out_kind = _outside_check(bd, env, name, args, parent)
                             if out_kind:
                                 tc["outside"] = out_kind
-                        if not denied and cg is None and not tc.get("outside") and M.decide(exec_mode, name) == "ask" and parent.get("ask"):
+                            dsrc = out_kind and ("outside" if out_kind == "write" else "outside_read") if denied else None
+                        verdict = None
+                        if not denied and cg is None and not tc.get("outside") and name == "run_shell":
+                            # 셸 허용 규칙: deny 는 모드와 관계없이 건다. allow 는 묻는 자리에서만 뜻이 있다
+                            asking = M.decide(exec_mode, name) == "ask" and bool(parent.get("ask"))
+                            verdict, why_rule = (parent["rule"](name, args, not asking) if parent.get("rule")
+                                                 else own_rule(args, not asking))
+                            if verdict == "deny":
+                                denied, dsrc = why_rule, "rule"
+                        if not denied and cg is None and not tc.get("outside") and M.decide(exec_mode, name) == "ask" \
+                                and parent.get("ask") and verdict != "allow":
                             denied = parent["ask"](name, args)
+                            dsrc = "user" if denied else None
                         if denied:
                             tc["denied"] = denied
                             st["denied"] += 1
+                            if dsrc != "outside_read":
+                                comps.fire("write_denied", step, dsrc or "check", "block", reason=dsrc or "check", tool=name)
                             result, ok = f"행동 검사에서 거부됨: {denied}", False
                         else:
                             t1 = time.monotonic()
@@ -563,14 +690,19 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                             if why is not None:   # PreToolUse exit 2 → 돌리지 않고 까닭을 도구 결과로
                                 tc["hook_blocked"] = True
                                 ok, result = False, HK.PRE_BLOCK.format(why=why)
+                                comps.fire("hook_block", step, "pre_tool_use", "block", hook_event="pre_tool_use", exit=2,
+                                           tool=name)
                             else:
                                 cps.before_write(name, args)
                                 ok, result = T.execute(env, name, args)
+                                comps.drain(env.component_notes, step, tool=name)
                                 cps.after_write(name, args, ok)
                                 post = hk.post(name, args, ok, result, step) if hk.has("PostToolUse") else None
                                 if post is not None:   # PostToolUse exit 2 → 까닭을 결과 뒤에 붙여 모델에
                                     tc["hook_note"] = True
                                     result += HK.POST_NOTE.format(why=post)
+                                    comps.fire("hook_block", step, "post_tool_use", "return_to_model",
+                                               hook_event="post_tool_use", exit=2, tool=name)
                             if ok and name in DG.WRITE_TOOLS and args.get("path") and str(args["path"]) not in files_written:
                                 files_written.append(str(args["path"]))
                             if ok and name in DG.WRITE_TOOLS and args.get("path") and review["ran"]:
@@ -588,6 +720,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                         result += (f"\n\n[엔진] 똑같은 호출이 {fail_count[sig]}번 실패했다. 이미 반영됐거나 접근이 틀렸을 수 있다. "
                                    "같은 호출을 되풀이하지 말고 현재 상태를 확인(테스트 실행 등)하거나 다른 방법을 써라.")
                         st["repeat_nudges"] += 1
+                        comps.fire("repeat_nudge", step, "same_call_failed", "nudge", sig=CM.sig_hash(sig),
+                                   count=fail_count[sig], kind="same_fail")
                         if fail_count[sig] >= REPEAT_STOP:
                             repeat_stop = True
                 same = guard.observe(name, tc["raw_arguments"], ok, result)
@@ -595,17 +729,25 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 if g_note:
                     result += "\n\n" + g_note
                     tc["guard"] = same
+                    comps.fire("repeat_nudge", step, "same_call_result", "nudge",
+                               sig=CM.sig_hash(name + "\0" + tc["raw_arguments"]), count=same, kind="same_result")
                     guard_stop = guard_stop or same >= G.STOP
                 tc["ok"], tc["result"] = ok, result
                 if name == "run_shell":
                     st["shell_calls"] = st.get("shell_calls", 0) + 1
                 if not ok:
                     st["tool_errors"] += 1
+                    recent_fail.append(tc)
+                    del recent_fail[:-RF.RECENT_KEEP]
                 step_ok = step_ok or ok
                 srec["tool_calls"].append(tc)
                 calls_log.append(tc)
                 messages.append({"role": "tool", "tool_call_id": rc["id"], "name": name, "content": result})
             consecutive = 0 if step_ok else consecutive + 1
+            if step_ok:
+                fail_steps.clear()
+            else:
+                fail_steps.append(srec["tool_calls"])
             if asked is not None:   # 질문을 최종 출력으로 두고 끝낸다(같은 응답의 다른 호출은 이미 실행됐다)
                 messages.append({"role": "assistant", "content": asked})
                 final_output, stop_reason = asked, "asked"
@@ -614,10 +756,12 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             r_note = guard.step_names({(rc.get("function") or {}).get("name", "") for rc in raw_calls})
             if r_note:
                 notes.append(r_note)
+                comps.fire("repeat_nudge", step, "same_tool_names", "nudge", count=guard.notes, kind="same_names")
             if max_steps - step == G.STEPS_LEFT_NUDGE:
                 notes.append(f"[엔진] 남은 단계는 {G.STEPS_LEFT_NUDGE}번이다. 마무리하라: 바꾼 것을 시험하고 최종 보고를 써라. "
                              "끝내지 못하면 손댄 파일을 시험이 통과하던 상태로 되돌리거나, 바꾼 것과 남은 일을 보고에 적어라.")
                 guard.notes += 1
+                comps.fire("steps_left_nudge", step, "steps_left", "nudge", left=G.STEPS_LEFT_NUDGE)
             if any((rc.get("function") or {}).get("name") == "todo_write" for rc in raw_calls):
                 last_todo_step = step
             pend = SC.pending_todos(env.todos) if sc["todo_check"] else []
@@ -627,19 +771,25 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 last_remind_step = step
                 todo_state["reminds"] += 1
                 rec.event("todo_remind", step=step, pending=len(pend))
+                comps.fire("todo_remind", step, "every_n_steps", "nudge", open_n=len(pend))
             if notes and asked is None:   # 아직 보내지 않은 마지막 도구 결과에만 덧붙인다(물어서 끝나면 붙이지 않는다)
                 messages[-1]["content"] += "\n\n" + "\n".join(notes)
                 srec["tool_calls"][-1]["result"] = messages[-1]["content"]
+            if env.pending_images and asked is None:   # view_image: 다음 user 메시지에 이미지(도구 결과는 글)
+                parts, env.pending_images = list(env.pending_images), []
+                messages.append({"role": "user", "content": IMG.content(f"[엔진] view_image 로 연 이미지 {len(parts)}장", parts)})
                 srec["guard"] = notes
             if guard_stop and not repeat_stop and asked is None:
                 force_final = st["forced_final"] = True
                 if profile.output_format == "json":
                     force_format = True
                 messages.append({"role": "user", "content": G.FINAL_PROMPT.format(n=G.STOP)})
+                comps.fire("repeat_nudge", step, "same_call_result", "block", count=G.STOP, kind="force_final")
                 srec["note"] = f"같은 호출·같은 결과 {G.STOP}번 → 도구를 빼고 최종 보고를 받는다"
         elif tool_names and not force_format and not force_final and _looks_like_toolcall(content, tool_names):
             st["parse_failures"] += 1
             _broken(st, rec, step, "in_content", content)
+            comps.fire("broken_toolcall", step, "in_content", "return_to_model", repaired=False, how="nudge")
             consecutive += 1
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": NUDGE_TOOLCALL})
@@ -672,10 +822,22 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     baseline["unblocked"] += 1
                     srec["note"] = "끝내기 전 확인: 처음부터 실패하던 시험만 남음 → 막지 않음"
             chk_failed = chk is not None and not chk["passed"] and not chk["skipped"]
+            if chk is not None:
+                comps.fire("check_on_stop", step, "final_answer", "return_to_model" if chk_failed else "stop",
+                           decision="skip" if chk["skipped"] else "pass" if chk["passed"] else "fail",
+                           returned_to_model=chk_failed, exit=chk.get("exit"))
+            if split is not None:
+                unblocked = not chk_failed and not split["new"] and bool(split["still"])
+                comps.fire("baseline_compare", step, "check_failed", "return_to_model" if chk_failed else "stop",
+                           decision="unblock" if unblocked else "keep", returned_to_model=chk_failed,
+                           new=len(split["new"]), still=len(split["still"]), fixed=len(split["fixed"]))
             pend = SC.pending_todos(env.todos) if sc["todo_check"] else []
             todo_due = bool(pend) and not todo_state["final_nudged"] and not force_final and not chk_failed
             review_due = (sc["review_on_stop"] and not review["ran"] and not force_final and not chk_failed and not todo_due
                           and bool((cps.cur and cps.cur["files"]) or files_written))
+            if sc["todo_check"] and not todo_due and not chk_failed and not force_final:
+                comps.fire("todo_check", step, "final_answer", "stop", decision="already_nudged" if pend else "pass",
+                           open_n=len(pend))
             hstop = None
             if not chk_failed and not review_due and not todo_due and hk.has("Stop") \
                     and not force_final and hook_stops < profile.check_on_stop_max:
@@ -691,19 +853,25 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 todo_state.update(final_nudged=True, at_step=step, pending_at_nudge=len(pend))
                 messages.append({"role": "user", "content": SC.todo_final(pend)})
                 rec.event("todo_check", step=step, pending=len(pend))
+                comps.fire("todo_check", step, "final_answer", "return_to_model", decision="open", open_n=len(pend))
                 srec["note"] = f"할 일 {len(pend)}개가 남은 채 최종 답 → 한 번 되돌려 보냄"
             elif review_due:
                 # 끝내기 전 요구 대조: 확인이 통과(또는 없음)한 뒤 한 번만
                 review = {"ran": True, "at_step": step}
                 messages.append({"role": "user", "content": SC.REVIEW})
                 rec.event("review_on_stop", step=step)
+                comps.fire("review_on_stop", step, "final_answer", "return_to_model", decision="review", returned_to_model=True)
                 srec["note"] = "끝내기 전 요구 대조 → 한 번 되돌려 보냄"
             elif hstop is not None:
                 messages.append({"role": "user", "content": HK.STOP_BLOCK.format(why=hstop)})
+                comps.fire("hook_block", step, "stop", "return_to_model", hook_event="stop", exit=2)
                 srec["note"] = "hook Stop 이 막음 → 까닭을 돌려주고 다시"
             elif lang_bad and st["language_retries"] < LANGUAGE_RETRIES:
                 st["language_retries"] += 1
                 messages.append({"role": "user", "content": lang_bad})
+                comps.fire("lang_retry", step, "not_korean", "retry",
+                           detected="fields" if profile.language_fields and profile.output_format == "json" else "content",
+                           hangul=round(hangul_ratio(content), 3), retry_n=st["language_retries"])
                 srec["note"] = "보고 언어가 한국어가 아님 → 한국어로 다시 요청"
             elif profile.output_format == "json":
                 try:
@@ -715,6 +883,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     st["format_failures"] += 1
                     consecutive += 1
                     force_format = True
+                    comps.fire("format_force", step, "schema_mismatch", "retry", attempt=st["format_failures"],
+                               errors=len(errs))
                     messages.append({"role": "user", "content":
                                      "최종 답이 스키마에 맞지 않는다:\n- " + "\n- ".join(errs[:15])
                                      + "\n스키마에 맞는 JSON 하나만 다시 출력하라."})
@@ -731,18 +901,29 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         rec.md_step(step, srec)
         if stop_reason in ("completed", "asked", "length_empty"):
             break
-        if consecutive >= profile.max_consecutive_errors:
+        trig = ("consecutive_errors" if consecutive >= profile.max_consecutive_errors
+                else "repeated_failure" if repeat_stop else None)
+        if trig and try_reflect(trig, step):   # 끝내기 전 도구 없는 되짚기 한 번(reflect.py)
+            trig = None
+        if trig == "consecutive_errors":
             stop_reason = "consecutive_errors"
+            comps.fire("failure_stop", step, "consecutive_errors", "stop", reason=stop_reason, last_k=consecutive)
             break
-        if repeat_stop:
+        if trig == "repeated_failure":
             stop_reason = "repeated_failure"
+            comps.fire("failure_stop", step, "same_call_failed", "stop", reason=stop_reason,
+                       last_k=max(fail_count.values(), default=0))
             break
         c = comp.maybe(messages, st["last_prompt_tokens"], step)
         if c:
             rec.event("compact", **c)
+            comps.fire("compact", step, "threshold", "compact", tokens_before=c.get("before_tokens"),
+                       clipped=c.get("clipped"), chars_before=c.get("chars_before"), chars_after=c.get("chars_after"))
             rec.md(f"> 문맥 압축: 메시지 {c['from']}~{c['to'] - 1} 중 {c['clipped']}개 줄임"
                    f"({c['chars_before']}자 → {c['chars_after']}자, 프롬프트 {c['before_tokens']} tok 에서)\n")
 
+    comps.fire("stop_decision", st["steps"], "run_end", "stop", final_reason=stop_reason, last_component=comps.last,
+               steps=st["steps"])
     shell_end = T.close_env(env)          # 남은 백그라운드 작업·셸 정리(되돌리기·판정 명령 전에)
     if shell_end:
         rec.event("shell_cleanup", **shell_end)
@@ -756,8 +937,14 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             rec.event("plan_final", **plan_end)
 
     def run_verify(stage: str) -> dict:
-        p = subprocess.run(profile.verify_command, shell=True, cwd=profile.workdir, capture_output=True, text=True,
-                           timeout=profile.shell_timeout_s * 5, errors="replace", env=tool_env())   # 모델의 셸과 같은 환경
+        from .osdep import ShellNotFound
+        try:
+            p = run_command(profile.verify_command, cwd=profile.workdir, capture_output=True,
+                            timeout=profile.shell_timeout_s * 5, env=tool_env())   # 모델의 셸과 같은 환경(Windows 는 같은 셸)
+        except ShellNotFound as e:
+            v = {"command": profile.verify_command, "exit": "no_shell", "passed": False, "output": f"판정 명령을 돌릴 셸이 없다: {e}"}
+            rec.event("verify", stage=stage, **v)
+            return v
         v = {"command": profile.verify_command, "exit": p.returncode, "passed": p.returncode == 0,
              "output": (p.stdout + p.stderr)[-6000:]}
         rec.event("verify", stage=stage, **v)
@@ -781,6 +968,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 rolled = {"restored": len(r["restored"]), "moved_aside": len(r["moved_aside"]), "skipped": r["skipped"],
                           "outside_changes": r["outside_changes"], "aside_dir": r["aside_dir"], "shell_calls": st.get("shell_calls", 0)}
                 rec.event("rollback", stop_reason=stop_reason, **rolled)
+                comps.fire("rollback", st["steps"], "unfinished", "rollback", reason=stop_reason,
+                           restored=rolled["restored"], moved_aside=rolled["moved_aside"])
                 note = (f"[엔진] 끝내지 못해({stop_reason}) 바꾼 파일 {rolled['restored'] + rolled['moved_aside']}개를 실행 전으로 되돌렸다"
                         f"(되돌리기 직전 모습: {r['aside_dir']}).")
                 if rolled["shell_calls"]:
@@ -804,7 +993,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "asked_text": bool(stop_reason == "completed" and not (cps.cur and cps.cur["files"]) and clarify.looks_like_question(final_output or "")),
         "skills_loaded": skills_loaded,
         "length_stops": st.get("length_stops", 0), "backend_timeouts": st.get("backend_timeouts", 0),
+        **({"cut_toolcalls": st["cut_toolcalls"]} if st.get("cut_toolcalls") else {}),
         "tool_error_kinds": st["tool_error_kinds"], "broken_toolcalls": st["broken_toolcalls"],
+        **({"components": comps.summary()} if comps.on else {}),
         "reasoning_tokens": st["reasoning_tokens"],
         "same_call_same_result": st["same_call_same_result"], "same_call_diff_result": st["same_call_diff_result"],
         **({"think": {**tks, "dropped_params": list(backend.dropped_params)}}
@@ -835,6 +1026,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             "compact_saved_tokens": sum((c["before_tokens"] - c["after_tokens"]) for c in comp.log if c.get("after_tokens"))}
            if comp.fold else {}),
         "checkpoint_files": len(cps.cur["files"]) if cps.cur else 0,
+        **({"reflect": rstate.summary(stop_reason, st["steps"]) | {"source": rf["source"]}}
+           if (rstate.log or rstate.skipped) else {}),   # 되짚기를 했거나 건너뛴 실행만(평가 summary 키는 그대로)
         "files_written": files_written, "delegations": dg["log"], "rolled_back": rolled, "not_rolled_back_reason": not_rolled,
         "ledger": dg["ledger"].brief() if dg["ledger"] is not None else None,
         "web_searches": env.search_log,
@@ -867,6 +1060,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             summary["memory"] = {"notes_model": mem.notes_written, "notes_engine": n_auto, "injected": mem_inject}
         except OSError as e:
             summary["memory"] = {"error": str(e)[:300]}
+    if rstate.log:
+        rec.event("reflect_end", **summary["reflect"])
     rec.event("run_end", summary=summary)
     save_messages(rec.dir, messages)
     rec.close(summary, final_output)

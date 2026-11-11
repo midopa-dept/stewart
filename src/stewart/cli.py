@@ -10,6 +10,9 @@
   stewart podstatus [-b 이름] [--port 8001]   파드 감시기 상태 읽기·기록(runs/pod-status.jsonl)
   stewart queue 대기열.toml [-j N] [--dry-run]  일괄 작업 대기열(백엔드 동시 상한 안에서 병렬)
   stewart rewind 기록 [--to N]                 체크포인트 목록 / N 번이 시작될 때로 파일 되돌리기
+  stewart hub   [--project 폴더] [-b 이름] [--mode edits] [--port 8765]  메인 + 작업자 세션을 웹 화면(127.0.0.1) 하나로
+  stewart hub url [--project 폴더]            떠 있는 허브의 접속 주소·로그인 토큰 다시 보기
+  stewart sessions list|delete|restore|trash|empty|rename|archive [--project 폴더]  허브 지난 세션 정리(휴지통)
   stewart backends | profiles
 """
 
@@ -118,7 +121,8 @@ def cmd_bench(a, profile: Profile, backend: Backend, task: str) -> int:
     def one(i: int) -> dict:
         prof = dataclasses.replace(profile, workdir=Path(wd_tpl.format(i=i)).resolve()) if wd_tpl else profile
         if a.setup:
-            r = subprocess.run(a.setup.format(i=i), shell=True, cwd=REPO_ROOT, capture_output=True, text=True)
+            from .osdep import run_command
+            r = run_command(a.setup.format(i=i), cwd=REPO_ROOT, capture_output=True)
             if r.returncode != 0:
                 raise RuntimeError(f"setup 실패(회차 {i}): {r.stdout}{r.stderr}")
             pruned = prune_old(prof.workdir, a.keep_old)
@@ -246,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     _common(r)
     _resume_args(r)
     r.add_argument("--plan", action="store_true", help="계획 모드: 읽기 도구만 쓰고 고칠 계획을 최종 답으로 낸다(파일·명령 안 건드림)")
+    r.add_argument("--image", action="append", default=None, help="과제와 함께 보낼 이미지 파일(여러 번 가능, vision 백엔드만)")
     b = sub.add_parser("bench", help="같은 과제를 N번 반복해 성공률·단계 분포 기록")
     _common(b)
     b.add_argument("-n", type=int, required=True)
@@ -308,6 +313,12 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("-j", "--max-parallel", type=int, default=0, help="전체 동시 작업 상한(0=백엔드 상한만)")
     q.add_argument("--dry-run", action="store_true")
     q.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
+    cl = sub.add_parser("cloud", help="래퍼(stewart-cloud)가 빌린 인스턴스 기다리기·보기(wait|info). 빌리기·지우기는 래퍼가 한다")
+    cl.add_argument("action", choices=["wait", "info"])
+    cl.add_argument("-b", "--backend", default="cloud")
+    cl.add_argument("--port", type=int, default=8001)
+    cl.add_argument("--timeout-min", type=float, default=45)
+    cl.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
     dr = sub.add_parser("dream", help="기억 꿈꾸기: 메모를 기록과 대조해 대상마다 쪽을 고쳐 쓰고 주입 색인을 제안(사람이 부른다)")
     dr.add_argument("--subject", action="append", help="대상 키(여럿 가능, 없으면 메모가 있는 모든 대상)")
     dr.add_argument("-b", "--backend", help="쪽을 쓸 모델의 백엔드(없으면 기본)")
@@ -319,9 +330,72 @@ def main(argv: list[str] | None = None) -> int:
     og.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("backends", help="백엔드 목록")
     sub.add_parser("profiles", help="프로필 목록")
+    hb = sub.add_parser("hub", help="허브: 메인 세션 + 작업자 세션들을 웹 화면(127.0.0.1) 하나로 본다")
+    hb.add_argument("action", nargs="?", choices=["url"], help="url: 떠 있는 허브의 접속 주소·로그인 토큰을 다시 보인다(허브는 띄우지 않음)")
+    hb.add_argument("--project", default=None, help="프로젝트 폴더(메인의 작업 폴더, 기본: 지금 폴더)")
+    hb.add_argument("--new-token", action="store_true", help="로그인 토큰을 새로 만든다(예전 로그인은 모두 끝남). 기본은 상태 폴더의 것을 다시 쓴다")
+    hb.add_argument("-p", "--profile", default="chat", help="메인 프로필(기본 chat)")
+    hb.add_argument("-b", "--backend", default=None)
+    hb.add_argument("--worker-profile", default=None, help="작업자 기본 프로필(기본: 메인과 같음)")
+    hb.add_argument("--new-main", action="store_true", help="메인 대화를 새로 시작(기본: 이 허브의 마지막 메인 대화를 이어 받는다)")
+    hb.add_argument("--mode", choices=["auto", "edits", "ask", "plan"], default="edits", help="메인 모드(작업자는 이보다 넓을 수 없다)")
+    hb.add_argument("--port", type=int, default=None, help="웹 포트(기본 설정값 또는 8765)")
+    hb.add_argument("--config", default=None, help="허브 설정 파일([hub] 표, 기본 ~/.config/stewart/hub.toml)")
+    hb.add_argument("--state-dir", default=None, help="허브 폴더(기본 설정값 또는 ~/.local/state/stewart/hub/<프로젝트>)")
+    hb.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
+    ss = sub.add_parser("sessions", help="허브의 지난 세션 정리: list|delete|restore|trash|empty|rename|archive|unarchive")
+    ss.add_argument("sessions_action", choices=["list", "delete", "restore", "trash", "empty", "rename", "archive", "unarchive"])
+    ss.add_argument("keys", nargs="*", help="작업자 이름·메인 기록 폴더 이름(delete·archive 는 여럿), restore 는 휴지통 id, rename 은 이름 다음 새 제목")
+    ss.add_argument("--older-days", type=float, default=None, help="delete: 이보다 오래 손대지 않은 것 모두 / empty: 이보다 오래 전에 지운 것만")
+    ss.add_argument("--archived", action="store_true", help="list: 보관한 것을 본다")
+    ss.add_argument("--yes", action="store_true", help="empty: 되돌릴 수 없음을 알고 비운다")
+    ss.add_argument("--project", default=None)
+    ss.add_argument("--state-dir", default=None)
+    ss.add_argument("--config", default=None)
+    ss.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
+    hu = sub.add_parser("hub-user", help="계정 모드 허브([hub] accounts = true)의 사용자 더하기·비밀번호 바꾸기·막기·목록")
+    hu.add_argument("action", choices=["add", "passwd", "disable", "enable", "list"])
+    hu.add_argument("name", nargs="?")
+    hu.add_argument("--project", default=None, help="허브를 띄우는 프로젝트 폴더(허브 폴더를 찾는 데만 쓴다)")
+    hu.add_argument("--config", default=None)
+    hu.add_argument("--state-dir", default=None, help="허브 폴더(허브를 띄울 때와 같은 값)")
+    hu.add_argument("--password-stdin", action="store_true", help="비밀번호를 표준 입력 한 줄로(묻지 않음)")
+    wk = sub.add_parser("worker", help="(허브가 띄운다) 작업자 세션 하나")
+    wk.add_argument("--session-dir", required=True)
+    wk.add_argument("--approval-fd", type=int)
+    wk.add_argument("--resume")
     a = ap.parse_args(argv)
+    from . import osdep
+    if osdep.IS_WIN:   # 콘솔 Ctrl-C 가 막혀 있는 소켓 읽기를 깨우지 못하므로 받는 중인 연결을 먼저 끊는다(WIN-4)
+        from .backend import abort_streams
+        osdep.win_on_ctrl_c(abort_streams)
+    if a.cmd == "worker":
+        from . import worker
+        return worker.main(["--session-dir", a.session_dir]
+                           + (["--approval-fd", str(a.approval_fd)] if a.approval_fd is not None else [])
+                           + (["--resume", a.resume] if a.resume else []))
 
     try:
+        if a.cmd == "hub":
+            from .hubmain import run_hub
+            return run_hub(a)
+        if a.cmd == "sessions":
+            from .hubmain import run_sessions
+            return run_sessions(a)
+        if a.cmd == "hub-user":
+            from .hubmain import run_hub_user
+            return run_hub_user(a)
+        if a.cmd == "cloud":
+            from . import cloud
+            if a.action == "info":
+                print(json.dumps(cloud.info(), ensure_ascii=False, indent=1))
+                return 0
+            backends, _ = load_backends()
+            if a.backend not in backends:
+                raise ConfigError(f"백엔드가 없다: {a.backend}")
+            r = cloud.wait(backends[a.backend], a.port, Path(a.runs_dir), timeout_s=a.timeout_min * 60)
+            print(json.dumps(r, ensure_ascii=False, indent=1))
+            return 0 if r["ok"] else 1
         if a.cmd == "dream":
             from . import dream as DR
             from .memory import memory_dir
@@ -478,11 +552,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"stewart: 기록 {rec.dir}", file=sys.stderr)
         if resumed:
             print(f"stewart: 이어 감 {resumed}", file=sys.stderr)
+        imgs = getattr(a, "image", None)
+        if imgs and not backend.vision:
+            print(f"stewart: 이 백엔드({backend.name})는 이미지를 받지 않는다(backends 표 vision = false)", file=sys.stderr)
+            return 2
         s = engine.run(profile, backend, task, rec, a.max_steps, history=history, resumed_from=resumed,
-                       mode=getattr(a, "plan", False) and "plan" or None)
+                       mode=getattr(a, "plan", False) and "plan" or None, images=imgs)
     except KeyboardInterrupt:
         print("stewart: 중단됨", file=sys.stderr)
         return 130
+    except ValueError as e:   # images.ImageError(형식·크기·비밀 꼴 이름) — 까닭만 찍는다
+        from .images import ImageError
+        if not isinstance(e, ImageError):
+            raise
+        print(f"stewart: 이미지를 붙이지 않았다: {e}", file=sys.stderr)
+        return 2
     print(json.dumps(_short(s), ensure_ascii=False))
     print(f"transcript: {rec.dir / 'transcript.md'}")
     return 0 if s["success"] else 1

@@ -93,7 +93,7 @@ class TStream(unittest.TestCase):
         s = C.ChatSession(p, Backend("fake", "http://x/v1", "m", "q", 4096), Recorder(self.tmp / "runs", "chat-t"), ui, stream=True)
         self.addCleanup(lambda: s.rec._ev.closed or s.rec._ev.close())
 
-        def fake_stream(backend, messages, tools=None, response_format=None, max_tokens=None, on_delta=None):
+        def fake_stream(backend, messages, tools=None, response_format=None, max_tokens=None, on_delta=None, **k):
             on_delta("긴 답의 앞", "")
             e = KeyboardInterrupt()
             e.partial = {"role": "assistant", "content": "긴 답의 앞",

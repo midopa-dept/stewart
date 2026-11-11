@@ -51,7 +51,7 @@ class TImp5All(unittest.TestCase):
         s = C.ChatSession(self.prof("chat"), self.bk, Recorder(self.tmp / "runs", "chat-a"), ui, mode="auto")
         self.addCleanup(lambda: s.rec._ev.closed or s.rec._ev.close())
         with mock.patch.object(engine, "chat", side_effect=[self.wcall(), _resp("거부됐다")]), \
-                mock.patch.object(C, "chat", side_effect=[dcall(task="스킬을 써라"), _resp("끝")]):
+                mock.patch.object(C, "chat", side_effect=[dcall(task="스킬을 써라", tools=["write_file"]), _resp("끝")]):
             s.turn("맡겨")
         self.assertFalse(self.evil.exists())
         self.assertEqual(len(ui.prompts), 1)

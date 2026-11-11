@@ -10,8 +10,11 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from tests import LOCAL
 from unittest import mock
 
 from stewart import backend as B, chat as C, cli, engine, probe
@@ -355,7 +358,21 @@ class TChat(unittest.TestCase):
         self.assertEqual(C.read_input(ui), "가\n나")
 
 
+class TCloudDir(unittest.TestCase):
+    """기록 폴더 기본값은 집 경로가 아니라 환경 변수 → hub.toml [cloud] dir → XDG 캐시."""
+    def test_order(self):
+        from stewart import cloud
+        with tempfile.TemporaryDirectory() as d:
+            hub = Path(d) / "hub.toml"
+            env = {k: v for k, v in os.environ.items() if k not in ("STEWART_CLOUD_DIR",)}
+            env.update(STEWART_HUB_CONFIG=str(hub), XDG_CACHE_HOME=str(Path(d) / "c"))
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(cloud.cloud_dir(), Path(d) / "c" / "stewart-cloud")
+                hub.write_text('[cloud]\ndir = "%s/x"\n' % d, encoding="utf-8")
+                self.assertEqual(cloud.cloud_dir(), Path(d) / "x")
+                os.environ["STEWART_CLOUD_DIR"] = str(Path(d) / "e")
+                self.assertEqual(cloud.cloud_dir(), Path(d) / "e")
+
+
 if __name__ == "__main__":
     unittest.main()
-
-

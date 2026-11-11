@@ -3,6 +3,8 @@
 - 세션(run 하나, chat 하나) 시작 때 한 번 재고 그 동안 바꾸지 않는다(시스템 지시문 앞부분 cache 유지).
   이어 하기(--continue·--resume)는 지시문을 새로 만들므로 다시 잰다.
 - 파이썬 명령은 run_shell 의 셸과 같은 PATH(이 프로세스의 PATH, bash --noprofile)로 찾는다.
+- 셸은 osdep.shell_spec(POSIX /bin/bash, Windows 동봉 busybox-w32 sh 또는 설정한 셸).
+- Windows: 판(--version)을 내지 못하는 파이썬(스토어 안내 대역 WindowsApps 의 python3.exe 등)은 "없음"으로 친다.
 - 넣지 않는 것: 환경 변수 값, 키·토큰, 작업 폴더 밖 파일 목록.
 """
 
@@ -14,13 +16,13 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
-from .shell import BASH
+from . import osdep
 
 
 def _first_line(argv: list[str], cwd: Path | None = None) -> str | None:
     try:
-        p = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=5,
-                           stdin=subprocess.DEVNULL)
+        p = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True, encoding="utf-8", errors="replace",
+                           timeout=5, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
     if p.returncode != 0:
@@ -37,24 +39,43 @@ def _os_name() -> str:
     return f"{sysname} {rel} ({mach})"
 
 
-def _python(name: str) -> dict:
+def _python(name: str, win: bool | None = None) -> dict:
+    win = osdep.IS_WIN if win is None else win
     path = shutil.which(name)
     if not path:
         return {"name": name, "path": None, "version": None}
     v = _first_line([path, "--version"])
+    if win and not v:            # 스토어 안내 대역 등: 있지만 파이썬이 아니다
+        return {"name": name, "path": None, "version": None}
     return {"name": name, "path": path, "version": (v or "").replace("Python ", "") or None}
+
+
+def _shell_label(spec: "osdep.ShellSpec | None", err: str | None = None) -> str:
+    """환경 블록의 셸 줄. POSIX bash 는 지금까지와 같은 꼴("/bin/bash (GNU bash, version …)")."""
+    if spec is None:
+        return f"없음({err})" if err else "없음"
+    if spec.kind == "busybox":
+        v = _first_line([spec.path])            # 첫 줄 "BusyBox v1.xx … multi-call binary."
+        v = v.split(" multi-call")[0] if v else None
+        return f"{spec.path} sh" + (f" ({v})" if v else "") + " — POSIX sh(ash): 배열 a=(…) 은 문법 오류, {1..3} 범위는 펼쳐지지 않고 글자 그대로(seq 를 써라)"
+    v = _first_line([*spec.argv, "--version"])
+    label = " ".join(spec.argv) + (f" ({v.split(' (')[0]})" if v else "")
+    return label + (f" — 주의: {spec.warning}" if spec.warning else "")
 
 
 def measure(workdir: Path, today: date | None = None) -> dict:
     """한 번 잰 값(meta 에도 남긴다)."""
     workdir = Path(workdir)
-    bash_v = _first_line([BASH, "--version"])
+    try:
+        spec, err = osdep.shell_spec(), None
+    except osdep.ShellNotFound as e:
+        spec, err = None, str(e)
     git = None
     if shutil.which("git") and workdir.is_dir():
         git = _first_line(["git", "rev-parse", "--is-inside-work-tree"], workdir) == "true"
     return {
         "os": _os_name(),
-        "shell": BASH + (f" ({bash_v.split(' (')[0]})" if bash_v else ""),
+        "shell": _shell_label(spec, err),
         "workdir": str(workdir),
         "date": (today or date.today()).isoformat(),
         "git": git,

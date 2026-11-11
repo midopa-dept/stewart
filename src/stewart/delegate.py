@@ -46,6 +46,22 @@ DEFINITION = {"type": "function", "function": {
 }}
 
 
+# chat·허브용(U2-2 3b): 도구를 적지 않으면 읽기 도구만 준다(조사·탐색, 승인 없음). run·평가 경로는 위 DEFINITION 그대로
+CHAT_DEFINITION = {"type": "function", "function": {
+    "name": NAME,
+    "description": ("새 문맥의 작업자에게 조사·탐색 하나를 맡기고 결과 글만 받는다(넓게 읽어야 해서 이 대화를 무겁게 할 일: 코드 찾기·"
+                    "구조 파악·여러 파일 대조). tools 를 적지 않으면 읽기 도구만 받는다(승인 없음). 파일을 바꾸게 하려면 tools 를 적는다. "
+                    "작업자는 이 대화를 못 보니 task 에 목표·범위·돌려받을 것을 다 적는다. 파일 한두 개 보기는 직접 한다."),
+    "parameters": {"type": "object", "properties": {
+        "task": {"type": "string", "description": "작업자에게 줄 일(목표·범위·돌려받을 것)"},
+        "kind": {"type": "string", "description": "작업자 프로필 이름(없으면 지금 프로필에서 도구만 줄여 쓴다)"},
+        "tools": {"type": "array", "items": {"type": "string"},
+                  "description": "작업자에게 줄 도구(지금 도구 안에서만). 없으면 읽기 도구만"},
+        "max_steps": {"type": "integer", "description": "작업자 단계 상한(줄이기만 된다)"},
+    }, "required": ["task"]},
+}}
+
+
 def wanted(tools: list[str], depth: int) -> bool:
     return depth == 0 and (tools == ["*"] or NAME in tools)
 
@@ -63,19 +79,30 @@ class Budget:
         self.n = 0
 
 
-def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, budget: Budget):
+def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, budget: Budget, pfl=None,
+                  read_default: bool = False):
     """(작업자 프로필, max_steps) 또는 ConfigError."""
     kind = str(args.get("kind") or "").strip()
-    base = load_profile(kind) if kind else parent
+    agent = None
+    try:
+        base = load_profile(kind) if kind else parent
+    except ConfigError:   # stewart 프로필이 없으면 .stewart/agents(호환 .claude/agents)의 정의. 같은 이름이면 프로필이 이긴다
+        from . import projcfg as PC
+        agent = PC.find_agent(parent.workdir, kind, pfl or PC.Flags())
+        if agent is None:
+            raise
+        base = PC.agent_profile(agent, parent)
     base_tools = set(parent_tools) if base.tools == ["*"] else set(base.tools)
     allowed = set(parent_tools) & base_tools
     if args.get("tools"):
         allowed &= {str(t) for t in args["tools"]}
+    elif read_default and not kind:   # chat·허브: 도구를 적지 않으면 읽기 도구만(조사·탐색)
+        allowed &= M.READ_TOOLS
     allowed -= NO_CHILD
     if exec_mode == "plan":
         allowed &= M.READ_TOOLS
     tools = [t for t in parent_tools if t in allowed]
-    steps = base.max_steps if kind else DEFAULT_STEPS
+    steps = base.max_steps if (kind and agent is None) else DEFAULT_STEPS
     if args.get("max_steps"):
         try:
             steps = min(steps, max(MIN_STEPS, int(args["max_steps"])))
@@ -114,7 +141,8 @@ def run_child(ctx: dict, args: dict) -> tuple[bool, str]:
         return False, "task 가 비었다. 작업자에게 맡길 일을 적어 다시 호출하라."
     budget: Budget = ctx["budget"]
     try:
-        prof, steps = child_profile(ctx["profile"], ctx["tool_names"], ctx["exec_mode"], args, budget)
+        prof, steps = child_profile(ctx["profile"], ctx["tool_names"], ctx["exec_mode"], args, budget, ctx.get("projcfg"),
+                                    read_default=bool(ctx.get("read_default")))
     except ConfigError as e:
         return False, f"작업자를 만들 수 없다: {e}"
     budget.n += 1
@@ -128,7 +156,8 @@ def run_child(ctx: dict, args: dict) -> tuple[bool, str]:
               "ask_outside": (lambda name, a, paths, kind: ask_out(n, name, a, paths, kind)) if ask_out else None,
               "ask": (lambda name, a: ask(n, name, a)) if ask else None,
               "ask_cfg": (lambda name, a, path: ask_cfg(n, name, a, path)) if ask_cfg else None,
-              "on_call": (lambda name, a: on_call(n, name, a)) if on_call else None}
+              "on_call": (lambda name, a: on_call(n, name, a)) if on_call else None,
+              "rule": ctx.get("rule")}   # 부모 chat 의 셸 허용 규칙(작업자 확인 자리에서도 같게)
     from . import manager as MG
     verifier = prof.name == MG.VERIFIER
     git_before = MG.git_state(prof.workdir) if verifier else None

@@ -134,8 +134,8 @@ class TDelegateChat(unittest.TestCase):
         p = Profile(name="chat", path=self.tmp / "p.toml", system="s", tools=["*"], workdir=self.tmp, max_steps=10)
         s = C.ChatSession(p, self.bk, Recorder(self.tmp / "runs", "chat-d"), ui, mode="edits")
         self.addCleanup(lambda: s.rec._ev.closed or s.rec._ev.close())
-        seq = [dcall(task="c.txt 를 만들고 ls 를 돌려라"),
-               _resp(calls=[("write_file", '{"path": "c.txt", "content": "1"}'), ("run_shell", '{"command": "ls"}')]),
+        seq = [dcall(task="c.txt 를 만들고 ls 를 돌려라", tools=["write_file", "run_shell"]),   # chat 은 도구를 적어야 쓰기를 준다(U2-2)
+               _resp(calls=[("write_file", '{"path": "c.txt", "content": "1"}'), ("run_shell", '{"command": "uname"}')]),
                _resp("c.txt 는 만들었고 ls 는 거부됐다."), _resp("작업자가 c.txt 를 만들었다.")]
         with mock.patch.object(engine, "chat", side_effect=seq[1:3]), mock.patch.object(C, "chat", side_effect=[seq[0], seq[3]]):
             self.assertEqual(s.turn("맡겨"), "answered")
@@ -149,6 +149,19 @@ class TDelegateChat(unittest.TestCase):
         self.assertEqual(s.st["denied"], 1)
         rep = s.rewind()                                  # /undo 가 작업자 쓰기도 덮는다
         self.assertEqual([Path(x).name for x in rep["moved_aside"]], ["c.txt"])
+
+
+class TReadDefault(unittest.TestCase):
+    def test_chat_default_read_only(self):
+        from stewart.delegate import Budget, child_profile
+        p = Profile(name="chat", path=Path("/x/p.toml"), system="s", tools=["*"], workdir=Path("/x"), max_steps=10)
+        tools = ["read_file", "write_file", "run_shell", "search", "list_dir"]
+        prof, _ = child_profile(p, tools, "edits", {"task": "t"}, Budget(10), read_default=True)
+        self.assertEqual(prof.tools, ["read_file", "search", "list_dir"])          # 읽기 도구만
+        prof, _ = child_profile(p, tools, "edits", {"task": "t", "tools": ["write_file"]}, Budget(10), read_default=True)
+        self.assertEqual(prof.tools, ["write_file"])                                 # 적으면 그대로
+        prof, _ = child_profile(p, tools, "edits", {"task": "t"}, Budget(10))
+        self.assertEqual(prof.tools, tools)                                          # run(평가 경로)은 그대로
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from .osdep import ShellNotFound, run_command
 from .shell import tool_env
 
 ENV_CHECK = "STEWART_CHECK_ON_STOP"
@@ -64,11 +65,14 @@ def run_stop(command: str, workdir, timeout_s: float, skip_exit=(5,), payload: d
     t0 = time.monotonic()
     data = json.dumps({"event": "Stop", **(payload or {})}, ensure_ascii=False)
     try:
-        p = subprocess.run(command, shell=True, cwd=workdir, input=data, capture_output=True, text=True,
-                           timeout=timeout_s, errors="replace", env={**tool_env(), "STEWART_HOOK_EVENT": "Stop"})
+        p = run_command(command, cwd=workdir, input=data, capture_output=True, timeout=timeout_s,
+                        env={**tool_env(), "STEWART_HOOK_EVENT": "Stop"})
     except subprocess.TimeoutExpired:
         return {"command": command, "exit": "timeout", "passed": False, "skipped": False,
                 "output": f"시간 초과({timeout_s:.0f}초)", "elapsed_s": time.monotonic() - t0}
+    except ShellNotFound as e:
+        return {"command": command, "exit": "no_shell", "passed": False, "skipped": False,
+                "output": f"확인 명령을 돌릴 셸이 없다: {e}", "elapsed_s": time.monotonic() - t0}
     skipped = p.returncode in tuple(skip_exit)
     from .selfcheck import failing_tests
     return {"command": command, "exit": p.returncode, "passed": p.returncode == 0, "skipped": skipped,
@@ -154,12 +158,15 @@ class Hooks:
                               ensure_ascii=False)
             t0 = time.monotonic()
             try:
-                p = subprocess.run(h.command, shell=True, cwd=self.workdir, input=data, capture_output=True, text=True,
-                                   timeout=h.timeout_s, errors="replace", env={**tool_env(), "STEWART_HOOK_EVENT": event})
+                p = run_command(h.command, cwd=self.workdir, input=data, capture_output=True, timeout=h.timeout_s,
+                                env={**tool_env(), "STEWART_HOOK_EVENT": event})
                 r = {"event": event, "command": h.command, "exit": p.returncode, "stdout": p.stdout[-CONTEXT_CHARS:],
                      "stderr": p.stderr[-FEEDBACK_CHARS:], "blocked": p.returncode == 2}
             except subprocess.TimeoutExpired:
                 r = {"event": event, "command": h.command, "exit": "timeout", "stdout": "", "stderr": f"시간 초과({h.timeout_s:.0f}초)",
+                     "blocked": False}
+            except ShellNotFound as e:
+                r = {"event": event, "command": h.command, "exit": "no_shell", "stdout": "", "stderr": f"hook 을 돌릴 셸이 없다: {e}",
                      "blocked": False}
             r["elapsed_s"] = round(time.monotonic() - t0, 3)
             if tool is not None:

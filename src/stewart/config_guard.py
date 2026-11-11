@@ -1,7 +1,8 @@
 """stewart 사용자 설정 폴더 쓰기 통제.
 
-- 지키는 곳: ~/.config/stewart/ 아래 전부, STEWART_SKILLS_DIR·STEWART_PROFILES_DIR 가 가리키는 곳.
-  (stewart 에는 아직 사용자 전역 기억 파일이 없다. 생기면 여기에 더한다.)
+- 지키는 곳: ~/.config/stewart/ 아래 전부(사용자 STEWART.md·rules.toml·skills·commands·agents),
+  STEWART_SKILLS_DIR·STEWART_PROFILES_DIR·STEWART_USER_DIR 가 가리키는 곳, 허브 폴더 뿌리(~/.local/state/stewart/hub —
+  "늘 허용" 규칙 파일이 있다).
 - 쓰기 도구(write_file·edit_file·multi_edit·notebook_edit)가 그 안에 쓰려 하면
   · chat: 모드와 관계없이(auto·edits 포함) 매번 y/n 확인. 작업자([작업자 N])도 같다.
   · run(무인): 거부하고 이유를 도구 결과로 돌려준다.
@@ -25,7 +26,9 @@ RUN_DENY = ("stewart 사용자 설정 폴더({path})는 무인 실행에서 쓰�
 
 
 def protected_dirs() -> list[Path]:
-    raw = ["~/.config/stewart", os.environ.get("STEWART_SKILLS_DIR"), os.environ.get("STEWART_PROFILES_DIR")]
+    state = os.path.join(os.environ.get("XDG_STATE_HOME") or "~/.local/state", "stewart", "hub")
+    raw = ["~/.config/stewart", os.environ.get("STEWART_SKILLS_DIR"), os.environ.get("STEWART_PROFILES_DIR"),
+           os.environ.get("STEWART_USER_DIR"), state]
     out: list[Path] = []
     for r in raw:
         if r:
@@ -39,7 +42,11 @@ def hit(workdir: Path, name: str, args: dict) -> Path | None:
     """쓰기 도구의 대상이 지키는 폴더 안이면 그 실제 경로, 아니면 None."""
     if name not in WRITE_TOOLS or not args.get("path"):
         return None
-    q = Path(os.path.expanduser(str(args["path"])))
+    raw = str(args["path"])
+    from . import osdep
+    if osdep.IS_WIN:   # WIN-3: 끝 점·공백은 Windows 가 떼므로 뗀 경로로 본다(stewart. → stewart)
+        raw = osdep.win_strip_components(raw)
+    q = Path(os.path.expanduser(raw))
     q = q if q.is_absolute() else Path(workdir) / q
     real = Path(os.path.realpath(q))
     for d in protected_dirs():

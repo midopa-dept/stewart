@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 
+from . import osdep
 from .chat import UI, WRITE_TOOLS
 
 MIN_COLS = 60          # 이보다 좁으면 지금 화면
@@ -68,7 +69,14 @@ def plain_reason(choice: str = "auto", env=os.environ, stdin=None, stdout=None, 
         return "터미널이 아님(파이프·리다이렉트)"
     if choice == "on":
         return None
-    if env.get("TERM", "") in ("", "dumb"):
+    if osdep.IS_WIN:
+        # Windows 콘솔에는 보통 TERM 이 없다(WIN-4). TERM 대신 콘솔이 VT 처리를 켤 수 있는지로 가른다
+        if env.get("TERM", "") == "dumb":
+            return "TERM='dumb'"
+        why = osdep.win_console_vt()
+        if why:
+            return why
+    elif env.get("TERM", "") in ("", "dumb"):
         return f"TERM={env.get('TERM', '')!r}"
     if env.get("STEWART_TUI", "") == "0":
         return "STEWART_TUI=0"
@@ -492,7 +500,17 @@ class TuiUI(UI):
             return None
 
     def check_terminal(self, timeout: float = 2.5, tcget=None, fd: int | None = -1) -> str | None:
-        """화면을 띄운 뒤: raw 모드가 걸렸고 CPR 응답이 왔는지. 안 되면 이유(문자열), 되면 None."""
+        """화면을 띄운 뒤: raw 모드가 걸렸고 CPR 응답이 왔는지. 안 되면 이유(문자열), 되면 None.
+        Windows: termios·CPR 이 없다(prompt_toolkit 이 콘솔 API 로 입력 모드를 건다) — 화면이 떴는지만 본다."""
+        if osdep.IS_WIN and tcget is None:
+            end = time.monotonic() + min(timeout, 1.0)
+            while time.monotonic() < end:
+                if self.state.dead:
+                    return "화면을 띄우지 못함" + (f" ({self._dead})" if self._dead else "")
+                if self._running.is_set():
+                    return None
+                time.sleep(0.02)
+            return None if not self.state.dead else "화면을 띄우지 못함"
         import termios
         from prompt_toolkit.renderer import CPR_Support
         tcget = tcget or termios.tcgetattr
@@ -520,6 +538,8 @@ class TuiUI(UI):
 
     def guard_raw(self, tcget=None, tcset=None) -> bool:
         """떠 있는 동안 누가 터미널을 cooked 로 되돌렸으면(readline 등) raw 를 다시 건다. 다시 걸었으면 True."""
+        if osdep.IS_WIN and tcget is None:
+            return False                  # termios 없음(콘솔 입력 모드는 prompt_toolkit 이 쥔다)
         attrs = getattr(self, "_raw_attrs", None)
         fd = self._tty_fd() if tcget is None else 0
         if attrs is None or fd is None:
@@ -776,11 +796,18 @@ class TuiUI(UI):
         self._draft = ""
 
     def interrupt(self) -> bool:
-        """차례 안이면 main 스레드에 SIGINT. 보냈으면 True."""
+        """차례 안이면 main 스레드에 SIGINT. 보냈으면 True.
+        Windows: pthread_kill 이 없다 — 받는 중인 연결을 끊고(backend.abort_streams) interrupt_main 으로 SIGINT 를 낸다."""
         if not self._armed:
             return False
         self._interrupted = True
         self.phase = "중단하는 중"
+        if osdep.IS_WIN or not hasattr(signal, "pthread_kill"):
+            import _thread
+            from .backend import abort_streams
+            abort_streams()
+            _thread.interrupt_main(signal.SIGINT)
+            return True
         try:
             signal.pthread_kill(self._main, signal.SIGINT)
         except (OSError, ValueError, AttributeError):

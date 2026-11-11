@@ -1,0 +1,335 @@
+// 아래 고정: 승인 띠(대기 건마다 카드) · 대기 줄 · 입력 칸(/명령 · @파일 · 이미지 · 보낸 말 ↑↓ · 멈춤)
+import { Component } from 'preact'
+import { useState, useRef, useEffect } from 'preact/hooks'
+import { signal } from '@preact/signals'
+import { post, get, store } from './lib.js'
+import { hub, queue, busy, refresh, toast, view, sessions } from './state.js'
+
+const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
+export const sheetAsk = signal(null)      // 폰: 승인 전문 시트에 띄운 건(session#seq)
+
+const what = it => {
+  const s = it.args_summary || {}
+  return s.command ? s.command : s.paths ? s.paths.join('\n') : (it.prompt || '')
+}
+
+// 같은 건을 두 번(또는 허용 뒤 거부를) 보내지 않게 — 보낸 건은 대기열에서 빠질 때까지 단추를 막는다
+// (꼴은 OpenHands conversation-confirmation-buttons.tsx, MIT — ui/THIRD_PARTY.md)
+export const sentAsk = signal(new Set())
+const askKey = it => it.session + '#' + it.seq
+
+async function answer(it, ans, extra) {
+  const k = askKey(it)
+  if (sentAsk.value.has(k)) return false
+  sentAsk.value = new Set([...sentAsk.value, k])
+  try {
+    await post('/api/answer', { session: it.session, seq: it.seq, answer: ans, ...(extra || {}) })
+    if (sheetAsk.value === it.session + '#' + it.seq) sheetAsk.value = null
+    refresh()
+    return true
+  } catch (e) {
+    const n = new Set(sentAsk.value); n.delete(k); sentAsk.value = n   // 못 보냈으면 다시 누를 수 있게
+    toast('승인 답을 못 보냈다: ' + e.message); return false
+  }
+}
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+const KEY_OK = IS_MAC ? '⌘↵' : 'Ctrl+Enter', KEY_NO = IS_MAC ? '⇧⌘⌫' : 'Shift+Ctrl+Backspace'
+
+// 키보드: ⌘/Ctrl+Enter = 맨 앞 건 허용, ⇧⌘/Ctrl+Backspace = 거부. 글 칸에 쓰던 글이 있으면 그 칸의 일(보내기·지우기)이 먼저다
+document.addEventListener('keydown', e => {
+  if (e.repeat || e.defaultPrevented || !(e.metaKey || e.ctrlKey)) return
+  const ok = e.key === 'Enter' && !e.shiftKey, no = e.key === 'Backspace' && e.shiftKey
+  if (!ok && !no) return
+  const a = document.activeElement
+  if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT') && String(a.value || '').trim()) return
+  const it = (queue.value || []).find(x => !sentAsk.value.has(askKey(x)))
+  if (!it) return
+  e.preventDefault()
+  answer(it, ok ? 'y' : 'n')
+})
+
+// 늘 허용 꼴 고르기: 조각마다 꼴 하나(타자 없음) + 범위(이 세션만 / 이 프로젝트 늘)
+function Picker({ it, onDone }) {
+  const a = it.always
+  const need = a.pieces.filter(p => !p.allowed)
+  const [chosen, setChosen] = useState(() => need.map(p => p.options.length === 1 ? p.options[0].pattern : null))
+  const [scope, setScope] = useState('session')
+  const key = it.session + '-' + it.seq
+  return (
+    <div class="mt-2 border border-line rounded-lg p-2.5 bg-bg text-[13px] space-y-2">
+      {a.pieces.map((p, idx) => {
+        if (p.allowed) return <div key={idx} class="text-mute">조각 <code class="font-mono">{p.piece}</code> — 이미 허용됨</div>
+        const i = need.indexOf(p)
+        return (
+          <div key={idx}>
+            <div class="text-mute mb-1">조각: <code class="font-mono text-fg break-all">{p.piece}</code></div>
+            {p.options.map(o => (
+              <label key={o.pattern} class="flex items-start gap-2 py-0.5 cursor-pointer">
+                <input type="radio" name={key + '-' + i} checked={chosen[i] === o.pattern} class="mt-1"
+                  onChange={() => setChosen(c => c.map((x, j) => j === i ? o.pattern : x))} />
+                <span><span class="text-mute">{KIND[o.kind] || o.kind}:</span> <code class="font-mono break-all">{o.pattern.length > 160 ? o.pattern.slice(0, 160) + '…' : o.pattern}</code>
+                  {o.warn && <span class={'block ' + (o.broad ? 'text-bad' : 'text-warn')}>⚠ {o.warn}</span>}</span>
+              </label>
+            ))}
+          </div>
+        )
+      })}
+      <div class="flex gap-4 flex-wrap">
+        <label class="flex items-center gap-1.5"><input type="radio" name={key + '-scope'} checked={scope === 'session'} onChange={() => setScope('session')} />이 세션만(허브를 끄면 사라짐)</label>
+        <label class="flex items-center gap-1.5"><input type="radio" name={key + '-scope'} checked={scope === 'project'} onChange={() => setScope('project')} />이 프로젝트 늘</label>
+      </div>
+      <button class="btn btn-ok" disabled={chosen.some(c => !c)} onClick={() => answer(it, 'y', { always: chosen, scope }).then(ok => ok && onDone())}>늘 허용하고 지금 실행</button>
+    </div>
+  )
+}
+
+function SayBox({ it }) {
+  const [v, setV] = useState('')
+  return (
+    <div class="flex gap-2 mt-2">
+      <input class="field" placeholder="모델에 전할 말(이번 건은 거부로 처리)" value={v} onInput={e => setV(e.currentTarget.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && v.trim()) answer(it, v.trim()) }} autoFocus />
+      <button class="btn" disabled={!v.trim()} onClick={() => answer(it, v.trim())}>보내기</button>
+    </div>
+  )
+}
+
+function AskCard({ it, full }) {
+  const [mode, setMode] = useState(null)   // null · pick · say
+  const s = it.args_summary || {}
+  const canAlways = it.kind === 'confirm' && s.tool === 'run_shell' && it.always
+  const text = what(it)
+  const key = it.session + '#' + it.seq
+  const sent = sentAsk.value.has(key)
+  const first = (queue.value || []).find(x => !sentAsk.value.has(askKey(x))) === it   // 키보드가 고르는 건
+  return (
+    <div class="border-[1.5px] border-warn bg-panel rounded-[14px] px-3 py-2.5 shadow-card">
+      <div class="flex gap-2 items-center text-[13px] font-semibold text-warn">
+        <span>⚠ 승인 기다림 · {it.session} #{it.seq}{s.tool ? ' · ' + s.tool : ''}</span>
+        {it.created && <span class="ml-auto text-xs font-normal text-mute">{String(it.created).slice(11, 19)}</span>}
+      </div>
+      {it.prompt && it.prompt !== text && (full || !s.command) && <div class="text-[13px] mt-1 whitespace-pre-wrap">{it.prompt}</div>}
+      {/* 긴 명령은 띠 안에서 스크롤(대화가 가려지지 않게 높이 상한). 폰은 두 줄만, 누르면 전문 */}
+      <pre class={'font-mono text-[12.5px] leading-normal my-2 bg-code rounded-lg px-2.5 py-2 whitespace-pre-wrap break-all overflow-auto ' +
+        (full ? 'max-h-[50vh]' : 'max-h-36 max-md:max-h-[3.4em] max-md:overflow-hidden max-md:cursor-pointer')}
+        onClick={() => { if (!full && window.matchMedia('(max-width: 767px)').matches) sheetAsk.value = key }}>{s.command ? text : text}</pre>
+      {full && s.diff && <pre class="font-mono text-xs bg-code rounded-lg px-2.5 py-2 max-h-[40vh] overflow-auto">{s.diff.map((l, i) => <span key={i} class={'block ' + (l.startsWith('+') ? 'dl-add' : l.startsWith('-') ? 'dl-del' : '')}>{l}</span>)}</pre>}
+      {!full && s.diff && <div class="text-xs text-mute -mt-1 mb-2">diff {s.diff.length}줄 — <button class="underline" onClick={() => { sheetAsk.value = key }}>전문 보기</button></div>}
+      <div class="flex gap-1.5 flex-wrap items-center">
+        <button class="btn btn-ok max-md:flex-1 max-md:py-2.5" disabled={sent} onClick={() => answer(it, 'y')}
+          title={first ? KEY_OK : ''}>{sent ? '보냄…' : '허용'}{first && !sent && <kbd class="kbd max-md:hidden">{KEY_OK}</kbd>}</button>
+        <button class="btn max-md:flex-1 max-md:py-2.5" disabled={sent} onClick={() => answer(it, 'n')}
+          title={first ? KEY_NO : ''}>거부{first && !sent && <kbd class="kbd max-md:hidden">{KEY_NO}</kbd>}</button>
+        {canAlways && <button class={'btn btn-ghost ' + (full ? '' : 'max-md:hidden')} disabled={!it.always.ok} title={it.always.ok ? '' : it.always.reason}
+          onClick={() => setMode(mode === 'pick' ? null : 'pick')}>늘 허용 {mode === 'pick' ? '▴' : '▾'}</button>}
+        <button class={'btn btn-ghost ' + (full ? '' : 'max-md:hidden')} onClick={() => setMode(mode === 'say' ? null : 'say')}>말 전하기</button>
+        {!full && <button class="btn md:hidden max-md:py-2.5" onClick={() => { sheetAsk.value = key }} aria-label="더 보기">⋯</button>}
+      </div>
+      {canAlways && !it.always.ok && (full || mode) && <div class="text-xs text-mute mt-1.5">늘 허용 안 됨: {it.always.reason}</div>}
+      {mode === 'pick' && canAlways && it.always.ok && <Picker it={it} onDone={() => setMode(null)} />}
+      {mode === 'say' && <SayBox it={it} />}
+    </div>
+  )
+}
+
+// 한 건을 그리다 깨져도 그 건은 최소 칸(명령 글 + 허용·거부)으로 남는다(U2-8: 승인 칸이 안 보이던 일)
+class CardGuard extends Component {
+  state = { err: null }
+  componentDidCatch(err) { this.setState({ err }) }
+  render() {
+    const it = this.props.it
+    if (!this.state.err) return this.props.children
+    let t = ''
+    try { t = what(it) } catch (e) { t = String(it.prompt || '') }
+    return (
+      <div class="border-[1.5px] border-warn bg-panel rounded-[14px] px-3 py-2.5">
+        <div class="text-[13px] font-semibold text-warn">⚠ 승인 기다림 · {String(it.session)} #{String(it.seq)} (칸을 다 그리지 못했다: {String(this.state.err.message || this.state.err)})</div>
+        <pre class="font-mono text-[12.5px] my-2 bg-code rounded-lg px-2.5 py-2 whitespace-pre-wrap break-all max-h-36 overflow-auto">{String(t)}</pre>
+        <div class="flex gap-1.5"><button class="btn btn-ok" onClick={() => answer(it, 'y')}>허용</button><button class="btn" onClick={() => answer(it, 'n')}>거부</button></div>
+      </div>
+    )
+  }
+}
+
+export function Approvals() {
+  const q = queue.value
+  if (!q.length) return null
+  return (
+    <div class="max-h-[42vh] max-md:max-h-[46vh] overflow-auto scroll-thin space-y-2 mb-2.5 rounded-[14px]">
+      {q.map(it => <CardGuard key={it.session + '#' + it.seq} it={it}><AskCard it={it} /></CardGuard>)}
+    </div>
+  )
+}
+
+export function AskSheet() {
+  const k = sheetAsk.value
+  const it = k && queue.value.find(x => x.session + '#' + x.seq === k)
+  if (!it) return null
+  return (
+    <div class="fixed inset-0 z-40 bg-black/45 flex items-end" onClick={e => { if (e.target === e.currentTarget) sheetAsk.value = null }}>
+      <div class="w-full bg-bg rounded-t-2xl p-3 safe-b max-h-[92vh] overflow-auto">
+        <div class="flex items-center mb-2"><span class="font-semibold">승인 전문</span><button class="btn btn-ghost ml-auto" onClick={() => { sheetAsk.value = null }}>닫기 ✕</button></div>
+        <AskCard it={it} full />
+      </div>
+    </div>
+  )
+}
+
+// ── 입력 칸 ──
+const HIST_KEY = 'stewart-hist', HIST_MAX = 100
+const IMG_MAX = 4
+
+export function Composer({ target }) {
+  // target: 'main' 또는 작업자 이름(작업자에게는 지시·긴급)
+  const ta = useRef(null)
+  const [text, setText] = useState(() => store.get('stewart-draft-' + target, ''))
+  const [imgs, setImgs] = useState([])
+  const [sug, setSug] = useState({ items: [], on: -1, range: null })
+  const [sending, setSending] = useState(false)
+  const [failed, setFailed] = useState(null)
+  const hist = useRef({ pos: null, draft: '' })
+  const cmdCache = useRef(null)
+  const timer = useRef(null)
+  const st = hub.value
+  const isMain = target === 'main'
+  const vision = isMain && !!st?.vision
+  const main = sessions.value.find(s => s.role === 'main')
+
+  useEffect(() => { setText(store.get('stewart-draft-' + target, '')); setFailed(null) }, [target])
+  useEffect(() => { store.set('stewart-draft-' + target, text) }, [text, target])
+  useEffect(() => {   // 높이를 글에 맞춘다(최대 40% 화면)
+    const t = ta.current; if (!t) return
+    t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + 'px'
+  }, [text])
+
+  const hideSug = () => setSug({ items: [], on: -1, range: null })
+  async function suggest() {
+    const t = ta.current; if (!t) return
+    const v = t.value, caret = t.selectionStart, before = v.slice(0, caret)
+    const m = before.match(/(^|\s)@([^\s@]*)$/)
+    try {
+      if (m && isMain) {
+        const q = m[2]
+        const r = await get('/api/files?q=' + encodeURIComponent(q))
+        if (t.selectionStart !== caret) return
+        return setSug({ items: (r.files || []).map(f => ({ label: '@' + f, insert: '@' + f + ' ' })), on: 0, range: [caret - q.length - 1, caret] })
+      }
+      if (/^\/[^\s]*$/.test(before) && isMain) {
+        if (!cmdCache.current) cmdCache.current = (await get('/api/commands')).commands || []
+        const q = before.toLowerCase()
+        return setSug({ items: cmdCache.current.filter(c => c.name.toLowerCase().startsWith(q)).map(c => ({ label: c.name, hint: c.description || '', insert: c.name + ' ' })), on: 0, range: [0, caret] })
+      }
+    } catch (e) { /* 고르기는 없어도 된다 */ }
+    hideSug()
+  }
+  function pick(i) {
+    const it = sug.items[i]; if (!it) return
+    const [a, b] = sug.range
+    const v = text.slice(0, a) + it.insert + text.slice(b)
+    setText(v); hideSug()
+    requestAnimationFrame(() => { const t = ta.current; const p = a + it.insert.length; t.focus(); t.setSelectionRange(p, p) })
+  }
+  function addFiles(files) {
+    if (!vision) return
+    for (const f of files) {
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) continue
+      const rd = new FileReader()
+      rd.onload = () => setImgs(xs => xs.length >= IMG_MAX ? xs : [...xs, { name: f.name || 'paste.png', size: f.size, data: String(rd.result).split(',')[1] }])
+      rd.readAsDataURL(f)
+    }
+  }
+  async function send(kind) {
+    const v = text.trim()
+    if ((!v && !imgs.length) || sending) return
+    if (v) { const h = store.get(HIST_KEY, []).filter(x => x !== v); h.push(v); store.set(HIST_KEY, h.slice(-HIST_MAX)) }
+    hist.current.pos = null; hideSug(); setSending(true); setFailed(null)
+    try {
+      if (isMain) {
+        const body = { text: v }
+        if (imgs.length) body.images = imgs.map(x => ({ name: x.name, data: x.data }))
+        await post('/api/main', body)
+      } else {
+        await post('/api/session/send', { name: target, text: v, kind: kind || '지시' })
+      }
+      setText(''); setImgs([]); refresh()
+    } catch (e) {
+      setFailed(e)   // 글은 칸에 남긴다 → [다시 보내기]
+    } finally { setSending(false) }
+  }
+  async function stop() {
+    try {
+      if (isMain) await post('/api/main/stop', {})
+      else await post('/api/session/control', { name: target, action: 'pause' })
+      refresh()
+    } catch (e) { toast('멈춤을 못 보냈다: ' + e.message) }
+  }
+  function onKey(e) {
+    if (sug.items.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = sug.items.length; setSug(s => ({ ...s, on: (s.on + (e.key === 'ArrowDown' ? 1 : -1) + n) % n })); return }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.ctrlKey && !e.metaKey)) { e.preventDefault(); pick(sug.on); return }
+      if (e.key === 'Escape') { e.stopPropagation(); hideSug(); return }
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { if (!ta.current.value.trim() && queue.value.length) return; e.preventDefault(); send(); return }   // 빈 칸이면 승인 단축키로
+    const t = ta.current, oneLine = !t.value.includes('\n'), h = store.get(HIST_KEY, [])
+    if (e.key === 'ArrowUp' && (oneLine || t.selectionStart === 0) && h.length) {
+      if (hist.current.pos === null) { hist.current.draft = t.value; hist.current.pos = h.length }
+      if (hist.current.pos > 0) { e.preventDefault(); hist.current.pos -= 1; setText(h[hist.current.pos]) }
+    } else if (e.key === 'ArrowDown' && hist.current.pos !== null && (oneLine || t.selectionStart === t.value.length)) {
+      e.preventDefault(); hist.current.pos += 1
+      if (hist.current.pos >= h.length) { hist.current.pos = null; setText(hist.current.draft) } else setText(h[hist.current.pos])
+    }
+  }
+  const working = isMain ? busy.value : ['working', 'waiting_approval'].includes(sessions.value.find(s => s.name === target)?.status)
+  const stopping = isMain && st?.stopping
+  const pending = isMain ? (st?.pending || []) : []
+  return (
+    <div class="relative" onDragOver={e => { if (vision) e.preventDefault() }} onDrop={e => { if (vision) { e.preventDefault(); addFiles([...e.dataTransfer.files]) } }}>
+      {pending.length > 0 && <div class="text-xs text-mute mx-1 mb-1.5 truncate">대기 줄 {pending.length}: “{pending[pending.length - 1].slice(0, 80)}” — 이번 단계가 끝나면 메인이 받는다</div>}
+      {failed && (
+        <div class="flex items-center gap-2 text-[13px] text-bad mx-1 mb-1.5">
+          <span class="dot dot-bad" /><span class="min-w-0 truncate">못 보냈다: {failed.message}</span>
+          {failed.kind === 'token' ? <button class="btn ml-auto" onClick={() => location.reload()}>새로고침</button>
+            : failed.kind === 'login' ? <a class="btn ml-auto" href="/login">다시 들어가기</a>
+              : <button class="btn ml-auto" onClick={() => send()}>다시 보내기</button>}
+        </div>
+      )}
+      {sug.items.length > 0 && (
+        <div class="absolute bottom-full left-0 right-0 mb-2 bg-panel border border-line rounded-xl shadow-card max-h-64 overflow-auto z-20 text-[13.5px]">
+          {sug.items.slice(0, 50).map((it, i) => (
+            <div key={it.label} class={'px-3 py-1.5 cursor-pointer flex gap-2 ' + (i === sug.on ? 'bg-soft' : '')} onMouseDown={e => { e.preventDefault(); pick(i) }}>
+              <span class="font-mono truncate">{it.label}</span>{it.hint && <span class="text-mute truncate">{it.hint}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      <div class="border border-line bg-panel rounded-2xl pt-2.5 pb-2 pl-3.5 pr-2.5 shadow-card">
+        {imgs.length > 0 && <div class="flex gap-1.5 flex-wrap mb-1.5">{imgs.map((im, i) => (
+          <button key={i} class="chip" onClick={() => setImgs(xs => xs.filter((_, j) => j !== i))}>🖼 {im.name} ({Math.round(im.size / 1024)}KB) ✕</button>
+        ))}</div>}
+        <textarea ref={ta} rows={2} value={text} class="w-full resize-none bg-transparent outline-none text-[15px] leading-relaxed placeholder:text-mute"
+          placeholder={isMain ? '메인에게 할 말 — /명령 · @파일' + (vision ? ' · 이미지 붙여넣기' : '') + ' · ⌘/Ctrl+Enter 보내기' : `${target} 에게 직접 할 말(메인에게도 알림이 간다)`}
+          onInput={e => { setText(e.currentTarget.value); hist.current.pos = null; clearTimeout(timer.current); timer.current = setTimeout(suggest, 150) }}
+          onKeyDown={onKey} onBlur={() => setTimeout(hideSug, 150)}
+          onPaste={e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length && vision) { e.preventDefault(); addFiles(fs) } }} />
+        <div class="flex items-center gap-1.5 mt-1">
+          {vision && <label class="btn btn-ghost px-2.5" title="이미지 붙이기(붙여넣기·끌어다 놓기도 됨)">＋<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={e => { addFiles(e.currentTarget.files); e.currentTarget.value = '' }} /></label>}
+          {isMain && main?.mode && <span class="chip" title="메인 권한 모드">{main.mode}</span>}
+          <span class="flex-1" />
+          {working && isMain && <span class="chip max-md:hidden">Esc 멈춤</span>}
+          {!isMain && working && <button class="btn btn-ghost" disabled={!text.trim() || sending} onClick={() => send('긴급')} title="지금 일에 끼워 넣기">긴급</button>}
+          {(!working || !!text.trim() || imgs.length > 0) && <button class="btn btn-pri" disabled={sending || (!text.trim() && !imgs.length)} onClick={() => send()}>{sending ? '보내는 중…' : working && isMain ? '대기 줄에' : '보내기'}</button>}
+          {working && <button class="btn btn-stop" disabled={stopping} onClick={stop} title={isMain ? '메인의 지금 차례를 끊는다(Esc)' : '이 작업자를 잠시 멈춘다'}>{stopping ? '멈추는 중…' : '■ 멈춤'}</button>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Esc: 일하는 중이면 멈춤(고르기 판·시트가 열려 있으면 그것만 닫는다)
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return
+  if (sheetAsk.value) { sheetAsk.value = null; return }
+  const st = hub.value
+  if (view.value === 'main' && st?.busy && !st.stopping) post('/api/main/stop', {}).then(refresh).catch(err => toast('멈춤을 못 보냈다: ' + err.message))
+})

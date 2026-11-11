@@ -19,6 +19,7 @@ from .modes import READ_TOOLS
 
 WINDOW = 20                 # 최근 이만큼의 호출 안에서 센다
 NUDGE, STRONG, STOP = 3, 5, 6
+REFLECT_AT = 4            # chat: 같은 호출·같은 결과가 이만큼이면 사람에게 묻기 전에 되짚기(U2-8)
 EXEMPT = frozenset({"shell_output", "todo_read", "todo_write"})   # 기다리며 묻기·목록 갱신은 반복으로 치지 않는다
 READ_STREAK_NUDGE = (6, 12)  # 읽기만 한 단계가 이만큼 이어지면 알림(run)
 STEPS_LEFT_NUDGE = 5         # 남은 단계가 이만큼일 때 한 번 알림(run)
@@ -52,6 +53,7 @@ def changes_files(name: str, ok: bool) -> bool:
     return name not in READ_TOOLS and (ok or name == "run_shell")
 
 
+EARLY_NOTE = "[엔진] 바로 앞 같은 호출과 결과가 같다(이미 받은 결과다). 다시 부를 까닭이 없으면 위 결과로 다음 걸음을 가라."
 NOTE = ("[엔진] 같은 호출을 {n}번 했고(사이에 파일을 바꾼 다른 호출 없음) 결과도 같았다. 새로 알게 된 것이 없다. "
         "같은 호출을 되풀이하지 말고 다음 일(고치기, 다른 확인, 최종 보고)로 넘어가라.")
 STRONG_NOTE = ("[엔진] 같은 호출·같은 결과가 {n}번이다. 한 번 더 되풀이하면 엔진이 도구를 빼고 최종 보고를 받는다. "

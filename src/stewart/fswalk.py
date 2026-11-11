@@ -87,8 +87,12 @@ def _name_rx(globs: tuple) -> re.Pattern | None:
     return re.compile("(?:" + "|".join(_translate(g) for g in globs) + r")\Z", re.I)
 
 
-def is_secret(name: str, globs=SECRET_GLOBS, allow=SECRET_ALLOW) -> bool:
-    """파일 이름(경로의 마지막 조각)이 비밀 파일 목록에 맞는지."""
+def is_secret(name: str, globs=SECRET_GLOBS, allow=SECRET_ALLOW, win: bool | None = None) -> bool:
+    """파일 이름(경로의 마지막 조각)이 비밀 파일 목록에 맞는지.
+    Windows(win): 대체 스트림(:…)과 끝 점·공백을 뗀 이름(Windows 가 실제로 여는 이름)으로 본다 — '.env '·'.env::$DATA' 는 .env."""
+    from . import osdep
+    if osdep.IS_WIN if win is None else win:
+        name = osdep.win_norm_name(name)      # Windows 가 실제로 여는 이름 하나로 판정한다
     name = name.rsplit("/", 1)[-1]
     a = _name_rx(tuple(allow or ()))
     if a and a.match(name):

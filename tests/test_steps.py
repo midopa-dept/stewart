@@ -1,6 +1,7 @@
 """chat 차례당 단계 상한: 닿으면 묻는 모드는 계속할지 묻고, auto 는 끝내고 안내. 반복 실패 중단. /think 덮어쓰기."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -77,6 +78,8 @@ class TSteps(unittest.TestCase):
 
     def test_repeated_failure_stops_and_resets_per_turn(self):
         bad = lambda: _resp(calls=[("read_file", '{"path": "없음.py"}')])
+        os.environ["STEWART_REFLECT"] = "0"          # 되짚기 끔 = 옛 길(되짚기 켬은 test_reflect·test_u33)
+        self.addCleanup(os.environ.pop, "STEWART_REFLECT", None)
         s = self.sess(FakeUI(), mode="auto", steps=50)
         # 모두 실패면 연속 오류 한도(4)가 먼저 걸린다. 성공을 사이에 끼운 같은 실패 되풀이를 반복 감지가 잡는다
         seq = [x for _ in range(REPEAT_STOP) for x in (bad(), _read())][:-1]

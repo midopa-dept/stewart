@@ -122,7 +122,7 @@ def git_state(workdir: Path) -> str | None:
     """git status --porcelain(빌드 잡음 줄 빼고). git 저장소가 아니면 None."""
     try:
         p = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=str(workdir),
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if p.returncode != 0:

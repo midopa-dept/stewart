@@ -20,6 +20,7 @@ from pathlib import Path
 from . import nostore as NS
 
 from . import fswalk
+from . import components as CM
 
 MAX_OUT = 12000
 SHELL_HEAD, SHELL_TAIL = 4000, 8000   # 셸 출력은 앞+뒤를 남긴다(시험 실패 요약은 끝에 있다)
@@ -40,6 +41,8 @@ class ToolEnv:
     search_cache: dict = field(default_factory=dict)  # 정규화한 검색어 → 결과 글(같은 검색어는 다시 묻지 않고 횟수에도 안 넣는다)
     web_limit_hits: int = 0                          # 전체 상한에 닿은 뒤 들어온 web_search 수
     zero_queries: list = field(default_factory=list)  # 0건이었던 검색어(비슷한 검색어를 다시 묻지 않게)
+    vision: bool = False                             # 백엔드가 이미지를 받나(images.py) — view_image·read_file 의 이미지 한 줄
+    pending_images: list = field(default_factory=list)   # view_image 가 연 이미지 자리표(엔진이 다음 user 메시지에 붙이고 비운다)
     zero_streak: int = 0                             # 연속 0건 수(묻지 않고 돌려준 비슷한 검색어 포함)
     last_search_zero: bool = False                   # 마지막 검색이 0건이었다(그 뒤 plan_add 항목은 미확정으로)
     quota: dict | None = None                        # brave 이달 셈(/quota.json). 못 읽으면 None
@@ -52,9 +55,17 @@ class ToolEnv:
     todos: list = field(default_factory=list)       # [{content, status}] — todo_write 가 통째로 바꾼다
     secret_globs: tuple = fswalk.SECRET_GLOBS     # 비밀 파일 이름 패턴(프로필로 덮어씀). 도구는 읽지도 쓰지도 않는다
     secret_allow: tuple = fswalk.SECRET_ALLOW     # 패턴에 맞아도 허용하는 견본 파일(.env.example 등)
+    component_notes: list = field(default_factory=list)   # 도구 안 구성 요소 사건(엔진이 호출마다 가져간다)
 
     def is_secret(self, p: Path) -> bool:
-        return fswalk.is_secret(p.name, self.secret_globs, self.secret_allow)
+        if fswalk.is_secret(p.name, self.secret_globs, self.secret_allow):
+            return True
+        # 링크(POSIX 심볼릭 링크, Windows 정션·8.3 짧은 이름)로 부른 비밀 파일 — 실제 이름으로도 본다(WIN-3, WIN-4a 부터 POSIX 도)
+        try:
+            real = os.path.basename(os.path.realpath(p))
+        except (OSError, ValueError):
+            return False
+        return real != p.name and fswalk.is_secret(real, self.secret_globs, self.secret_allow)
 
 
 def secret_options(profile) -> dict:
@@ -68,6 +79,7 @@ def secret_options(profile) -> dict:
 def _clip(s: str, n: int = MAX_OUT) -> str:
     if len(s) <= n:
         return s
+    CM.note("output_clip", "max_chars", "clip", orig_chars=len(s), kept_chars=n, mode="head")
     return s[:n] + f"\n…(잘림: 전체 {len(s)}자 중 {n}자)"
 
 
@@ -77,6 +89,7 @@ def _clip_ht(env: ToolEnv, s: str) -> str:
         return s
     env.outputs.append(s)
     oid = len(env.outputs)
+    CM.note("output_clip", "max_chars", "clip", orig_chars=len(s), kept_chars=SHELL_HEAD + SHELL_TAIL, mode="head_tail")
     cut = len(s) - SHELL_HEAD - SHELL_TAIL
     return (s[:SHELL_HEAD] + f"\n…(가운데 {cut}자 생략: 전체 {len(s)}자. 전문은 shell_output(id='{oid}', offset=글자 위치)로 본다)…\n"
             + s[-SHELL_TAIL:])
@@ -100,6 +113,18 @@ def _secret_refusal(env: ToolEnv, p: Path, path: str) -> str | None:
     if env.is_secret(p):
         return (f"비밀 파일로 보호된다: {path} — 도구로 읽거나 쓰지 않는다. "
                 "내용이 꼭 필요하면 사용자에게 물어라(값을 대화에 옮기지 않는다).")
+    return None
+
+
+def _write_refusal(env: ToolEnv, p: Path, path: str, require_read: bool) -> str | None:
+    """쓰기 도구의 거부(비밀 파일·읽지 않은 덮어쓰기·읽은 뒤 바뀜). 거부면 구성 요소 사건을 남긴다."""
+    if (r := _secret_refusal(env, p, path)):
+        CM.note("write_denied", "secret", "block", reason="secret")
+        return r
+    if (r := _stale_refusal(env, p, path, require_read)):
+        why = "unread_overwrite" if _seen_key(p) not in env.seen else "stale"
+        CM.note("write_denied", why, "block", reason=why)
+        return r
     return None
 
 
@@ -142,6 +167,17 @@ def read_file(env: ToolEnv, path: str, offset: int = 1, limit: int = 400) -> tup
         return False, r
     if not p.is_file():
         return False, f"파일이 없다: {path}"
+    if env.vision:   # 이미지면 깨진 글 대신 형식·크기 한 줄(vision 백엔드에서만 — 실사용 기본 동작은 그대로)
+        from . import images as IMG
+        try:
+            with open(p, "rb") as fh:
+                head = fh.read(64 * 1024)
+        except OSError:
+            head = b""
+        mime = IMG.sniff(head)
+        if mime:
+            _mark_seen(env, p)
+            return True, f"이미지 파일: {path} ({IMG.describe(head, mime).rsplit(',', 1)[0]}, {p.stat().st_size} 바이트). 보려면 view_image(path='{path}')"
     lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     _mark_seen(env, p)
     if p.suffix.lower() == ".ipynb":
@@ -155,6 +191,27 @@ def read_file(env: ToolEnv, path: str, offset: int = 1, limit: int = 400) -> tup
     if offset - 1 + len(chunk) < len(lines):
         tail = f"\n…({len(lines)}줄 중 {offset}~{offset + len(chunk) - 1}줄. offset을 늘려 더 읽을 수 있다)"
     return True, _clip(body + tail) if body else "(빈 파일)"
+
+
+def view_image(env: ToolEnv, path: str) -> tuple[bool, str]:
+    """작업 폴더의 이미지를 모델이 본다(U2-5 B). 결과는 글이고, 엔진이 다음 user 메시지에 그 이미지를 붙인다."""
+    from . import images as IMG
+    if not env.vision:
+        return False, "이 백엔드는 이미지를 받지 않는다(backends 표 vision = false). read_file 의 형식·크기 줄로만 다룬다"
+    p = _p(env, path)
+    if (r := _secret_refusal(env, p, path)):
+        return False, r
+    if not p.is_file():
+        return False, f"파일이 없다: {path}"
+    try:
+        data = p.read_bytes()
+        mime = IMG.check(data, p.name)
+    except (OSError, IMG.ImageError) as e:
+        return False, f"이미지를 열지 못했다: {e}"
+    import tempfile
+    env.pending_images.append(IMG.store(env.artifacts_dir or Path(tempfile.gettempdir()) / "stewart-images", data, mime))
+    _mark_seen(env, p)
+    return True, f"이미지를 다음 메시지에 붙였다: {path} ({IMG.describe(data, mime)})"
 
 
 def list_dir(env: ToolEnv, path: str = ".", recursive: bool = False) -> tuple[bool, str]:
@@ -183,12 +240,21 @@ def list_dir(env: ToolEnv, path: str = ".", recursive: bool = False) -> tuple[bo
     return True, _clip("\n".join(x.removeprefix("./") for x in out) or "(빈 폴더)")
 
 
-def write_file(env: ToolEnv, path: str, content: str) -> tuple[bool, str]:
+def write_file(env: ToolEnv, path: str, content: str, append: bool = False) -> tuple[bool, str]:
+    """파일 전체를 새로 쓴다. append=true 면 끝에 이어 붙인다(긴 파일을 여러 응답에 나눠 쓰는 길, U2-3).
+    이미 있는 파일은 덮어쓰기·이어 쓰기 모두 이 세션에서 읽었거나 쓴 것이어야 한다."""
     p = _p(env, path)
-    if (r := _secret_refusal(env, p, path) or _stale_refusal(env, p, path, require_read=True)):
+    if (r := _write_refusal(env, p, path, require_read=True)):
         return False, r
+    add = append is True or str(append).lower() == "true"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
+    if add:
+        with open(p, "a", encoding="utf-8", newline="") as f:
+            f.write(content)
+        _mark_seen(env, p)
+        total = p.stat().st_size
+        return True, f"이어 썼다: {path} (+{len(content)}자, {content.count(chr(10))}줄 더함, 지금 {total} 바이트)"
+    p.write_text(content, encoding="utf-8", newline="")
     _mark_seen(env, p)
     return True, f"썼다: {path} ({len(content)}자, {content.count(chr(10)) + 1}줄)"
 
@@ -198,12 +264,14 @@ def _apply_edit(text: str, old: str, new: str, replace_all: bool = False) -> tup
     정확 일치 → 줄 번호 접두어 떼기 → 퍼지 매칭(imp/edit-fuzzy) 차례."""
     n = text.count(old) if old else 0
     note = ""
+    strategy = "exact"
     if old and n == 0:
         # 모델이 read_file 출력의 줄 번호 접두어("    3\t")까지 옮긴 경우 떼고 다시 찾는다
         o2, n2 = _strip_lineno(old), _strip_lineno(new)
         if o2 != old and text.count(o2):
             old, new, n = o2, n2, text.count(o2)
             note = "줄 번호 접두어를 떼고 적용"
+            strategy = "lineno_strip"
     if old and n == 0:
         fz = _fuzzy_edit(text, _strip_lineno(old), _strip_lineno(new))
         if isinstance(fz, tuple):
@@ -211,20 +279,25 @@ def _apply_edit(text: str, old: str, new: str, replace_all: bool = False) -> tup
         if fz:
             return False, fz, ""
     if not old or n == 0:
+        CM.note("edit_match", "not_found", "return_to_model", strategy="none", candidates=0)
         return False, "old 문자열을 찾지 못했다. read_file로 현재 내용을 확인하고 공백·들여쓰기까지 똑같이 써라.", ""
     if n > 1 and not replace_all:
+        CM.note("edit_match", "many", "return_to_model", strategy=strategy, candidates=n)
         return False, f"old 문자열이 {n}번 나온다. 앞뒤 줄을 더 넣어 하나로 좁히거나 replace_all=true.", ""
     out = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+    if strategy != "exact":
+        CM.note("edit_match", "inexact", "rewrite", strategy=strategy, candidates=n)
     return True, out, f"{n if replace_all else 1}곳" + (f", {note}" if note else "")
 
 
 def _edit_target(env: ToolEnv, path: str) -> tuple[Path | None, str]:
     p = _p(env, path)
-    if (r := _secret_refusal(env, p, path)):
-        return None, r
     if not p.is_file():
+        if (r := _secret_refusal(env, p, path)):
+            CM.note("write_denied", "secret", "block", reason="secret")
+            return None, r
         return None, f"파일이 없다: {path}"
-    if (r := _stale_refusal(env, p, path, require_read=False)):   # 읽기는 강제하지 않는다. 읽었으면 바뀜 검사
+    if (r := _write_refusal(env, p, path, require_read=False)):   # 읽기는 강제하지 않는다. 읽었으면 바뀜 검사
         return None, r
     return p, ""
 
@@ -236,7 +309,7 @@ def edit_file(env: ToolEnv, path: str, old: str, new: str, replace_all: bool = F
     ok, out, note = _apply_edit(p.read_text(encoding="utf-8"), old, new, replace_all)
     if not ok:
         return False, out
-    p.write_text(out, encoding="utf-8")
+    p.write_text(out, encoding="utf-8", newline="")
     _mark_seen(env, p)
     return True, f"고쳤다: {path} ({note})"
 
@@ -267,7 +340,7 @@ def multi_edit(env: ToolEnv, path: str, edits: list) -> tuple[bool, str]:
             return False, f"{i}번째 고치기 실패: {out} 아무것도 바꾸지 않았다(앞 {i - 1}개도 취소)."
         text = out
         notes.append(f"{i}: {note}")
-    p.write_text(text, encoding="utf-8")
+    p.write_text(text, encoding="utf-8", newline="")
     _mark_seen(env, p)
     return True, f"고쳤다: {path} — {len(edits)}개 모두 적용 ({'; '.join(notes)})"
 
@@ -275,6 +348,7 @@ def multi_edit(env: ToolEnv, path: str, edits: list) -> tuple[bool, str]:
 _LINENO = re.compile(r"^ *\d+\t", re.M)
 _FUZZY_STAGES = (("줄 끝 공백을 무시하고 맞춤", str.rstrip),
                  ("들여쓰기를 무시하고 맞춤, 새 줄 들여쓰기는 파일에 맞춤", str.strip))
+_FUZZY_CODES = {str.rstrip: "fuzzy_rstrip", str.strip: "fuzzy_strip"}
 
 
 def _indent(s: str) -> str:
@@ -298,8 +372,10 @@ def _fuzzy_edit(text: str, old: str, new: str):
         want = [norm(l) for l in olines]
         hits = [i for i in range(len(tlines) - k + 1) if [norm(l) for l in tlines[i:i + k]] == want]
         if len(hits) > 1:
+            CM.note("edit_match", "many", "return_to_model", strategy=_FUZZY_CODES[norm], candidates=len(hits))
             return f"old 문자열이 느슨하게 맞추면 {len(hits)}곳에 맞는다({label}). 앞뒤 줄을 더 넣어 하나로 좁혀라."
         if len(hits) == 1:
+            CM.note("edit_match", "inexact", "rewrite", strategy=_FUZZY_CODES[norm], candidates=1)
             i = hits[0]
             nlines = new.split("\n")
             while nlines and not nlines[-1].strip():
@@ -369,7 +445,7 @@ def _search_rg(env: ToolEnv, rg: str, rx_src: str, base: Path, glob: str | None,
     cmd += ["-e", rx_src, "--", _rel(env, base)]
     try:
         proc = subprocess.Popen(cmd, cwd=env.workdir, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                stdin=subprocess.DEVNULL, text=True, errors="replace")
+                                stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
     except OSError:
         return None
     timed_out: list[bool] = []
@@ -618,10 +694,11 @@ def notebook_edit(env: ToolEnv, path: str, cell: int, source: str = "", mode: st
     """노트북 칸 하나를 바꾸거나(replace) 그 앞에 넣거나(insert) 지운다(delete). 칸 번호는 read_file 이 보여 주는 1부터."""
     p = _p(env, path)
     if (r := _secret_refusal(env, p, path)):
+        CM.note("write_denied", "secret", "block", reason="secret")
         return False, r
     if p.suffix.lower() != ".ipynb" or not p.is_file():
         return False, f"노트북(.ipynb) 파일이 없다: {path}"
-    if (r := _stale_refusal(env, p, path, require_read=False)):
+    if (r := _write_refusal(env, p, path, require_read=False)):
         return False, r
     if mode not in ("replace", "insert", "delete"):
         return False, "mode 는 replace·insert·delete 중 하나"
@@ -661,7 +738,7 @@ def notebook_edit(env: ToolEnv, path: str, cell: int, source: str = "", mode: st
             c.pop("outputs", None)
             c.pop("execution_count", None)
         what = f"칸 {n}({c.get('cell_type')}) 바꿈"
-    p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", encoding="utf-8", newline="")
     _mark_seen(env, p)
     return True, f"고쳤다: {path} — {what}, 이제 칸 {len(cells)}개"
 
@@ -675,7 +752,11 @@ def _shell(env: ToolEnv):
 
 def run_shell(env: ToolEnv, command: str, timeout_s: float | None = None, background: bool = False) -> tuple[bool, str]:
     """실행마다 하나인 셸에서 돈다(cd·export 가 다음 호출에 남는다). background=true 면 따로 띄우고 작업 id 를 돌려준다."""
-    sh = _shell(env)
+    from .osdep import ShellNotFound
+    try:
+        sh = _shell(env)
+    except ShellNotFound as e:
+        return False, f"셸을 띄우지 못했다: {e}"
     if background:
         bid, info = sh.bg_start(command)
         if bid is None:
@@ -1152,9 +1233,11 @@ TOOLS = {
         "path": {"type": "string", "description": "기본 '.'"},
         "recursive": {"type": "boolean", "description": "하위 폴더까지"},
     }, []),
-    "write_file": (write_file, "파일 전체를 새로 쓴다. 이미 있는 파일은 read_file 로 먼저 읽어야 덮어쓸 수 있다.", {
+    "write_file": (write_file, "파일 전체를 새로 쓴다. 이미 있는 파일은 read_file 로 먼저 읽어야 덮어쓸 수 있다. "
+                   "한 응답의 생성 상한이 있으니 긴 파일(대략 200줄 넘게)은 앞부분을 쓴 뒤 append=true 로 이어 붙여 나눠 쓴다.", {
         "path": {"type": "string"},
-        "content": {"type": "string", "description": "파일 전체 내용"},
+        "content": {"type": "string", "description": "파일 전체 내용(append 면 끝에 붙일 내용)"},
+        "append": {"type": "boolean", "description": "true 면 덮어쓰지 않고 파일 끝에 이어 붙인다"},
     }, ["path", "content"]),
     "edit_file": (edit_file, "파일의 일부를 바꾼다. old는 파일에 정확히 한 번 나와야 한다.", {
         "path": {"type": "string"},
@@ -1193,6 +1276,9 @@ TOOLS = {
             "required": ["content", "status"]}},
     }, ["items"]),
     "todo_read": (todo_read, "지금 할 일 목록을 본다.", {}, []),
+    "view_image": (view_image, "작업 폴더의 이미지 파일(PNG·JPEG·WebP·GIF)을 본다. 이미지는 다음 메시지에 붙어 온다(이미지를 받는 백엔드만).", {
+        "path": {"type": "string"},
+    }, ["path"]),
     "notebook_edit": (notebook_edit, "주피터 노트북(.ipynb) 칸 하나를 바꾸거나(replace) 그 자리에 새 칸을 넣거나(insert) 지운다(delete). "
                       "칸 번호는 read_file 이 보여 주는 1부터. 바꾼 코드 칸의 옛 출력은 비운다.", {
         "path": {"type": "string"},
@@ -1255,7 +1341,8 @@ TOOLS = {
         "offset": {"type": "integer", "description": "시작 글자 위치(0부터)"},
         "max_chars": {"type": "integer", "description": f"볼 글자 수(최대 {FETCH_MAX_CHARS})"},
     }, ["url"]),
-    "run_shell": (run_shell, "bash 명령을 실행해 출력과 exit 코드를 돌려준다. 셸이 이어져 cd·export 가 다음 호출에 남는다.", {
+    "run_shell": (run_shell, "bash 명령을 실행해 출력과 exit 코드를 돌려준다. 셸이 이어져 cd·export 가 다음 호출에 남는다. "
+                  "여러 줄 코드는 write_file 로 파일을 쓴 뒤 실행한다(명령에 넣으려면 python3 - <<'EOF' … EOF).", {
         "command": {"type": "string"},
         "timeout_s": {"type": "number", "description": "초 단위 시간 제한(background 에는 없음)"},
         "background": {"type": "boolean", "description": "true 면 따로 띄우고 작업 id 를 바로 돌려준다(동시 4개까지)"},
@@ -1304,7 +1391,10 @@ def execute(env: ToolEnv, name: str, args: dict) -> tuple[bool, str]:
     unknown = [k for k in args if k not in props]
     if unknown:
         return False, f"모르는 인자: {unknown} (쓸 수 있는 것: {list(props)})"
+    tok = CM.NOTES.set(env.component_notes)   # 도구 안 구성 요소 사건을 이 실행의 목록에 모은다
     try:
         return fn(env, **args)
     except Exception as e:  # 도구 오류는 모델에 돌려준다
         return False, f"{type(e).__name__}: {e}"
+    finally:
+        CM.NOTES.reset(tok)

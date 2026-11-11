@@ -53,7 +53,7 @@ class Recorder:
                 f"- 최대 단계: {meta['max_steps']}, 연속 오류 한도: {meta['max_consecutive_errors']}\n")
         if meta.get("memory_files"):
             self.md("- 프로젝트 기억 파일: " + ", ".join(
-                f"`{m['path']}` {m['used']}/{m['chars']}자" + (" (잘림)" if m["truncated"] else "") for m in meta["memory_files"]) + "\n")
+                f"`{m['path']}` {m['used']}/{m['chars']}자" + (" (잘림)" if m["truncated"] else "") for m in meta["memory_files"] if "used" in m) + "\n")
         self.md(f"## 과제\n\n```\n{_short(task, 4000)}\n```\n")
 
     def md_step(self, step: int, s: dict) -> None:

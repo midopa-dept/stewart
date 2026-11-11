@@ -281,3 +281,51 @@ def run(subjects: list[str] | None, backend, runs_dir: Path | None, dry_run=Fals
         except RuntimeError as e:
             out.append({"subject": k, "status": str(e)})
     return out
+
+
+# ── 꿈꾸기 자동(판 54): 한가할 때·닫을 때, 새 메모가 N개 넘은 대상만, 모델 서버가 준비됐을 때만 ──
+AUTO_MIN_NOTES = int(os.environ.get("STEWART_DREAM_MIN_NOTES") or 5)
+AUTO_MAX_SUBJECTS = 3
+AUTO_IDLE_S = 600            # 마지막 차례 뒤 이만큼 한가하면
+AUTO_RETRY_S = 1800          # 한 번 해 본 뒤(했든 미뤘든) 다시 보기까지
+
+
+def auto_enabled(env=None) -> bool:
+    env = os.environ if env is None else env
+    return env.get("STEWART_DREAM_AUTO") != "0"
+
+
+def due(root: Path, min_notes: int = AUTO_MIN_NOTES) -> list[tuple[str, int]]:
+    """새 메모가 min_notes 개 이상인 대상 [(키, 새 메모 수)] — 많은 것부터. 모델은 부르지 않는다."""
+    out = []
+    for k in subjects_with_notes(root):
+        sdir = root / k
+        try:
+            state = json.loads((sdir / "dream-state.json").read_text()) if (sdir / "dream-state.json").is_file() else {}
+            n = len(new_notes(sdir, state)[0])
+        except (OSError, ValueError):
+            continue
+        if n >= min_notes:
+            out.append((k, n))
+    return sorted(out, key=lambda x: -x[1])
+
+
+def auto(root: Path, ask_model, runs_dir: Path | None, ready, min_notes: int = AUTO_MIN_NOTES,
+         max_subjects: int = AUTO_MAX_SUBJECTS) -> dict:
+    """ready() 가 참일 때만(모델 서버가 이미 켜져 준비됨 — 깨우려고 부르지 않는다) 대상마다 쪽·색인을 바로 고친다(--yes 와 같음,
+    바뀐 것은 dream-log 의 diff 로 남아 되돌릴 수 있다). 돌려줌: {status, results}."""
+    keys = [k for k, _ in due(root, min_notes)][:max_subjects]
+    if not keys:
+        return {"status": "할 것 없음", "results": []}
+    if not ready():
+        return {"status": "미룸(모델 서버가 준비되지 않음)", "results": [], "subjects": keys}
+    res = []
+    for k in keys:
+        if not ready():
+            res.append({"subject": k, "status": "미룸(모델 서버가 준비되지 않음)"})
+            continue
+        try:
+            res.append(dream_subject(root, k, ask_model, runs_dir, dry_run=False, yes=True))
+        except Exception as e:   # 모델 오류·잠금 — 다음 기회에
+            res.append({"subject": k, "status": f"못 함: {type(e).__name__}: {str(e)[:120]}"})
+    return {"status": "함", "results": res}
