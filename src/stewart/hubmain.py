@@ -744,7 +744,8 @@ class HubMain:
         """화면 문맥 막대·토큰 줄: 지난 단계 입력(= 지금 문맥), 창, 줄이기 선, 누계, 이번(마지막) 차례 몫."""
         st, comp = self.sess.st, self.sess.comp
         at = getattr(comp, "next_at", None)
-        out = {"last_prompt": st.get("last_prompt_tokens") or 0, "window": getattr(comp, "full_context", None) or self.sess.backend.max_context,
+        out = {"last_prompt": st.get("last_prompt_tokens") or 0, "window": getattr(comp, "full_context", None) or self.sess.backend.budget(),
+               "model_window": self.sess.backend.max_context, "estimated": bool(st.get("prompt_estimated")),
                "compact_at": round(at) if isinstance(at, (int, float)) and at != float("inf") else None,
                "prompt_total": st.get("prompt_tokens_total") or 0, "completion_total": st.get("completion_tokens") or 0,
                "steps": st.get("steps") or 0, "compactions": st.get("compactions") or 0, "summaries": st.get("summaries") or 0, "model_s": round(st.get("model_time_s") or 0, 1)}

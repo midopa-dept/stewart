@@ -31,14 +31,14 @@ function CtxBar() {
   const used = t.last_prompt || 0, pct = Math.min(100, Math.round(used / t.window * 100))
   const mark = t.compact_at ? Math.min(100, t.compact_at / t.window * 100) : null
   return (
-    <button class="ml-auto flex items-center gap-2 text-xs text-mute" title={`지금 문맥 ${used}토큰 / 창 ${t.window}` + (t.compact_at ? ` · ${Math.round(t.compact_at)}에서 오래된 도구 결과를 줄인다` : '')}
+    <button class="ml-auto flex-none flex items-center gap-2 text-xs text-mute" title={`지금 문맥 ${t.estimated ? '약 ' : ''}${used}토큰 / 창 ${t.window}` + (t.model_window && t.model_window !== t.window ? `(모델 창 ${t.model_window} 가운데 실사용 몫)` : '') + (t.compact_at ? ` · ${Math.round(t.compact_at)}에서 오래된 도구 결과를 줄인다` : '')}
       onClick={() => setPanel(panel.value === 'tokens' ? null : 'tokens')}>
-      <span class="max-md:hidden">문맥 {fmtK(used)} / {fmtK(t.window)}</span>
+      <span class="max-md:hidden">문맥 {t.estimated ? '약 ' : ''}{fmtK(used)} / {fmtK(t.window)}</span>
       <span class="relative w-36 max-md:w-16 h-1.5 rounded-full bg-line overflow-hidden">
         <i class="absolute inset-y-0 left-0 rounded-full" style={`width:${pct}%;background:${pct > 85 ? 'var(--c-bad)' : 'var(--c-accent)'}`} />
         {mark != null && <b class="absolute -inset-y-0.5 w-0.5 bg-warn" style={`left:${mark}%`} />}
       </span>
-      <span>{pct}%</span>
+      <span>{t.estimated ? '~' : ''}{pct}%</span>
     </button>
   )
 }
@@ -119,22 +119,25 @@ function Center() {
   return (
     <main class="flex flex-col min-w-0 h-full relative">
       {st?.hub_color && <div class="h-1.5 w-full flex-none" style={`background:${safeColor(st.hub_color)}`} title={st.hub_label || ''} />}
-      <div class="flex items-center gap-2.5 px-5 max-md:px-3 py-2.5 border-b border-line bg-bg/85 backdrop-blur">
+      <div class="border-b border-line bg-bg/85 backdrop-blur">
+      <div class="flex items-center gap-2.5 px-5 max-md:px-3 pt-2.5 pb-1.5">
         <button class="btn btn-ghost !px-2 md:hidden" onClick={() => { drawer.value = true }} aria-label="세션 서랍">☰</button>
         <button class="btn btn-ghost !px-2 max-md:hidden" onClick={toggleSide} title="사이드바 접기·펴기">☰</button>
         {st?.hub_label && <span class="chip font-semibold flex-none" style={st.hub_color ? `border-color:${safeColor(st.hub_color)}` : ''}>{st.hub_label}</span>}
-        <span class="font-[650] truncate">{title}</span>
-        {isMain && main?.workdir && <span class="chip max-lg:hidden truncate max-w-64" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span>}
-        <span class="max-md:hidden flex gap-1.5"><ConnDot /><ModelDot /><ExternalChip /></span>
-        <span class="md:hidden"><ExternalChip /></span>
-        <span class="md:hidden flex gap-1"><ConnDot withText={false} /><ModelDot withText={false} /></span>
+        <span class="font-[650] truncate min-w-[2.5rem]">{title}</span>
         {!isMain && <WorkerControls name={v} />}
         {isMain ? <CtxBar /> : <span class="ml-auto" />}
         {isMain && <NewMain />}
         {isMain && <button class="btn btn-ghost !px-2.5 text-xs flex-none max-md:hidden" disabled={st?.busy} onClick={forkChat} title="지금 대화를 복사해 새 대화로(이후 서로 독립)">갈래</button>}
         {conv && v !== 'main' && <button class="btn btn-ghost !px-2.5 text-xs flex-none" onClick={() => closeChat(v)} title="이 대화 닫기(기록은 남는다)">닫기</button>}
         <button class={'btn btn-ghost !px-2.5 ' + (hub.value?.tokens?.window ? '' : 'ml-auto')} onClick={() => setPanel(panel.value ? null : (isMain ? 'steps' : 'session'))}
-          title="작업 내역 패널">{panel.value ? '내역 ▸' : '◂ 내역'}</button>
+          title="작업 내역 패널">{panel.value ? <>내역<span class="max-md:hidden"> ▸</span></> : <><span class="max-md:hidden">◂ </span>내역</>}</button>
+      </div>
+      {/* 둘째 줄: 상태 칩(넘쳐도 첫 줄의 문맥 막대·단추를 밀지 않게 따로, 가로로 넘기면 옆으로 민다) */}
+      <div class="flex items-center gap-1.5 px-5 max-md:px-3 pb-2 overflow-x-auto scroll-thin whitespace-nowrap text-xs">
+        {isMain && main?.workdir && <span class="chip truncate max-w-64 flex-none" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span>}
+        <ConnDot /><ModelDot /><ExternalChip />
+      </div>
       </div>
       <div class="flex-1 overflow-auto scroll-thin" ref={ref} onScroll={onScroll}>
         <div class="max-w-[820px] mx-auto px-6 max-md:px-3.5 pt-6 pb-10 [overflow-wrap:anywhere]">

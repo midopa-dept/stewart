@@ -25,6 +25,7 @@ base_url = "https://api.exaone.ai/v1"
 model = "k-exaone_v2.5"
 precision = "api"
 max_context = 524288          # 입력 + max_tokens 가 넘으면 400
+context_budget = 131072      # 실사용 문맥 몫 — 창이 커도 이 값을 창으로 보고 압축(길수록 느리고·흐려지고·유료 뒤엔 비싸다)
 timeout_s = 600
 concurrency = 2
 api_key_env = "EXAONE_API_KEY"

@@ -174,10 +174,11 @@ class TLoginKept(MainBase):
         self.assertIn("Max-Age=", cookie)
         ck = cookie.split(";")[0]
         self.assertEqual((sd / "web-sessions.json").stat().st_mode & 0o777, 0o600)
-        w2 = self.serve(make_token(sd, reuse=True), sd)                    # 허브를 다시 켬
-        self.assertEqual(self.req(w2, "GET", "/api/state", headers={"Cookie": ck}).status, 200)
+        val = ck.split("=", 1)[1]
+        w2 = self.serve(make_token(sd, reuse=True), sd)                    # 허브를 다시 켬(실제로는 같은 포트 — 쿠키 이름이 포트별이라 그 이름으로)
+        self.assertEqual(self.req(w2, "GET", "/api/state", headers={"Cookie": f"{w2.cookie}={val}"}).status, 200)
         w3 = self.serve(make_token(sd), sd)                                # --new-token: 예전 로그인 끝
-        self.assertEqual(self.req(w3, "GET", "/api/state", headers={"Cookie": ck}).status, 401)
+        self.assertEqual(self.req(w3, "GET", "/api/state", headers={"Cookie": f"{w3.cookie}={val}"}).status, 401)
 
 
 if __name__ == "__main__":

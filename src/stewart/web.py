@@ -23,13 +23,18 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlsplit, parse_qs, urlparse
 
 COOKIE = "stewart_hub"
 IMAGES_MAX = 4   # 한 번에 붙이는 이미지 장수
 BODY_MAX = 64 * 1024
 
 
+LOST_MSG = {   # 로그인 화면에 보이는 "왜 다시 로그인하나"
+    "token": "<p>허브의 로그인 토큰이 새로 만들어져(--new-token) 예전 로그인이 끝났다. 새 토큰: <code>stewart hub url</code></p>",
+    "new_state": "<p>허브가 처음 보는 상태 폴더로 켜졌다(다른 폴더에서 켰거나 --state-dir 이 바뀜) — 그 폴더의 토큰으로 들어간다: <code>stewart hub url</code></p>",
+    "unknown": "<p>이 브라우저의 로그인을 이 허브가 모른다(만료되었거나 다른 허브의 로그인). 토큰: <code>stewart hub url</code></p>",
+}
 SESSION_DAYS = 30   # 한 번 로그인하면 브라우저가 이만큼 기억한다(허브를 다시 켜도). 끊으려면 --new-token
 
 
@@ -139,6 +144,7 @@ class WebApp:
         self._exp: dict[str, float] = {}      # 쿠키 값 → 끝나는 때(epoch)
         # state_dir 가 있으면 로그인을 파일(0600)에 남겨 허브를 다시 켜도 그대로 들어간다(토큰이 바뀌면 버린다)
         self._sess_file = Path(state_dir) / "web-sessions.json" if state_dir else None
+        self.lost_reason = "" if (self._sess_file and self._sess_file.is_file()) or not state_dir else "new_state"   # 처음 보는 상태 폴더
         self._load_sessions()
         self._conv: dict[str, dict] = {}     # 기록 파일 → 읽은 자리·대화 줄(세션 대화 보기)
         self._conv_lock = threading.Lock()
@@ -170,6 +176,7 @@ class WebApp:
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
+        self.cookie = f"{COOKIE}_{self.port}"   # 쿠키는 포트를 가리지 않는다 — 같은 브라우저의 두 허브(8765·8766)가 서로 덮지 않게
         self.allowed_hosts = {f"127.0.0.1:{self.port}", f"localhost:{self.port}", f"[::1]:{self.port}", *self.extra_hosts}
         if host not in LOOPBACK:   # 계정 모드의 정한 주소(사무실 망 주소 등)
             self.allowed_hosts.add(f"[{host}]:{self.port}" if ":" in host else f"{host}:{self.port}")
@@ -217,9 +224,13 @@ class WebApp:
     def _cookie(self, h) -> str | None:
         for part in (h.headers.get("Cookie") or "").split(";"):
             k, _, v = part.strip().partition("=")
-            if k == COOKIE and self.accounts is not None:
-                return v
-            if k == COOKIE and v in self.sessions:
+            if k not in (self.cookie, COOKIE):   # 옛 이름(포트 없는)도 읽어, 올린 뒤 한 번은 다시 로그인하지 않게
+                continue
+            if self.accounts is not None:   # 계정 모드는 이 포트 이름만(옛 이름은 다른 허브 것일 수 있다)
+                if k == self.cookie:
+                    return v
+                continue
+            if v in self.sessions:
                 if self._exp.get(v, float("inf")) < time.time():
                     self.sessions.pop(v, None)
                     self._exp.pop(v, None)
@@ -239,6 +250,7 @@ class WebApp:
         except (OSError, ValueError):
             return
         if d.get("token") != self._tok_id():      # 토큰을 바꿨으면(--new-token) 예전 로그인은 모두 끝
+            self.lost_reason = "token"
             return
         now = time.time()
         for sid, x in (d.get("sessions") or {}).items():
@@ -258,6 +270,14 @@ class WebApp:
         os.chmod(tmp, 0o600)
         from . import osdep
         osdep.replace_retry(tmp, self._sess_file)
+
+    def _stale_cookie(self, h) -> str:
+        """이 브라우저가 로그인 쿠키를 들고 왔는데 이 허브가 모르는 까닭: token(토큰을 새로 만듦) · new_state(다른 상태 폴더로 켜짐)
+        · unknown(그 밖 — 다른 허브의 쿠키 등). 쿠키가 없으면 ""."""
+        names = {p.strip().partition("=")[0] for p in (h.headers.get("Cookie") or "").split(";")}
+        if not names & {self.cookie, COOKIE}:
+            return ""
+        return self.lost_reason or "unknown"
 
     def _who(self, h) -> tuple[str | None, str | None, str]:
         """(쿠키 값, CSRF 값, 사용자 이름) — 로그인 안 됐으면 (None, None, ""). 계정 모드면 그 사람의 메인·허브를 이 요청에 건다."""
@@ -293,8 +313,15 @@ class WebApp:
         self._tl.main = self._tl.hub = None
         sid, csrf, user = self._who(h)
         if sid is None:
+            stale = self._stale_cookie(h)
+            if stale and self._hub0 is not None and not getattr(self, "_lost_logged", False):
+                self._lost_logged = True
+                try:
+                    self._hub0.event("login_lost", reason=stale, path=path)
+                except Exception:
+                    pass
             if method == "GET" and path == "/":
-                return self._send(h, 303, b"", headers={"Location": "/login"})
+                return self._send(h, 303, b"", headers={"Location": "/login" + (f"?why={stale}" if stale else "")})
             return self._json(h, 401, {"error": "login"})
         if method == "POST":
             if not hmac.compare_digest(h.headers.get("X-Stewart-Token") or "", csrf):
@@ -304,7 +331,7 @@ class WebApp:
                     self.accounts.logout(sid)
                 else:
                     self.sessions.pop(sid, None)
-                return self._json(h, 200, {"ok": True}, headers={"Set-Cookie": f"{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
+                return self._json(h, 200, {"ok": True}, headers={"Set-Cookie": f"{self.cookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
             from .images import max_bytes
             # 메인에게 보내는 글에는 이미지가 붙을 수 있다(base64 는 4/3 배, 장수 IMAGES_MAX)
             body = self._body(h, BODY_MAX + IMAGES_MAX * (max_bytes() * 4 // 3 + 1024) if path == "/api/main" else BODY_MAX)
@@ -486,7 +513,8 @@ class WebApp:
         if self.accounts is not None:
             return self.login_accounts(h, method)
         if method == "GET":
-            return self._send(h, 200, LOGIN.replace("{msg}", ""), "text/html; charset=utf-8")
+            why = (parse_qs(urlsplit(h.path).query).get("why") or [""])[0]
+            return self._send(h, 200, LOGIN.replace("{msg}", LOST_MSG.get(why, "")), "text/html; charset=utf-8")
         body = self._body(h) or b""
         tok = (parse_qs(body.decode("utf-8", "replace")).get("token") or [""])[0].strip()
         if not hmac.compare_digest(tok, self.token):
@@ -502,7 +530,7 @@ class WebApp:
             except OSError:
                 pass
         return self._send(h, 303, b"", headers={"Location": "/",
-                                                 "Set-Cookie": f"{COOKIE}={sid}; HttpOnly; SameSite=Strict; Path=/"
+                                                 "Set-Cookie": f"{self.cookie}={sid}; HttpOnly; SameSite=Strict; Path=/"
                                                  + (f"; Max-Age={age}" if age else "")})
 
     def login_accounts(self, h, method: str) -> None:
@@ -520,7 +548,7 @@ class WebApp:
             return self._send(h, 403, LOGIN_ACCOUNTS.replace("{msg}", "<p>이름이나 비밀번호가 맞지 않습니다.</p>"),
                               "text/html; charset=utf-8")
         return self._send(h, 303, b"", headers={"Location": "/",
-                                                 "Set-Cookie": f"{COOKIE}={sid}; HttpOnly; SameSite=Strict; Path=/"})
+                                                 "Set-Cookie": f"{self.cookie}={sid}; HttpOnly; SameSite=Strict; Path=/"})
 
     def answer_handler(self, h, data: dict) -> None:
         """대기열 답: 사람이 화면에서 고른 y / n / 모델에 할 말. Hub.answer 를 부르는 유일한 자리."""

@@ -226,8 +226,9 @@ export function ExternalChip() {
   if (!ext) return null
   const u = b.used || {}
   const k = n => n >= 1000000 ? (n / 1000000).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n || 0)
-  return <span class="chip !text-warn" title={`이 대화의 글·파일 내용·도구 결과가 ${ext} 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)\n이 허브가 켜진 뒤 누계: 호출 ${u.calls || 0}번 · 입력 ${u.prompt || 0} · 출력 ${u.completion || 0} 토큰` + (u.cost_usd ? ` · $${u.cost_usd}` : '')}>
-    바깥 API: {ext}<span class="max-md:hidden"> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span></span>
+  const short = ext.replace(/\(.*\)/, '').trim()
+  return <span class="chip !text-warn flex-none" title={`바깥 API: ${ext} — 이 대화의 글·파일 내용·도구 결과가 그 회사 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)\n이 허브가 켜진 뒤 누계: 호출 ${u.calls || 0}번 · 입력 ${u.prompt || 0} · 출력 ${u.completion || 0} 토큰` + (u.cost_usd ? ` · $${u.cost_usd}` : '')}>
+    <span class="max-md:hidden">바깥 API: </span>{short}<span> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span></span>
 }
 
 export function Sidebar() {

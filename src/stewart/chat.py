@@ -809,7 +809,7 @@ class ChatSession:
         from .compact import settings as compact_settings
         c = compact_settings(p, COMPACT_RATIO, KEEP_RECENT)        # 프로필 + STEWART_COMPACT_*
         from .compact import reply_reserve
-        return Compactor(self.backend.max_context, c["ratio"], c["keep_recent"], CLIP_OLD, start=1, fold=c["fold"],
+        return Compactor(self.backend.budget(), c["ratio"], c["keep_recent"], CLIP_OLD, start=1, fold=c["fold"],
                          reserve=reply_reserve(p, self.backend), tail_tokens=True)
 
     def _close_open_calls(self, reason: str) -> None:
@@ -1070,7 +1070,15 @@ class ChatSession:
                 self.st["prompt_tokens_total"] += usage.get("prompt_tokens") or 0
                 if usage.get("cost_usd"):   # Messages API 백엔드(판 69)·가격표를 단 OpenAI 호환 API
                     self.st["cost_usd"] = round(self.st.get("cost_usd", 0.0) + float(usage["cost_usd"]), 6)
-                self.st["last_prompt_tokens"] = usage.get("prompt_tokens") or self.st["last_prompt_tokens"]
+                if usage.get("prompt_tokens"):
+                    self.st["last_prompt_tokens"], self.st["prompt_estimated"] = usage["prompt_tokens"], False
+                else:   # usage 를 안 주는 API: 보낸 메시지 글자 수로 어림(화면에 "약")
+                    from .compact import est_tokens
+                    try:
+                        self.st["last_prompt_tokens"] = est_tokens(json.dumps(self._clean(), ensure_ascii=False))
+                        self.st["prompt_estimated"] = True
+                    except (TypeError, ValueError):
+                        pass
                 done = self.comp.observe(usage.get("prompt_tokens"))
                 if done:
                     self.rec.event("compact_effect", step=step, before_tokens=done["before_tokens"], after_tokens=done["after_tokens"])

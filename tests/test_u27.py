@@ -157,7 +157,7 @@ class TAccountsWeb(MainBase):
         c = http.client.HTTPConnection("127.0.0.1", self.web.port, timeout=10)
         h = {"Host": self.host, "Origin": f"http://{self.host}"}
         if cookie:
-            h["Cookie"] = f"stewart_hub={cookie}"
+            h["Cookie"] = f"{self.web.cookie}={cookie}"
         if csrf:
             h["X-Stewart-Token"] = csrf
         data = None

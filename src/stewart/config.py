@@ -60,6 +60,13 @@ class Backend:
     price: dict = field(default_factory=dict)  # {input, output, cache_read?} 달러/1M 토큰 — 있으면 응답 usage 에 cost_usd
     used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0})   # 이 프로세스 누계(화면)
     retries: int | None = None  # 429·5xx·연결 끊김에 다시 보낼 횟수. None 이면 실사용(chat·허브) 4·평가(run) 0. STEWART_BACKEND_RETRIES 가 이긴다
+    context_budget: int | None = None   # 실사용 문맥 몫(토큰). 창(max_context)이 커도 이 값을 창으로 보고 압축한다(길수록 느리고 비싸고 흐려진다). STEWART_CONTEXT_BUDGET 가 이긴다
+
+    def budget(self) -> int:
+        """압축·화면에 쓰는 창: min(max_context, 문맥 몫)."""
+        v = os.environ.get("STEWART_CONTEXT_BUDGET", "")
+        b = int(v) if v.isdigit() and int(v) > 0 else self.context_budget
+        return min(self.max_context, b) if b else self.max_context
 
     def external(self) -> bool:
         """작업 내용이 바깥 회사로 나가는 백엔드인가: provider 를 적었거나, 주소가 이 기계·사설망·tailnet 이 아니면."""
@@ -183,6 +190,7 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 thinking_control=str(b.get("thinking_control") or "chat_template"),
                 price=dict(b.get("price") or {}),
                 retries=(int(b["retries"]) if b.get("retries") is not None else None),
+                context_budget=(int(b["context_budget"]) if b.get("context_budget") else None),
             )
             if out[name].kind not in ("openai", "anthropic"):
                 raise ConfigError(f"{path}: backends.{name}.kind 는 openai 또는 anthropic")
