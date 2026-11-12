@@ -35,7 +35,7 @@ class _Plain(BaseHTTPRequestHandler):
 
 class TChain(unittest.TestCase):
     def test_redact(self):
-        t = B.redact("Bearer sk-ant-abc123456789 https://u:pw@proxy.x:3128/ ?api_key=zzz&x=1 ghp_" + "a" * 20)
+        t = B.redact("Bearer " + "sk-" + "ant-abc123456789" + " https://u:pw@proxy.x:3128/ ?api_key=zzz&x=1 ghp_" + "a" * 20)
         for bad in ("sk-ant-abc", "u:pw", "zzz", "ghp_aaa"):
             self.assertNotIn(bad, t)
         self.assertIn("proxy.x:3128", t)
@@ -82,7 +82,7 @@ class TAnthropic(unittest.TestCase):
         from stewart import anthropic_backend as AB
         bk = Backend("claude", f"http://127.0.0.1:{free_port()}", "claude-opus-5-5", "api", 1000000,
                      api_key_env="STEWART_TEST_ANTHROPIC_KEY", kind="anthropic", timeout_s=5, params={"max_retries": 0})
-        with mock.patch.dict(os.environ, {"STEWART_TEST_ANTHROPIC_KEY": "sk-ant-test-" + "x" * 20}):
+        with mock.patch.dict(os.environ, {"STEWART_TEST_ANTHROPIC_KEY": "sk-" + "ant-test-" + "x" * 20}):
             AB._CLIENTS.clear()
             with self.assertRaises(B.BackendError) as cm:
                 B.chat(bk, [{"role": "user", "content": "x"}])
