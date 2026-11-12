@@ -171,6 +171,7 @@ function Past() {
         <button class="btn !py-0.5 !px-2 text-xs" disabled={!picked.length} onClick={() => act(() => manage({ op: arch ? 'unarchive' : 'archive', items: picked }))}>{arch ? '보관 풀기' : '보관'}</button>
         <button class="btn !py-0.5 !px-2 text-xs" onClick={() => { const d = prompt('며칠 넘게 손대지 않은 지난 대화를 모두 휴지통으로 옮길까요? (일 수)', '30'); if (d && +d > 0) act(() => manage({ op: 'delete', older_days: +d }), `${d}일 넘은 것을 휴지통으로`) }}>N일 넘은 것 모두…</button>
       </div>}
+      {open && !arch && <PastSearch />}
       {open && shown.map(x => <PastRow key={x.kind + x.key} x={x} picking={picking} sel={!!sel[x.kind + x.key]} reload={load}
         onSel={() => setSel(s => ({ ...s, [x.kind + x.key]: !s[x.kind + x.key] }))} />)}
       {open && !n && <div class="mx-4 text-xs text-mute py-1">{arch ? '보관한 것 없음' : '없음'}</div>}
@@ -188,6 +189,20 @@ function Past() {
       </div>}
     </>
   )
+}
+
+// 판 112(SW-45 ⑦): 지난 대화 본문 찾기 — 사람 말·모델 답에서 낱말, 맞은 대화를 새 칸으로
+function PastSearch() {
+  const [q, setQ] = useState(''), [hits, setHits] = useState(null)
+  const go = () => { if (q.trim().length < 2) { setHits(null); return } get('/api/past_search?q=' + encodeURIComponent(q.trim())).then(r => setHits(r.hits)).catch(e => toast('안 됨: ' + e.message)) }
+  return <div class="mx-3 mb-1.5">
+    <input class="w-full text-[13px] px-2 py-1 rounded-md border border-line bg-panel" placeholder="지난 대화에서 찾기(두 글자 이상)" value={q}
+      onInput={e => setQ(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter') go() }} />
+    {hits && <div class="mt-1 text-[12.5px]">{hits.length ? hits.map(h => <button key={h.run_dir} class="block w-full text-left px-2 py-1 rounded hover:bg-soft"
+      title="새 대화 칸으로 연다" onClick={() => post('/api/chat/new', { how: 'reopen', run_dir: h.run_dir }).then(r => { openChat(r.chat); refresh() }, e => toast('안 됨: ' + e.message))}>
+      <div class="truncate font-semibold">{h.first || '(첫 말 없음)'}</div>
+      <div class="text-mute truncate">{h.role === 'user' ? '사람: ' : '모델: '}{h.snippet}</div></button>) : <div class="text-mute px-2">없음</div>}</div>}
+  </div>
 }
 
 // 점 둘: 허브(이 브라우저 ↔ 허브)와 모델 서버(허브 ↔ 모델 서버, 허브가 실제로 찔러 본 결과). 하나만 보고 "연결됨" 이라 읽지 않게 이름을 붙인다
@@ -255,12 +270,21 @@ export function ModeChips() {
 // 판 99: 도구 켬·끔 손잡이(프로필 toggle_tools) — 꺼진 도구는 모델에게 안 보인다
 export function ToolChips() {
   const t = hub.value?.tool_toggles || []
+  const [open, setOpen] = useState(false)
   if (!t.length) return null
   const toggle = (name, on) => cpost('/api/tools/toggle', { name, on }).then(refresh, e => toast('안 됨: ' + e.message))
-  return <span class="flex gap-1 items-center flex-none">
-    {t.map(x => <button key={x.name} class={'chip flex-none ' + (x.on ? '!text-ok' : '')} aria-pressed={x.on}
-      title={x.on ? `${x.name} 켜짐 — 누르면 끈다(모델에게 안 보임)` : `${x.name} 꺼짐 — 누르면 켠다`}
-      onClick={() => toggle(x.name, !x.on)}>{x.on ? '●' : '○'} {x.name}</button>)}
+  const chip = x => <button key={x.name} class={'chip flex-none ' + (x.on ? '!text-ok' : '')} aria-pressed={x.on}
+    title={x.on ? `${x.name} 켜짐 — 누르면 끈다(모델에게 안 보임)` : `${x.name} 꺼짐 — 누르면 켠다`}
+    onClick={() => toggle(x.name, !x.on)}>{x.on ? '●' : '○'} {x.name}</button>
+  if (t.length <= 4) return <span class="flex gap-1 items-center flex-none">{t.map(chip)}</span>
+  // 판 113: 칩이 많으면(얇은 메인) 켠 것만 보이고 나머지는 [도구 N ▾] 로 접는다
+  const on = t.filter(x => x.on), off = t.filter(x => !x.on)
+  return <span class="flex gap-1 items-center flex-none relative">
+    {on.map(chip)}
+    <button class="chip flex-none" aria-expanded={open} title="꺼 둔 도구 — 눌러 펼치고 칩을 눌러 켠다"
+      onClick={() => setOpen(!open)}>도구 {off.length} {open ? '▴' : '▾'}</button>
+    {open && <span class="absolute top-full right-0 z-20 mt-1 p-2 bg-panel border border-line rounded-lg shadow-card flex flex-wrap gap-1 w-72">
+      {off.map(chip)}</span>}
   </span>
 }
 

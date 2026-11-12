@@ -583,12 +583,15 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--cost", action="store_true")
     pf.add_argument("--hub", action="store_true", help="--cost: 허브 메인 꼴(역할 지시 + 세션 도구)")
     pf.add_argument("--clean", action="store_true", help="--cost: 기억·사용자 스킬을 끈 뼈대")
+    pf.add_argument("--slim", action="store_true", help="--cost: 얇은 허브 메인 꼴(등급 slim = true, 판 113 — --hub 를 뜻함)")
     hb = sub.add_parser("hub", help="허브: 메인 세션 + 작업자 세션들을 웹 화면(127.0.0.1) 하나로 본다")
     hb.add_argument("action", nargs="?", choices=["url"], help="url: 떠 있는 허브의 접속 주소·로그인 토큰을 다시 보인다(허브는 띄우지 않음)")
     hb.add_argument("--project", default=None, help="프로젝트 폴더(메인의 작업 폴더, 기본: 지금 폴더)")
     hb.add_argument("--new-token", action="store_true", help="로그인 토큰을 새로 만든다(예전 로그인은 모두 끝남). 기본은 상태 폴더의 것을 다시 쓴다")
     hb.add_argument("-p", "--profile", default="chat", help="메인 프로필(기본 chat)")
     hb.add_argument("-b", "--backend", default=None)
+    hb.add_argument("--tier", default=None, help="메인을 backends 표 [tiers.<이름>] 등급(백엔드·프로필·문맥 예산)으로 켠다. "
+                    "등급에 slim = true 면 작은 모델용 얇은 메인(짧은 지시·핵심 도구만, 나머지는 칩). -b 는 작업자 기본으로 남는다")
     hb.add_argument("--worker-profile", default=None, help="작업자 기본 프로필(기본: 메인과 같음)")
     hb.add_argument("--new-main", action="store_true", help="메인 대화를 새로 시작(기본: 이 허브의 마지막 메인 대화를 이어 받는다)")
     hb.add_argument("--mode", choices=["auto", "edits", "ask", "plan"], default="edits", help="메인 모드(작업자는 이보다 넓을 수 없다)")
@@ -743,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if a.cmd == "profiles" and a.cost:
             from . import ctxcost as CC
-            print(CC.table([CC.measure(n, hub=a.hub, clean=a.clean) for n in (a.names or ["chat", "code"])]))
+            print(CC.table([CC.measure(n, hub=a.hub or a.slim, clean=a.clean, slim=a.slim) for n in (a.names or ["chat", "code"])]))
             return 0
         if a.cmd == "profiles":
             names = Counter(n for n, _, _ in list_profiles())

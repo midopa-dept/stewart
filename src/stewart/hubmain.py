@@ -319,13 +319,36 @@ HUB_COMMANDS = (("clear", "지금 대화를 기록에 남기고 빈 문맥으로
                 ("improve", "지난 대화로 배워 두기 — 👍·교정된 차례에서 예시·방침 제안을 카드로"), ("help", "이 목록"))
 
 
+def main_tier(a, workdir: str):
+    """판 113: --tier 가 있으면 그 등급(backends 표 [tiers.<이름>])의 백엔드·프로필·문맥 예산으로 메인을 켠다.
+    등급에 slim = true 면 얇은 메인(slim.py). -b 는 작업자 기본 백엔드로 남는다. 없으면 -p·-b 그대로."""
+    from .cli import resolve
+    name = getattr(a, "tier", None)
+    if not name:
+        return resolve(a.profile, a.backend, workdir)
+    from . import spawn as SP
+    from .config import ConfigError
+    t = SP.load_tiers(main=True).get(name)
+    if t is None:
+        raise ConfigError(f"등급이 없다: {name} (backends 표 [tiers.<이름>])")
+    profile, backend = resolve(t.get("profile") or a.profile, t.get("backend") or a.backend, workdir)
+    if t.get("budget"):
+        import dataclasses
+        backend = dataclasses.replace(backend, context_budget=max(4096, min(int(t["budget"]), backend.max_context)))
+    if t.get("slim"):
+        from . import slim as SL
+        profile = SL.apply(profile, t)
+    return profile, backend
+
+
 class HubMain:
     def __init__(self, hub: Hub, profile, backend, rec, mode: str = "edits", worker_profile: str = "chat",
                  worker_backend: str | None = None, history: list | None = None, resumed_from: str | None = None):
         self.hub = hub
         import dataclasses
         import os
-        if os.environ.get("STEWART_HUB_ROLE") != "0":
+        from . import slim as SL
+        if SL.conf(profile) is None and os.environ.get("STEWART_HUB_ROLE") != "0":   # 얇은 메인(판 113)은 짧은 지시 하나만
             from .board import NOTE as BOARD_NOTE
             profile = dataclasses.replace(profile, system=(profile.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
         hub.register_main(profile.workdir, mode)
@@ -923,6 +946,17 @@ class HubMain:
         self._turn.start()
         return "woke"
 
+    def status_info(self) -> dict:
+        """판 111(SW-45 ⑩): [상태] 탭 — 켜진 손잡이(환경에 값 있는 것)·도구 목록·고정 앞부분 토큰·모드·생각·문맥 예산. 모델 문맥과 무관."""
+        from . import features as FT
+        sess = self.sess
+        sysm = sess.messages[0].get("content") if sess.messages and sess.messages[0].get("role") == "system" else ""
+        f = FT.fingerprint(sysm, sess.tool_defs, "chat")
+        return {"knobs": f["knobs"], "tools": f["tools"], "prefix_tokens": f["prefix_tokens"], "prefix_sha": f["prefix_sha"],
+                "mode": sess.mode, "think": sess.think, "budget": sess.backend.budget(), "window": sess.backend.max_context,
+                "backend": sess.backend.name, "model": sess.backend.model, "toggled_off": sorted(getattr(sess, "disabled_tools", ())),
+                "all_knobs": list(FT.KNOBS)}
+
     def workers_view(self) -> list[dict]:
         pool = getattr(self.sess, "pool", None)
         if pool is None:
@@ -1356,7 +1390,7 @@ class UserHubs:
             wd = self.folder(name)
             wd.mkdir(parents=True, exist_ok=True)
             hub = Hub(self.state_dir / "users" / name, self.runs_dir / "users" / name)
-            profile, backend = resolve(self.a.profile, self.a.backend, str(wd))
+            profile, backend = main_tier(self.a, str(wd))
             profile.read_outside = "deny"
             profile.memory_root = str(self.state_dir / "users" / name / "memory")   # 기억도 사람마다(판 50 과 함께)
             history, prev = last_main(hub)
@@ -1487,7 +1521,7 @@ def run_hub(a) -> int:
     if ntfy is not None:
         ntfy.hub = hub
         ntfy.on_error = lambda why: hub.event("ntfy_fail", detail=why)
-    profile, backend = resolve(a.profile, a.backend, str(project))
+    profile, backend = main_tier(a, str(project))
     history, prev = last_main(hub) if not getattr(a, "new_main", False) else (None, None)
     rec = Recorder(Path(a.runs_dir), "hub-main")
     main = HubMain(hub, profile, backend, rec, mode=a.mode, worker_profile=a.worker_profile or a.profile,

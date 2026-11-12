@@ -514,6 +514,13 @@ class WebApp:
                 return self._json(h, 200, self.main.conv(self._chat_q(url)).state())
             except KeyError:
                 return self._json(h, 200, {**self.main.state(), "chat_gone": True})
+        if path == "/api/past_search":   # 판 112: 지난 대화 본문 찾기(사람용)
+            from .trash import past_search
+            q = (parse_qs(url.query).get("q") or [""])[0][:200]
+            m = self.main
+            return self._json(h, 200, {"hits": past_search(m._runs_dir, Path(m._profile.workdir), q)})
+        if path == "/api/status_info":   # 판 111: [상태] 탭
+            return self._json(h, 200, self._conv_q(url).status_info())
         if path == "/api/file":   # 판 104: 작업 폴더 파일 열기·내려받기(읽기 전용, @파일과 같은 경계, HTML·SVG 는 내려받기만)
             return self.serve_file(h, url)
         if path == "/api/img":   # 작업 카드 그림(판 91): 이 화면이 받은 이름만(images.store 이름 꼴), 그 밖은 404

@@ -232,3 +232,44 @@ class Manager:
             n += 1
         self.hub.event("trash_empty", count=n, older_days=older_days)
         return n
+
+
+def past_search(runs_dir: Path, project: Path, q: str, limit: int = 30, scan: int = 300) -> list[dict]:
+    """판 112(SW-45 ⑦, 사람용): 이 프로젝트의 지난 허브 대화에서 사람 말·모델 답 글을 낱말로 찾는다(대소문자 무시).
+    {run_dir, started, first, role, snippet}. 모델 문맥과 무관(화면 검색)."""
+    from .hubmain import _strip_env
+    from .images import text_of
+    q = " ".join(str(q or "").split()).lower()
+    if len(q) < 2:
+        return []
+    proj = str(Path(project).resolve())
+    out, n = [], 0
+    for d in sorted(Path(runs_dir).glob("*-hub-*"), reverse=True):
+        if not (d / "messages.json").is_file():
+            continue
+        n += 1
+        if n > scan:
+            break
+        try:
+            with open(d / "events.jsonl", encoding="utf-8") as f:
+                meta = (json.loads(f.readline()).get("meta") or {})
+            if str(Path(meta.get("workdir") or "").resolve()) != proj:
+                continue
+            msgs = json.loads((d / "messages.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        users = [_strip_env(text_of(m.get("content"))) for m in msgs if m.get("role") == "user"]
+        first = next((u for u in users if u and not u.startswith("[엔진]")), "")
+        for m in msgs:
+            if m.get("role") not in ("user", "assistant"):
+                continue
+            t = " ".join((_strip_env(text_of(m.get("content"))) if m.get("role") == "user" else str(m.get("content") or "")).split())
+            i = t.lower().find(q)
+            if i < 0 or t.startswith("[엔진]"):
+                continue
+            out.append({"run_dir": str(d), "started": meta.get("started"), "first": first[:80], "role": m["role"],
+                        "snippet": ("…" if i > 40 else "") + t[max(0, i - 40):i + len(q) + 60] + ("…" if i + len(q) + 60 < len(t) else "")})
+            break   # 대화마다 첫 맞음 하나
+        if len(out) >= limit:
+            break
+    return out

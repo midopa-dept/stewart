@@ -1,10 +1,10 @@
 // 오른쪽 패널(데스크톱, 기본 닫힘) / 아래 시트(폰): 단계 · 계획 · 늘 허용 · 토큰
 import { useState, useEffect } from 'preact/hooks'
 import { get, post, fmtK, fmtSecs } from './lib.js'
-import { hub, panel, setPanel, sessions, toast, refresh, busy, cpost } from './state.js'
+import { hub, panel, setPanel, sessions, toast, refresh, busy, cpost, chat } from './state.js'
 import { STATUS } from './side.jsx'
 
-const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰']]
+const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰'], ['status', '상태']]
 
 function Steps() {
   const log = (hub.value?.main_log || []).filter(m => m.kind !== 'info' || !/^ {4}/.test(m.text))
@@ -235,10 +235,30 @@ function Tokens() {
   )
 }
 
+// 판 111(SW-45 ⑩): 켜진 손잡이·도구·고정 앞부분 — 값을 바꾸려면 허브를 켤 때 환경 변수로(README "손잡이 모아 보기")
+function StatusTab() {
+  const [d, setD] = useState(null)
+  useEffect(() => { get('/api/status_info?chat=' + encodeURIComponent(chat.value)).then(setD).catch(() => setD({ error: true })) }, [chat.value])
+  if (!d) return <div class="p-4 text-mute text-sm">읽는 중…</div>
+  if (d.error) return <div class="p-4 text-bad text-sm">못 읽었다</div>
+  const row = (k, v) => <div class="flex gap-2 py-0.5"><span class="text-mute w-28 flex-none">{k}</span><span class="break-all">{v}</span></div>
+  const on = Object.entries(d.knobs || {})
+  return <div class="p-4 text-[13px]">
+    {row('백엔드', `${d.backend} (${d.model})`)}{row('모드·생각', `${d.mode} · ${d.think == null ? '기본' : d.think ? '켬' : '끔'}`)}
+    {row('문맥 예산', `${(d.budget || 0).toLocaleString()} / 창 ${(d.window || 0).toLocaleString()}`)}
+    {row('고정 앞부분', `${(d.prefix_tokens || 0).toLocaleString()} 토큰(지시문 + 도구 정의 어림) · ${d.prefix_sha}`)}
+    {row('도구', `${d.tools.length}개: ${d.tools.join(', ')}`)}
+    {d.toggled_off?.length > 0 && row('꺼 둔 도구', d.toggled_off.join(', '))}
+    <div class="font-semibold mt-3 mb-1">켜고 끈 손잡이(환경 변수로 값을 준 것)</div>
+    {on.length ? on.map(([k, v]) => row(k, v)) : <div class="text-mute">없음 — 모두 기본값</div>}
+    <div class="text-xs text-mute mt-3">살펴볼 수 있는 손잡이: {d.all_knobs.join(' · ')}. 바꾸려면 허브를 켜는 줄 앞에 붙인다.</div>
+  </div>
+}
+
 export function Panel({ extra }) {
   const p = panel.value
   const tabs = extra ? [...TABS, extra.tab] : TABS
-  const body = p === 'board' ? <BoardTab /> : p === 'memory' ? <MemoryTab /> : p === 'steps' ? <Steps /> : p === 'plan' ? <Plan /> : p === 'rules' ? <Rules /> : p === 'tokens' ? <Tokens /> : extra && p === extra.tab[0] ? extra.body : <Steps />
+  const body = p === 'board' ? <BoardTab /> : p === 'memory' ? <MemoryTab /> : p === 'steps' ? <Steps /> : p === 'plan' ? <Plan /> : p === 'rules' ? <Rules /> : p === 'tokens' ? <Tokens /> : p === 'status' ? <StatusTab /> : extra && p === extra.tab[0] ? extra.body : <Steps />
   return (
     <>
       <div class="flex items-center gap-2 px-4 py-3 border-b border-line font-[650]">작업 내역

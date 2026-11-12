@@ -81,3 +81,8 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # max = 2
 # use = "고치기"
 # default_for = ["write"]
+# ── 얇은 허브 메인(판 113) — 작은 모델을 허브 메인으로: stewart hub --tier <이 이름>. 작업자 등급 목록에는 안 나온다 ──
+# [tiers.small-main]
+# backend = "local-small"
+# slim = true                  # 짧은 지시 + 핵심 도구만(나머지는 허브 칩), 고정 앞부분 4k 아래
+# budget = 24000

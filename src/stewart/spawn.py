@@ -42,8 +42,8 @@ DEFINITION = {"type": "function", "function": {
 
 
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
-def load_tiers(path=None) -> dict:
-    """backends 표에서 등급. 없으면 {}(등급 없이 지금 백엔드)."""
+def load_tiers(path=None, main: bool = False) -> dict:
+    """backends 표에서 등급. 없으면 {}(등급 없이 지금 백엔드). slim 등급(메인용, 판 113)은 main=True 일 때만."""
     import tomllib
     from .config import backends_path
     try:
@@ -55,7 +55,10 @@ def load_tiers(path=None) -> dict:
         if isinstance(t, dict) and (t.get("backend") or t.get("profile")):
             out[str(name)] = {"backend": t.get("backend"), "profile": t.get("profile"), "budget": t.get("budget"),
                               "max": int(t.get("max") or 1), "use": " ".join(str(t.get("use") or "").split())[:80],
-                              "default_for": t.get("default_for") or []}
+                              "default_for": t.get("default_for") or [], "slim": bool(t.get("slim")),
+                              "slim_keep": t.get("slim_keep"), "slim_system": t.get("slim_system")}
+            if out[str(name)]["slim"] and not main:
+                del out[str(name)]
     return out
 
 

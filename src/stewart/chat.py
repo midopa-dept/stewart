@@ -311,6 +311,12 @@ class ChatSession:
             defs = [d for d in defs if d["function"]["name"] in profile.manager_tools]
         # 허브 켬·끔 손잡이(판 99): 프로필 toggle_tools 의 도구는 사람이 켤 때만 모델에게 보인다(기본 끔, toggle_on 에 적으면 켬)
         self.toggleable = [n for n in (profile.raw or {}).get("toggle_tools") or [] if any(d["function"]["name"] == n for d in defs)]
+        from . import slim as SL
+        self.slim = SL.conf(profile)   # 판 113: 얇은 허브 메인 — 핵심 도구 밖은 켬·끔 칩(기본 끔)으로
+        if self.slim is not None:
+            kp = SL.keep(self.slim)
+            self.toggleable += [d["function"]["name"] for d in defs
+                                if d["function"]["name"] not in kp and d["function"]["name"] not in self.toggleable]
         self.disabled_tools = {n for n in self.toggleable if n not in ((profile.raw or {}).get("toggle_on") or [])}
         self._all_defs = defs
         defs = [d for d in defs if d["function"]["name"] not in self.disabled_tools]
@@ -336,7 +342,7 @@ class ChatSession:
         mem_text, mem_log = memory_for(profile, interactive=True)
         self.env_info = envinfo.measure(profile.workdir)   # 세션 시작 때 한 번(이어 하기는 새로 잰다)
         system = profile.system.strip() + (f"\n\n{mem_text}" if mem_text else "") \
-            + (f"\n\n{SK.list_text(self.skills)}" if self.skills else "") \
+            + (f"\n\n{SL.skills_text(self.skills) if self.slim is not None else SK.list_text(self.skills)}" if self.skills else "") \
             + (f"\n\n{PC.agents_text(self.agents)}" if self.agents else "")
         self.mem_inject: list = []
         if self.mem is not None:   # L3 주입
@@ -344,7 +350,7 @@ class ChatSession:
             system += "\n\n" + mtext
         self._env_note: str | None = (envinfo.user_note(self.env_info)   # 다이어트 안 a: 이 세션 첫 사람 입력 앞에 붙인다
                                       if os.environ.get("STEWART_ENV_BLOCK", "1") != "0" else None)   # 판 100: 끄는 손잡이
-        if self.forge is not None:
+        if self.forge is not None and not (self.slim is not None and "forge_remote" in self.disabled_tools):
             system += "\n\n" + FG.note(self.forge)
         if profile.language == "ko":
             system += "\n\n사람에게 하는 말은 한국어로 쓴다. 코드·파일 이름·명령은 원문 그대로 둔다."

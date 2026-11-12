@@ -111,7 +111,8 @@ uv run stewart hub --project ~/my-project
   - Conversation: edits show as diff cards with line numbers, thinking as a folding block, and every code block has a copy button.
   - Hand-off card: when the model reaches something only a person can do (a password, keychain prompt, sudo, a login), it stops retrying and hands it to you.
   - Several conversations: start a new main conversation, branch the current one, or reopen a closed one. Approvals and stops apply per conversation. `/clear`, `/reset` and `/help` work.
-  - Side panel: board, memory, steps, plan, always-allow rules, tokens.
+  - Side panel: board, memory, steps, plan, always-allow rules, tokens, status (backend, mode, thinking, context budget, estimated fixed-prefix tokens, tool list).
+  - Past conversation search: the search box in the sidebar finds words in your messages and the model's replies in past conversations and opens them.
   - Input: `/commands`, `@file`, pasted images. Large phone photos and HEIC are shrunk in the browser to 1600 px JPEG.
   - Header: switch the mode (plan, ask, edit, auto) and thinking (default, on, off), and shrink this conversation's context budget (the window compaction is measured against). The mode cannot go wider than the one the hub was started with.
   - Changed-files card: when a turn ends, the files it created or changed show with Open and Download. Markdown is rendered; images and PDFs open in a new tab. Clicking a path in code inside a reply also opens it. Files outside the working folder or with secret-looking names are refused, and HTML and SVG are download-only.
@@ -119,6 +120,10 @@ uv run stewart hub --project ~/my-project
   - Uploads and choices: 📎 in the input box puts documents, spreadsheets or PDFs in `inbox/` in the working folder (up to 20 MB, never overwriting). When the model asks with options, pick one with the buttons under the question.
   - Worker strip: concurrent workers' state, elapsed time and uncollected results show above the conversation. If a worker finishes after the main turn has ended, the hub opens one turn by itself to collect it (up to 3 in a row; `STEWART_AUTO_WAKE=0` turns this off).
   - Model server status dot: ready, starting, unreachable, auth refused.
+- Slim main for small models: put `slim = true` on a tier in the backends table and start with `stewart hub --tier <that name>`. The main conversation's fixed prefix (system prompt plus tool definitions) drops from about 13k tokens to under 4k.
+  - The model sees one short instruction and ten core tools; the rest can be turned on from the [tools N ▾] chip in the header. The skill index carries names only.
+  - Bigger jobs go to workers via `workers`. Workers run with their own profile and tier, and `-b` stays the workers' default backend (a small model for the main, a large one for workers).
+  - Measure the reduction with `stewart profiles --cost --slim`.
 - New approvals raise a browser notification. Set `[hub] ntfy_url` to also send them to your phone with [ntfy](https://ntfy.sh).
 - By default the hub listens on loopback only (`127.0.0.1`, `::1`). To use it from another device, put something in front (an SSH tunnel, for example) or turn on account mode.
   - Account mode: set `accounts = true`, `listen = "<address>"` and `user_root = "<root of per-person working folders>"` under `[hub]`, then add people with `stewart hub-user add <name>`. Each person gets their own sessions, conversations, approvals and working folder.
