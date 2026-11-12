@@ -164,6 +164,7 @@ uv run stewart hub --project ~/my-project
 | Flow | `todo_write` `todo_read` `ask_user` `delegate` (a worker with its own context) `workers` (concurrent workers) `load_skill` |
 
 - `web_fetch` refuses private, loopback, link-local and CGNAT addresses and re-checks redirects. Fetched text reaches the model wrapped in outside-content markers.
+  - Only when a document server on your own machine must be readable, as in a fixed-corpus evaluation, `STEWART_FETCH_ALLOW_HOSTS=<host[:port],…>` skips that check for those hosts. Only exact names are accepted (wildcards and CIDR are dropped), and a redirect outside the list is blocked again. When it is on, chat and the hub show a line saying so. Leave it empty in everyday use.
 - In chat and the hub, `web_fetch` and `doc_search` are on even without a search address. `run` uses only what the profile and environment variables turn on.
 - Eighteen built-in skills are on in chat and the hub: step plans, error diagnosis, git work, code review, security review, simplify, fixing tests, run-and-check, web research, deep research, document files (PDF, Word, Excel, PowerPoint), project init, skill creator, stewart config, hand-off notes, reporting a blocker, memory consolidation, handing results over as files. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
 - A skill's front matter can say `surfaces: [talk]` or `[code]` to be indexed only in that seat (talk or code), and `tools: [...]` to turn on tools that were off when it is loaded. Skills cannot widen permissions: tools the seat does not have stay off, risky tools such as the shell or file writing ask the person first, and tools a person turned off stay off (`STEWART_SKILL_TOOLS=0` turns this off).
@@ -240,6 +241,9 @@ There are two ways: learning from past conversations without training, and expor
 - **Choosing a LoRA adapter:** `adapters` and `adapter` in the backends table pick an adapter loaded on the server (the model field for vLLM, the lora field for llama.cpp).
   - `STEWART_ADAPTER=off` goes back to the base model in one line.
   - `stewart adapter` checks that it is loaded on the server.
+- **Real-use scenes:** a problem met in real use is first written down as a scene in `tests/scenes/*.toml`, before it is fixed. A scene holds what the person said, the expected first action (tools to call, tools not to call, things to say) and any tools turned off; a machine judges the first step's tool calls and reply text (`stewart.scenes.judge`).
+  - The fake-model test (`tests/test_u98.py`, CI) checks that the runner's safeguards hold for each scene.
+  - With a real model, `python tools/scenes/measure.py --backend <name> -n 3` counts how many of N runs per scene behave as expected. Measure once before and once after changing the system prompt, tool descriptions or nudges. It calls the model, so it costs money.
 
 ## Same model, different runner
 

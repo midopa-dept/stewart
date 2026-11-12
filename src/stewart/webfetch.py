@@ -6,7 +6,9 @@
   검사한 바로 그 IP 로 접속한다(검사 뒤 다시 풀지 않는다 — DNS rebinding 막기). https 는 SNI·인증서 검사를 원래 이름으로.
   IPv6(::1, fc00::/7, fe80::/10, ::), IPv4 대응 주소(::ffff:10.0.0.1)도 막는다. CGNAT 100.64/10(테일넷)도 공인이 아니라 막힌다.
 - 받는 양 2 MB, 시간 제한, 글 형식만(html 은 본문 텍스트로, text/*·json·xml 은 그대로).
-- 사설 차단을 끄는 길은 이 모듈 전역 _TEST_ALLOW_LOOPBACK(시험 전용, 루프백만) 하나뿐이다. 프로필·명령줄에서는 켤 수 없다.
+- 사설 차단을 끄는 길은 둘뿐이다: 이 모듈 전역 _TEST_ALLOW_LOOPBACK(시험 전용, 루프백만)과,
+  환경 변수 STEWART_FETCH_ALLOW_HOSTS(판 121 — 고정 말뭉치 평가용, 정확한 호스트[:포트] 목록. 그 호스트에 한해 사설·루프백 막기를 건너뛴다.
+  리다이렉트로 목록 밖에 닿으면 그 단계에서 다시 막는다). 프로필·명령줄·모델·도구 인자로는 켤 수 없다. 실사용에서는 비워 둔다.
 - 환경의 HTTP(S)_PROXY 는 쓰지 않는다(검사한 IP 로 직접 붙어야 하므로).
 """
 
@@ -31,6 +33,28 @@ class FetchError(Exception):
     pass
 
 
+ENV_ALLOW = "STEWART_FETCH_ALLOW_HOSTS"
+
+
+def allow_hosts(env=None) -> set:
+    """판 121: {(호스트 소문자, 포트 또는 None)}. 쉼표·공백으로 나눈 정확한 이름[:포트]만 — 별표·슬래시(CIDR) 든 것은 버린다."""
+    import os
+    raw = (os.environ if env is None else env).get(ENV_ALLOW, "")
+    out = set()
+    for x in re.split(r"[,\s]+", raw.strip()):
+        if not x or "*" in x or "/" in x:
+            continue
+        host, _, port = x.rpartition(":") if x.count(":") == 1 else (x, "", "")
+        host = (host or x).strip("[]").lower()
+        out.add((host, int(port) if port.isdigit() else None))
+    return out
+
+
+def _allowed(host: str, port: int, allow: set) -> bool:
+    h = (host or "").lower()
+    return (h, port) in allow or (h, None) in allow
+
+
 def ip_blocked(ip: str) -> str | None:
     """막아야 하면 이유, 아니면 None."""
     try:
@@ -47,8 +71,8 @@ def ip_blocked(ip: str) -> str | None:
     return None
 
 
-def resolve(host: str, port: int) -> str:
-    """이름을 한 번 풀어 검사하고, 접속할 IP 하나를 돌려준다."""
+def resolve(host: str, port: int, allowed: bool = False) -> str:
+    """이름을 한 번 풀어 검사하고, 접속할 IP 하나를 돌려준다. allowed(허용 목록 호스트)면 사설·루프백 검사를 건너뛴다(접속 IP 는 그대로 고정)."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
@@ -59,7 +83,7 @@ def resolve(host: str, port: int) -> str:
             ips.append(sa[0])
     if not ips:
         raise FetchError(f"이름을 풀 수 없다: {host}")
-    for ip in ips:                     # 하나라도 내부 주소면 거부(골라 붙는 꼼수를 막는다)
+    for ip in ([] if allowed else ips):   # 하나라도 내부 주소면 거부(골라 붙는 꼼수를 막는다)
         why = ip_blocked(ip)
         if why:
             raise FetchError(why + f" (이름 {host})")
@@ -100,10 +124,11 @@ def get(url: str, timeout_s: float = 20) -> dict:
     """{url, final_url, status, content_type, bytes, truncated, body(bytes), charset, redirects}"""
     redirects = []
     orig = url
+    allow = allow_hosts()
     for _ in range(MAX_REDIRECTS + 1):
         u = _check_url(url)
         port = u.port or (443 if u.scheme == "https" else 80)
-        ip = resolve(u.hostname, port)
+        ip = resolve(u.hostname, port, allowed=bool(allow) and _allowed(u.hostname, port, allow))   # 단계마다 다시 본다
         cls = _PinnedHTTPS if u.scheme == "https" else _PinnedHTTP
         conn = cls(u.hostname, ip, port=port, timeout=timeout_s)
         path = urllib.parse.urlunsplit(("", "", u.path or "/", u.query, ""))

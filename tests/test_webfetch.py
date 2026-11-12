@@ -195,10 +195,13 @@ class Blocked(unittest.TestCase):
         self.assertEqual(connects, [("93.184.216.34", 80)])         # 검사한 그 IP 로 붙는다
 
     def test_no_switch_in_profile(self):
-        # 사설 차단을 끄는 프로필 키·환경 변수가 없다(엄격 키 검사로 [web_search] 밖 키는 거부되고, 안의 키는 쓰지 않는다)
+        # 사설 차단을 끄는 프로필 키가 없다(엄격 키 검사로 [web_search] 밖 키는 거부되고, 안의 키는 쓰지 않는다).
+        # 환경 변수는 판 121.1 의 허용 목록 하나뿐이고, 그 밖의 환경 값은 읽지 않는다
         src = Path(W.__file__).read_text(encoding="utf-8")
         self.assertEqual(src.count("_TEST_ALLOW_LOOPBACK"), 3)     # 정의·설명·ip_blocked 안 한 곳
-        self.assertNotIn("environ", src)
+        self.assertEqual(src.count("environ"), 1)                  # allow_hosts 안 한 곳
+        self.assertIn(".get(ENV_ALLOW,", src)
+        self.assertNotIn("getenv", src)
 
 
 class Wiring(unittest.TestCase):

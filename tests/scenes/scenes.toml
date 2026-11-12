@@ -1,0 +1,63 @@
+# 실사용 장면 묶음(판 121) — 사용자가 실사용에서 겪은 장면. 사람이 한 말은 사용자가 메인에 전해 준 문장 그대로.
+# 규칙: 사용자가 실사용에서 겪은 문제는 고치기 전에 여기 장면으로 먼저 넣는다.
+
+[[scene]]
+id = "lookup-unknown-name"
+said = "claude fable 5.2 알아봐"
+source = "사용자 실사용 11-12 14:4x — 먼저 작업 폴더를 검색했다(메인 전달)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+[scene.executor]
+note = "작업 폴더에 있을 까닭이 없으면"
+
+[[scene]]
+id = "lookup-find-out"
+said = "Fable 5.2 가 뭔지 찾아봐"
+source = "위 장면의 꼴(재현 11-12)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+[scene.executor]
+note = "작업 폴더에 있을 까닭이 없으면"
+
+[[scene]]
+id = "latest-version"
+said = "오늘 기준으로 Python 최신 릴리스 버전이 뭐야?"
+source = "재현 11-12(가)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "run_shell"]
+[scene.executor]
+note = "학습 뒤에 바뀌었을 수 있는 사실"
+
+[[scene]]
+id = "web-named"
+said = "웹 검색해서 llama.cpp 최근 새 기능 찾아 줘"
+source = "사용자 실사용 11-12 — 쓰라고 해도 안 쓴다(메인 전달), 재현 11-12(나)"
+[scene.expect]
+first_any = ["web_search"]
+first_none = ["search", "glob", "list_dir", "run_shell"]
+[scene.executor]
+note = "그 도구(web_search)부터"
+
+[[scene]]
+id = "web-named-but-off"
+said = "웹 검색해서 llama.cpp 최근 새 기능 찾아 줘"
+source = "사용자 실사용 11-12 — 말없이 안 썼다(메인 전달). 칩으로 꺼진 경우"
+tools_off = ["web_search", "web_fetch"]
+[scene.expect]
+first_none = ["search", "glob", "list_dir", "run_shell"]
+say_any = ["꺼져", "켜"]
+[scene.executor]
+note = "꺼져 있다"
+
+[[scene]]
+id = "open-browser-on-this-computer"
+said = "브라우저로 네이버 띄워 봐"
+source = "사용자 실사용 11-12 14:4x — 셸로 이 맥의 브라우저를 열었다(메인 전달)"
+[scene.expect]
+no_host_gui = true
+[scene.executor]
+fake_call = { tool = "run_shell", args = { command = "open https://www.naver.com" } }
+blocked = "실행 안 함"

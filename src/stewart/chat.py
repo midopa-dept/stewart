@@ -352,6 +352,9 @@ class ChatSession:
         self.env = T.ToolEnv(workdir=profile.workdir, shell_timeout_s=profile.shell_timeout_s, web=web,
                               artifacts_dir=rec.dir, **T.secret_options(profile))
         self.env.vision = bool(backend.vision)
+        from .webfetch import allow_hosts as _allow_hosts
+        if _allow_hosts():   # 판 121: 고정 말뭉치 평가용 손잡이가 켜진 채 실사용하지 않게 화면에 한 줄
+            self.ui.warn(f"  웹 읽기: 사설 주소 허용 호스트 {len(_allow_hosts())}개(STEWART_FETCH_ALLOW_HOSTS) — 고정 말뭉치 평가용, 실사용에서는 비워 둔다")
         from . import hostgui as _HG
         self.env.host_gui = _HG.enabled(profile)   # 판 117: 이 컴퓨터 조작(기본 끔)
         from . import webnudge as WN

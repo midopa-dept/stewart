@@ -22,7 +22,10 @@ def fingerprint(system: str, tool_defs: list, path: str, extra: dict | None = No
     from .compact import est_tokens
     tools_json = json.dumps(tool_defs or [], ensure_ascii=False)
     blob = (system or "") + "\n" + tools_json
+    from .webfetch import allow_hosts
+    n_allow = len(allow_hosts())   # 판 121: 사설 주소 읽기 허용 호스트 수(이름은 남기지 않는다)
     return {"path": path, "knobs": {k: os.environ[k] for k in KNOBS if k in os.environ},
+            **({"fetch_allow_hosts": n_allow} if n_allow else {}),
             "tools": [d["function"]["name"] for d in tool_defs or []],
             "prefix_sha": hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16],
             "prefix_tokens": est_tokens(system or "") + est_tokens(tools_json), **(extra or {})}
