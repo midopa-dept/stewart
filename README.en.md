@@ -40,7 +40,7 @@ With the same Claude models on the same coding tasks, stewart used 0.69–0.77×
 - [Ways to use it](#ways-to-use-it)
 - [Web hub](#web-hub)
 - [Tools the model gets](#tools-the-model-gets)
-  - [Worker tier names](#worker-tier-names)
+  - [Worker tiers](#worker-tiers)
 - [Safety](#safety)
 - [Memory](#memory)
 - [Learning from past work](#learning-from-past-work)
@@ -148,9 +148,9 @@ uv run stewart hub --project ~/my-project
 - Concurrent workers (`workers`, chat and hub): the main conversation spawns workers and keeps going, then gathers their results (wait, collect, cancel, list).
   - Workers run in a fresh context and never ask the person. They skip actions that need approval and note them in their result.
   - The concurrency cap is `STEWART_SPAWN_MAX` (default: the backend's concurrency − 1); `STEWART_SPAWN=0` turns workers off.
-  - Worker tiers: `[tiers.<name>]` in the backends table bundles a backend, profile, context budget and concurrency cap. The model sees only each tier's name and a one-line use; if it does not pick one, the runner picks by the kind of work (read-only or not). The default example uses `presto`, `moderato` and `largo` ([Worker tier names](#worker-tier-names)).
+  - Worker tiers: `[tiers.<name>]` in the backends table bundles a backend, profile, context budget and concurrency cap. The model sees only each tier's name and a one-line use; if it does not pick one, the runner picks by the kind of work (read-only or not). The default example uses `presto`, `moderato` and `largo` ([Worker tiers](#worker-tiers)).
 
-### Worker tier names
+### Worker tiers
 
 - A tier is a way of giving work, not a model size. It bundles prompt weight, tools, thinking and context budget under one name.
 - The default example has four. Names are set only in `[tiers.<name>]` in the backends table, so renaming them changes no code. The full example is at the end of `backends.example.toml`.
@@ -161,22 +161,12 @@ uv run stewart hub --project ~/my-project
 - A tier's context budget is the compaction window for both a main seated with `--tier` and workers started on that tier. Runs without a tier behave as before.
 - Tags read "seat · tier" (worker 3 · `presto` / main · `largo`).
 
-#### Presto, ma non troppo
-- `presto`: quickly. Finding, reading, summarizing, things to double-check.
-- A thin prompt, read tools and a short context. Light enough to run several as workers. With `slim = true`, seating it as the main gives the slim hub.
-
-#### Moderato cantabile
-- `moderato`: at a moderate pace. The default for coding and conversation.
-- The default tier for work that lists tools (writes).
-
-#### Largo ma non tanto
-- `largo`: broadly. Planning, dispatching, review.
-- Seated as the main with every tool and a wide context (`stewart hub --tier largo`).
-
-#### Rubato, poi a tempo
-- `rubato`: stolen time. Only when stuck; paid.
-- An external API. It is not in the tier table; it runs as a separately started instance (`stewart instance`), only when a person opens it.
-- The default model is never used in its place.
+| Tier | What it does |
+|---|---|
+| `presto` | Light work such as finding, reading and summarizing. A thin prompt, read tools and a short context make it good for running several as workers. With `slim = true`, seating it as the main gives the slim hub. Its results get double-checked |
+| `moderato` | The default for coding and conversation; the default tier for work that lists tools (writes) |
+| `largo` | Planning, dispatching and review. Seated as the main with every tool and a wide context (`stewart hub --tier largo`) |
+| `rubato` | An external API (paid). Not in the tier table; it runs as a separately started instance (`stewart instance`), only when a person opens it. The default model is never used in its place |
 
 ## Safety
 

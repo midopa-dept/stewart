@@ -14,15 +14,16 @@ The request: "We got a ticket: customers are charged a few won less than what th
 
 From top to bottom:
 
-- **Top bar**: the conversation name (`메인`, main), the context bar (context used / maximum, with a percentage), and the new conversation, branch and history buttons. The chips below show the working folder and whether the hub and the model are connected.
+- **Top bar**: the conversation name (`메인`, main), the context bar (context used / maximum, with a percentage), and the new conversation, branch and history buttons. The chips below show the working folder, whether the hub and the model are connected, and the mode (`자동`, auto), thinking (`생각 기본`, default) and this conversation's context budget (`문맥 66k`); click a chip to change it.
 - **Failing test output**: the model added a test for the reported case and ran it. It fails with `5073 != 5075`.
 - **Cause**: the cart discounts the unit price and drops the fraction, while the receipt discounts the line amount and rounds.
 - **Tool cards** (`파일 1개 고침` "1 file edited", `명령 1개 실행` "1 command run"): each tool call is a collapsed card with its duration, the number of output lines, and buttons to copy the command or the result.
 - **Diff card** (`± shop/cart.py +2 −5`): the change, hunk by hunk. It can be folded.
 - **Thinking line** (`생각 · 9초 · 126자` "thinking · 9 s · 126 chars"): the model's reasoning is folded into one line and opens on click.
 - **Wrap-up**: the cause, the change, what was checked and what was not. The command to rerun comes as a code block with a copy button.
+- **Changed-files card**: each file this turn created or changed has Open and Download, and **↶ undo this turn** at the top right restores just the files.
 - **End-of-turn lines**: files changed this turn, input and output tokens, model time, and the conversation total.
-- **Input box**: takes `/commands`, `@files` and pasted images. `auto` at the bottom left is the approval mode.
+- **Input box**: takes `/commands`, `@files` and pasted images; 📎 uploads documents, spreadsheets and PDFs. `auto` at the bottom left is the approval mode.
 - **Left sidebar**: the status board, the conversation list (each with its state), and at the bottom the model, hub, web search and notification state.
 
 ## 2. Hub: release prep and a hand-off card
