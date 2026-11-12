@@ -1,10 +1,11 @@
 // 가운데 대화: 사람 말 · 모델 답(마크다운) · 작업 카드(도구 단계, 접힘) · 바꾼 파일 카드 · 받는 중인 답
 import { useState, useMemo } from 'preact/hooks'
+import { signal } from '@preact/signals'
 import { mdHtml, fmtK, fmtSecs, estTokens, post } from './lib.js'
 import { diffRows } from './diffrows.js'
 import { copyText, flash } from './copy.js'
 import { ThinkBlock } from './think.jsx'
-import { hub, tick, clockSkew, busy, refresh, toast, cpost } from './state.js'
+import { hub, tick, clockSkew, busy, refresh, toast, cpost, chat, composerFill } from './state.js'
 
 // main_log 줄을 덩어리로: user · assistant · diff · steps(도구·안내 줄 묶음)
 export function groupLog(log) {
@@ -26,7 +27,7 @@ export function groupLog(log) {
     if (m.kind === 'tool' || m.kind === 'info' || m.kind === 'warn' || m.kind === 'files' || m.kind === 'reflect') {
       if (!g) g = { type: 'steps', key: m.ts + '|' + m.text.slice(0, 30), steps: [], notes: [], files: null }
       if (m.kind === 'tool' || m.kind === 'reflect') { g.steps.push({ ...m, out: [], think }); think = null }
-      else if (m.kind === 'files') g.files = m.text
+      else if (m.kind === 'files') { g.files = m.text; g.paths = m.paths; g.turn = m.turn }
       else if (g.steps.length && m.kind === 'info') g.steps[g.steps.length - 1].out.push(m.text)
       else g.notes.push(m)
       continue
@@ -108,10 +109,109 @@ function Step({ s, running }) {
           {running && <span>도는 중</span>}
         </div>
         {s.think && <ThinkBlock text={s.think.text} secs={s.think.secs} chars={s.think.chars} cut={s.think.cut} />}
+        {s.imgs?.length > 0 && <StepImgs names={s.imgs} />}
         {shown.length > 0 && <pre class="mt-1 bg-code rounded-lg px-2.5 py-1.5 font-mono text-xs text-mute whitespace-pre-wrap break-all max-h-60 overflow-auto"
           onClick={s.ok !== false ? toggle : undefined}>{shown.map(l => l.replace(/^ {4}/, '')).join('\n')}</pre>}
       </div>
       {s.rep > 1 && <span class="text-[11px] px-2 py-px rounded-full font-semibold whitespace-nowrap text-bad bg-bad/15" title="같은 도구가 같은 오류를 낸 횟수">같은 오류 {s.rep}번째</span>}
+    </div>
+  )
+}
+
+// 도구가 본 그림(판 91): 작업 줄 아래 작은 그림 — 누르면 원래 크기로 새 창
+const imgUrl = n => '/api/img?chat=' + encodeURIComponent(chat.value) + '&n=' + encodeURIComponent(n)
+function StepImgs({ names }) {
+  return (
+    <div class="mt-1 flex gap-1.5 flex-wrap">
+      {names.slice(-4).map(n => (
+        <a key={n} href={imgUrl(n)} target="_blank" rel="noopener" class="block rounded-md overflow-hidden border border-soft"
+          title="도구가 본 그림 — 누르면 원래 크기">
+          <img src={imgUrl(n)} alt="도구가 본 그림" loading="lazy" class="block max-h-40 max-w-[240px] max-md:max-w-[46vw] object-contain" />
+        </a>
+      ))}
+    </div>
+  )
+}
+
+// 판 104(SW-45 ④·A): 작업 폴더 파일 열기·내려받기 — /api/file(읽기 전용, @파일과 같은 경계, HTML·SVG 는 내려받기만)
+const fileUrl = (p, dl) => '/api/file?chat=' + encodeURIComponent(chat.value) + '&path=' + encodeURIComponent(p) + (dl ? '&dl=1' : '')
+const fileView = signal(null)
+const VIEW_TEXT = /\.(md|txt|csv|tsv|json|toml|ya?ml|py|js|ts|jsx|tsx|sh|log|ini|cfg|rs|go|java|c|h|cpp|css|sql|rst|tex)$/i
+const VIEW_IMG = /\.(png|jpe?g|gif|webp)$/i
+export function openFile(path) {
+  if (VIEW_IMG.test(path) || /\.pdf$/i.test(path)) { window.open(fileUrl(path), '_blank', 'noopener'); return }
+  if (!VIEW_TEXT.test(path)) { window.location.href = fileUrl(path, true); return }
+  fileView.value = { path, text: null }
+  fetch(fileUrl(path), { credentials: 'same-origin' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? '열 수 없는 파일' : 'HTTP ' + r.status)))
+    .then(t => { fileView.value = { path, text: t } }, e => { fileView.value = null; toast(path + ': ' + e.message) })
+}
+function FileViewer() {
+  const v = fileView.value
+  if (!v) return null
+  const md = /\.md$/i.test(v.path)
+  return (
+    <div class="fixed inset-0 z-50 bg-black/40 flex items-end md:items-center justify-center" onClick={() => { fileView.value = null }}>
+      <div class="bg-panel w-full md:w-[min(900px,92vw)] max-h-[88vh] rounded-t-2xl md:rounded-2xl shadow-card flex flex-col" onClick={e => e.stopPropagation()}>
+        <div class="flex items-center gap-2 px-4 py-2.5 border-b border-line">
+          <span class="font-mono text-[13px] truncate flex-1" title={v.path}>{v.path}</span>
+          <a class="btn !py-1 !px-2.5 text-sm" href={fileUrl(v.path, true)}>내려받기</a>
+          <button class="btn !py-1 !px-2.5 text-sm" onClick={() => { fileView.value = null }}>닫기</button>
+        </div>
+        <div class="overflow-auto px-4 py-3 text-[14px]">
+          {v.text == null ? <span class="text-mute">여는 중…</span>
+            : md ? <Md text={v.text} /> : <pre class="font-mono text-xs whitespace-pre-wrap break-all">{v.text.slice(0, 400000)}</pre>}
+        </div>
+      </div>
+    </div>
+  )
+}
+// 판 105(SW-45 ①): 차례 되감기 — 파일만 되돌리기 / 차례를 지우고 내 말을 입력 칸에
+function undoTurn(turn, cut) {
+  const ask = cut ? `차례 ${turn} 을 지우고 그 말을 입력 칸에 되돌릴까요? 그 차례 뒤로 도구가 바꾼 파일도 되돌린다(셸 명령이 바꾼 것은 못 되돌린다).`
+    : `차례 ${turn} 시작 때로 파일을 되돌릴까요? 대화는 그대로다(셸 명령이 바꾼 것은 못 되돌린다).`
+  if (!window.confirm(ask)) return
+  cpost('/api/main/undo_turn', { turn, cut }).then(r => {
+    if (cut && r.text != null) composerFill.value = { target: 'main', text: r.text }
+    refresh()
+  }, e => toast('안 됨: ' + e.message))
+}
+function FilesCard({ paths, turn }) {
+  return (
+    <div class="my-2 border border-line rounded-xl px-3 py-2 bg-panel text-[13px]">
+      <div class="font-semibold mb-1 flex items-center gap-2"><span class="flex-1">이번 차례에 만든·바꾼 파일 {paths.length}개</span>
+        {turn && !busy.value && <button class="btn !py-0.5 !px-2 text-xs" title="이 차례 시작 때로 파일을 되돌린다(셸이 바꾼 파일은 못 되돌린다)"
+          onClick={() => undoTurn(turn, false)}>↶ 이 차례 되돌리기</button>}</div>
+      {paths.map(p => <div key={p} class="flex items-center gap-2 py-0.5">
+        <button class="font-mono truncate flex-1 text-left hover:underline" title={p} onClick={() => openFile(p)}>{p}</button>
+        <button class="btn !py-0.5 !px-2 text-xs" onClick={() => openFile(p)}>열기</button>
+        <a class="btn !py-0.5 !px-2 text-xs" href={fileUrl(p, true)}>받기</a>
+      </div>)}
+    </div>
+  )
+}
+// 답 글 안 `경로` 꼴 코드 조각을 누르면 연다(없거나 못 내주는 파일이면 알림만)
+const PATH_RX = /^[\w.\-\/가-힣]+\.[A-Za-z0-9]{1,6}$/
+function onAnswerClick(e) {
+  const t = e.target
+  if (t && t.tagName === 'CODE' && !t.closest('pre') && PATH_RX.test(t.textContent || '') && !/^https?:/.test(t.textContent)) openFile(t.textContent)
+}
+
+// 판 106(SW-45 ⑫): ask_user 선택지 단추 — 누르면 그 글이 다음 사람 말로 간다("직접 쓰기"는 입력 칸)
+function AskOptions({ opts }) {
+  const send = t => cpost('/api/main', { text: t }).then(refresh, e => toast('안 됨: ' + e.message))
+  return <div class="mt-2 flex gap-1.5 flex-wrap">
+    {opts.map(o => <button key={o} class="btn !py-1.5 !px-3 text-sm" onClick={() => send(o)}>{o}</button>)}
+    <button class="btn btn-ghost !py-1.5 !px-3 text-sm" onClick={() => document.querySelector('textarea')?.focus()}>직접 쓰기</button>
+  </div>
+}
+
+// 사람이 보낸 사진(판 98): 말 줄 아래 작은 그림 — 누르면 원본(새 탭)
+export function UserImgs({ names }) {
+  return (
+    <div class="mt-1.5 flex gap-1.5 flex-wrap justify-end">
+      {names.map(n => <a key={n} href={imgUrl(n)} target="_blank" rel="noopener" class="block rounded-lg overflow-hidden border border-line" title="보낸 사진 — 누르면 원본">
+        <img src={imgUrl(n)} alt="보낸 사진" loading="lazy" class="block max-h-44 max-w-[220px] max-md:max-w-[42vw] object-cover" />
+      </a>)}
     </div>
   )
 }
@@ -231,7 +331,7 @@ function MemPlan({ m }) {
   const plan = m.plan || []
   const [pick, setPick] = useState({}), [done, setDone] = useState(null)
   async function go(accept) {
-    try { const r = await post('/api/memory/consolidate', { accept }); setDone(r); refresh() }
+    try { const r = await cpost(m.api || '/api/memory/consolidate', { accept }); setDone(r); refresh() }
     catch (e) { toast('안 됨: ' + e.message) }
   }
   const chosen = plan.filter(p => pick[p.n] === true).map(p => p.n)
@@ -245,7 +345,7 @@ function MemPlan({ m }) {
           <button class={'btn !py-1.5 !px-3 text-sm ' + (pick[p.n] === false ? 'btn-ghost line-through' : '')} onClick={() => setPick({ ...pick, [p.n]: false })}>두기</button>
         </div>}
       </div>)}
-      {done ? <div class="text-xs text-mute mt-2">{done.applied?.length ? `${done.applied.length}개 받음 — 되돌리기: stewart memory consolidate --revert ${String(done.backup || '').split('/').pop()}` : '받은 것이 없어 바꾸지 않았다'}</div>
+      {done ? <div class="text-xs text-mute mt-2">{done.applied?.length ? `${done.applied.length}개 받음 — 되돌리기: ${m.revert || 'stewart memory consolidate --revert'} ${String(done.backup || '').split('/').pop()}` : '받은 것이 없어 바꾸지 않았다'}</div>
         : <div class="flex gap-2 mt-2 flex-wrap">
           <button class="btn btn-ok !py-2 !px-3.5" onClick={() => go('all')}>모두 받기</button>
           <button class="btn !py-2 !px-3.5" disabled={!chosen.length} onClick={() => go(chosen)}>고른 것 적용({chosen.length})</button>
@@ -380,6 +480,7 @@ export function Thread({ log, prior }) {
   return (
     <>
       {prior}
+      <FileViewer />
       {!groups.length && !busy.value && (
         <div class="text-center text-mute py-16">
           <div class="text-lg font-semibold text-fg mb-1">{(hub.value?.chat || 'main') === 'main' ? '메인에게 할 일을 말하십시오' : '새 대화 — 메인과 같은 채팅입니다'}</div>
@@ -387,12 +488,17 @@ export function Thread({ log, prior }) {
         </div>
       )}
       {groups.map((g, i) => {
-        if (g.type === 'user') return <div key={g.key} class="flex justify-end my-4"><div class="bg-soft px-3.5 py-2.5 rounded-[16px_16px_4px_16px] max-w-[78%] max-md:max-w-[88%] whitespace-pre-wrap break-words">{g.m.text}</div></div>
-        if (g.type === 'assistant') return <div key={g.key} class="my-4 tline"><Md text={g.m.text} />
+        if (g.type === 'user') return <div key={g.key} class="my-4 tline"><div class="flex justify-end"><div class="bg-soft px-3.5 py-2.5 rounded-[16px_16px_4px_16px] max-w-[78%] max-md:max-w-[88%] whitespace-pre-wrap break-words">{g.m.text}</div></div>
+          {g.m.turn && !busy.value && <div class="tbar flex justify-end mt-0.5"><button class="tb text-[12px]" title="이 차례를 지우고 내 말을 입력 칸에 되돌린다(고쳐 다시 보내기)"
+            onClick={() => undoTurn(g.m.turn, true)}>↶ 되감기</button></div>}
+          {g.m.imgs?.length > 0 && <UserImgs names={g.m.imgs} />}</div>
+        if (g.type === 'assistant') return <div key={g.key} class="my-4 tline" onClick={onAnswerClick}><Md text={g.m.text} />
+          {g.m.options?.length > 0 && i === tail && !busy.value && <AskOptions opts={g.m.options} />}
           {lastOfTurn.has(i) && g.m.turn !== curTurn && <TrainBar m={g.m} />}</div>
         if (g.type === 'diff') return <DiffCard key={g.key} text={g.m.text} stat={g.m.stat} />
         if (g.type === 'think') return <ThinkBlock key={g.key} text={g.m.text} secs={g.m.secs} chars={g.m.chars} cut={g.m.cut} />
-        if (g.type === 'steps') return <StepsCard key={g.key} g={g} last={i === lastSteps && i >= tail - 1} />
+        if (g.type === 'steps') return <div key={g.key}><StepsCard g={g} last={i === lastSteps && i >= tail - 1} />
+          {g.paths?.length > 0 && <FilesCard paths={g.paths} turn={g.turn} />}</div>
         if (g.type === 'todo') return <TodoCard key={g.key} ts={g.m.ts + g.m.text.length} latest={i === lastTodo}
           todos={i === lastTodo ? liveTodos : (g.m.todos || [])} />   // 가장 최근 카드는 지금 목록으로 그 자리에서 고쳐진다
         if (g.type === 'memory') return <MemLine key={g.key} m={g.m} />

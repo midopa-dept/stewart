@@ -53,6 +53,7 @@ from . import projcfg as PC
 from . import allowrules as AR
 from . import components as CM
 from . import train as TRAIN
+from . import examples as EX
 from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
@@ -286,6 +287,11 @@ class ChatSession:
             if MG.NAME in profile.manager_tools:
                 defs.append(MG.DEFINITION)
             defs = [d for d in defs if d["function"]["name"] in profile.manager_tools]
+        # 허브 켬·끔 손잡이(판 99): 프로필 toggle_tools 의 도구는 사람이 켤 때만 모델에게 보인다(기본 끔, toggle_on 에 적으면 켬)
+        self.toggleable = [n for n in (profile.raw or {}).get("toggle_tools") or [] if any(d["function"]["name"] == n for d in defs)]
+        self.disabled_tools = {n for n in self.toggleable if n not in ((profile.raw or {}).get("toggle_on") or [])}
+        self._all_defs = defs
+        defs = [d for d in defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_defs = defs
         self.tool_names = [d["function"]["name"] for d in defs]
         self.ledger = MG.Ledger(rec.dir / "ledger.json", "(대화)") if MG.NAME in self.tool_names else None
@@ -293,6 +299,7 @@ class ChatSession:
                               artifacts_dir=rec.dir, **T.secret_options(profile))
         self.env.vision = bool(backend.vision)
         from . import webnudge as WN
+        self.dnudge = DG.Nudge(on=DG.nudge_on() and DG.NAME in self.tool_names)   # 맡기기 넛지(판 97)
         self.nudge = WN.Nudger(search=self.web_status["search"] and "web_search" in self.tool_names,
                                fetch=self.web_status["fetch"] and "web_fetch" in self.tool_names, on=WN.enabled())
         from . import toolrepair as TR   # 견고성(판 81): 본문 툴콜·깨진 인자 복구·편집 되먹임(실사용 켬), 생각 되돌려 보내기(기본 끔)
@@ -313,7 +320,8 @@ class ChatSession:
         if self.mem is not None:   # L3 주입
             mtext, self.mem_inject = self.mem.inject()
             system += "\n\n" + mtext
-        self._env_note: str | None = envinfo.user_note(self.env_info)   # 다이어트 안 a: 이 세션 첫 사람 입력 앞에 붙인다
+        self._env_note: str | None = (envinfo.user_note(self.env_info)   # 다이어트 안 a: 이 세션 첫 사람 입력 앞에 붙인다
+                                      if os.environ.get("STEWART_ENV_BLOCK", "1") != "0" else None)   # 판 100: 끄는 손잡이
         if self.forge is not None:
             system += "\n\n" + FG.note(self.forge)
         if profile.language == "ko":
@@ -366,6 +374,9 @@ class ChatSession:
             "resumed_from": resumed_from, "resumed_messages": len(self.messages) - 1 if history else 0,
             "started": datetime.now().isoformat(timespec="seconds"),
         }
+        from . import features as FT
+        self.meta["features"] = FT.fingerprint(self.messages[0].get("content") if self.messages and self.messages[0].get("role") == "system" else "",
+                                               self.tool_defs, "chat", {"toggled_off": sorted(getattr(self, "disabled_tools", ()))})
         rec.event("run_start", meta=self.meta, messages=self.messages)
         if history:
             n_user = sum(1 for m in self.messages if m.get("role") == "user")
@@ -646,6 +657,10 @@ class ChatSession:
                               result=f"[엔진] {', '.join(sec[:3])} 은 비밀 꼴 파일이다. {ST.NAMES_ONLY_HINT}")
                     self.ui.warn(f"    비밀 꼴 파일 내용 읽기라 돌리지 않았다: {', '.join(sec[:3])}")
                     return tc
+        if name in getattr(self, "disabled_tools", ()):
+            tc.update(ok=False, elapsed_s=0.0, result=f"[엔진] {name} 도구는 지금 꺼져 있다 — 사람이 허브에서 켜야 쓸 수 있다. 다른 길로 하거나 사람에게 켜 달라고 말한다.")
+            self.ui.warn(f"    꺼진 도구: {name}")
+            return tc
         if name not in self.tool_names:
             tc.update(ok=False, result=T.unknown_tool(name, self.tool_names), elapsed_s=0.0)
             self.ui.warn("    없는 도구")
@@ -655,6 +670,8 @@ class ChatSession:
             if not q:
                 tc.update(ok=False, result="question 이 비었다. 무엇을 묻는지 적어 다시 호출하라.", elapsed_s=0.0)
                 return tc
+            if not self._asked:
+                self._asked_opts = [str(o).strip()[:200] for o in (args.get("options") or []) if str(o).strip()][:8]   # 판 106: 화면 단추
             self._asked = self._asked or q
             tc.update(ok=True, result=clarify.TOOL_RESULT, elapsed_s=0.0, question=q)
             return tc
@@ -1058,6 +1075,16 @@ class ChatSession:
                 except OSError:
                     pass
 
+    def set_tool(self, name: str, on: bool) -> bool:
+        """허브 켬·끔(판 99): toggle_tools 의 도구를 다음 걸음부터 모델에게 보이게·안 보이게."""
+        if name not in getattr(self, "toggleable", []):
+            return False
+        (self.disabled_tools.discard if on else self.disabled_tools.add)(name)
+        self.tool_defs = [d for d in self._all_defs if d["function"]["name"] not in self.disabled_tools]
+        self.tool_names = [d["function"]["name"] for d in self.tool_defs]
+        self.rec.event("tool_toggle", name=name, on=bool(on))
+        return True
+
     def label(self, turn: int, kind: str, by: str = "human", note: str = "") -> bool:
         """학습 표시(판 89, SW-39): 기록에 train_label 사건만 남긴다(대화·모델 문맥은 그대로). kind ∈ TRAIN.LABELS."""
         if kind not in TRAIN.LABELS or not (1 <= int(turn) <= self.st["turns"]):
@@ -1102,6 +1129,8 @@ class ChatSession:
                     else:
                         self.ui.dim(f"  (기억함: {sent[:80]} — 지우기: 허브 화면 또는 기억 폴더)")
         cp = self.cps.begin(text.splitlines()[0] if text else "")
+        self._turn_cp = getattr(self, "_turn_cp", {})
+        self._turn_cp[self.st["turns"]] = cp   # 판 105: 차례 되감기(그 차례 시작 체크포인트)
         self.rec.event("checkpoint", id=cp, turn=self.st["turns"])
         if self._skill_note:    # /skill 로 사람이 고른 스킬 본문(다음 사람 입력 앞에)
             text = self._skill_note + "\n\n" + text
@@ -1129,13 +1158,25 @@ class ChatSession:
         if getattr(self.ui, "goal_notes", False) and (todos_open or self.bans or self._last_reason not in (None, "answered", "asked")):
             text = text + "\n\n" + NEW_GOAL_NOTE   # 앞 차례의 미완 걸음·목록·되짚기 계획이 이 말을 덮지 않게
         self.nudge.reset_turn()
+        self.dnudge.reset_turn()
         rn = self.nudge.on_turn(self._raw_text)   # 웹 넛지: 최신 사실을 묻는 말이면 "먼저 웹으로 확인"
         if rn:
             text += rn
             self.rec.event("web_nudge", why_kind="recent", why=self.nudge.log[-1]["why"])
             self.comps.fire("web_nudge", self.st.get("steps", 0), "recent", "nudge")
+        if self.mem is not None and EX.enabled():   # 예시 은행(판 92): 비슷한 지난 일의 받아 둔 꼴 하나
+            try:
+                hit = EX.pick(EX.load(self.mem.store.dir), self._raw_text)
+            except (OSError, ValueError, AttributeError):
+                hit = None
+            if hit is not None:
+                text += EX.block(hit[0])
+                self.rec.event("example_used", id=hit[0]["id"], score=hit[1])
+        self._turn_at = getattr(self, "_turn_at", {})
+        self._turn_at[self.st["turns"]] = (len(self.messages), self._raw_text)   # 판 105: 그 차례 사람 말 자리
         self.messages.append({"role": "user", "content": IMG.content(text, images or [])})
         self.rec.event("user", turn=self.st["turns"], content=text, images=len(images or []) or None,
+                       **({"img_names": [x.name for x in (IMG.path_of(q) for q in images) if x]} if images else {}),
                        **({"raw": self._raw_text} if self._raw_text != text else {}))
         self.rec.md(f"## 사람 (차례 {self.st['turns']})\n\n```\n{text}\n```\n")
         consecutive = 0
@@ -1282,6 +1323,11 @@ class ChatSession:
                             RF.append_user(self.messages, NARRATE_NOTE)
                             self.rec.event("narrate_nudge", step=step, silent=self._silent)
                     self._todo_watch(step, srec["tool_calls"])   # 할 일 목록이 걸음을 따라오는지(판 85)
+                    dn = self.dnudge.on_step(self._turn_calls)
+                    if dn:   # 맡기기 넛지(판 97): 읽기를 많이 한 차례에 한 번
+                        RF.append_user(self.messages, dn)
+                        self.rec.event("delegate_nudge", step=step, reads=sum(1 for c in self._turn_calls if c.get("name") in DG.READ_TOOLS))
+                        self.comps.fire("delegate_nudge", step, "reads", "nudge")
                     wn = self.nudge.on_budget(budget - n, sum(1 for c in self._turn_calls if c.get("name") in T.WEB_TOOLS))
                     if wn:   # 웹 끝맺기(판 90): 남은 걸음이 거의 없으면 찾은 것으로 답하게
                         RF.append_user(self.messages, wn)
@@ -1310,6 +1356,10 @@ class ChatSession:
                         self.messages.append({"role": "assistant", "content": self._asked})
                         self.rec.event("asked", step=step, question=self._asked)
                         self.ui.assistant("질문: " + self._asked)
+                        hook = getattr(self.ui, "asked_options", None)
+                        if hook is not None and getattr(self, "_asked_opts", None):
+                            hook(self._asked_opts)
+                        self._asked_opts = []
                         reason = "asked"
                         break
                     if self._repeat_stop:
@@ -1438,6 +1488,10 @@ class ChatSession:
         self.ui.dim(f"  [{reason} · 단계 {self.st['steps']} · 프롬프트 {self.st['last_prompt_tokens']}/{self.backend.max_context} tok"
                     f" · 생성 합 {self.st['completion_tokens']} tok · 모델 {self.st['model_time_s']:.0f}초]")
         changed = sorted({e["path"] for e in self.cps.cur["files"]}) if (self.cps.cur and self.cps.cur.get("files")) else []
+        extra = list(getattr(self.env, "turn_extra_files", None) or [])   # 판 107: 도구가 체크포인트 밖에서 만든 파일
+        if extra:
+            self.env.turn_extra_files = []
+            changed = sorted(set(changed) | {str(x) for x in extra})
         if changed and hasattr(self.ui, "turn_files"):   # 허브 화면: "이번 차례에 바뀐 파일" 한 줄
             self.ui.turn_files([os.path.relpath(f, self.profile.workdir) if os.path.isabs(f) else f for f in changed])
         self.rec.event("turn_end", turn=self.st["turns"], reason=reason, **({"reflect": rsum} if rsum else {}),
@@ -1454,6 +1508,9 @@ class ChatSession:
         parts, self.env.pending_images = list(self.env.pending_images), []
         self.messages.append({"role": "user", "content": IMG.content(f"[엔진] view_image 로 연 이미지 {len(parts)}장", parts)})
         self.rec.event("image_attach", n=len(parts))
+        hook = getattr(self.ui, "tool_images", None)   # 허브: 작업 카드 안에 그 그림(판 91)
+        if hook is not None:
+            hook([str(x) for x in (IMG.path_of(q) for q in parts) if x])
 
     def _block(self, calls: list) -> None:
         """되짚기 뒤 이 차례에 같은 호출을 막는다(결과가 앞과 같을 것이라 돌리지 않는다)."""
@@ -1649,6 +1706,53 @@ class ChatSession:
                              + (", ".join(os.path.relpath(f, self.profile.workdir) for f in files) or "없음")
                              + ". 그 뒤 네가 한 파일 변경은 지금 없다. 필요하면 다시 읽어라.]")
         return rep
+
+    def set_budget(self, tokens: int | None) -> int:
+        """판 105: 이 대화의 문맥 예산(압축 문턱을 재는 창). None 이면 백엔드 설정 그대로. 서버 창보다 크게는 못 한다. 지금 예산을 돌려준다."""
+        import dataclasses
+        base = getattr(self, "_backend0", None) or self.backend
+        self._backend0 = base
+        if tokens is not None:
+            tokens = max(4096, min(int(tokens), base.max_context))
+        self.backend = base if tokens is None else dataclasses.replace(base, context_budget=tokens)
+        self.backend.used = base.used                        # 누계는 같은 것을 쓴다
+        self.comp = self._new_compactor()
+        self.rec.event("context_budget", tokens=tokens, window=self.backend.budget())
+        return self.backend.budget()
+
+    def undo_turn(self, turn: int, files: bool = True, cut: bool = True) -> dict:
+        """판 105(SW-45 ①): 차례 turn 을 되감는다 — files 면 파일을 그 차례 시작 때로(그 뒤 차례들의 도구 쓰기 포함, 셸이 바꾼 것은 못 되돌림),
+        cut 이면 대화를 그 차례 사람 말 앞에서 자른다(그 말은 돌려줘서 사람이 고쳐 다시 보낸다). {restored, not_restored, text, dropped}."""
+        at = getattr(self, "_turn_at", {}).get(turn)
+        cp = getattr(self, "_turn_cp", {}).get(turn)
+        if at is None or cp is None:
+            raise ValueError("그 차례의 자리를 모른다(이 대화에서 시작한 차례만 되감는다)")
+        idx, raw = at
+        out = {"turn": turn, "text": raw, "restored": [], "not_restored": [], "dropped": 0}
+        if cut:
+            m = self.messages[idx] if idx < len(self.messages) else None
+            ok = m is not None and m.get("role") == "user" and raw[:200] in IMG.text_of(m.get("content"))
+            if not ok:
+                raise ValueError("접기·요약 뒤라 그 차례 자리를 찾지 못했다 — 파일만 되돌릴 수 있다")
+        if files:
+            try:
+                rep = self.cps.rewind(cp)
+                out["restored"] = [os.path.relpath(f, self.profile.workdir) for f in rep["restored"] + rep["moved_aside"]]
+                out["not_restored"] = rep.get("skipped") or []
+            except ValueError:
+                pass   # 그 차례 뒤로 바뀐 파일이 없다
+        if cut:
+            out["dropped"] = len(self.messages) - idx
+            self.messages = self.messages[:idx]
+            self._turn_at = {t: v for t, v in self._turn_at.items() if t < turn}
+            self._turn_cp = {t: v for t, v in self._turn_cp.items() if t < turn}
+            self._rewind_note = None
+            save_messages(self.rec.dir, self.messages)
+        elif files and out["restored"]:
+            self._rewind_note = (f"[사람이 파일을 차례 {turn} 시작 때로 되돌렸다. 되돌린 파일: " + ", ".join(out["restored"])
+                                 + ". 그 뒤 네가 한 파일 변경은 지금 없다. 필요하면 다시 읽어라.]")
+        self.rec.event("turn_undo", turn=turn, files=files, cut=cut, restored=len(out["restored"]), dropped=out["dropped"])
+        return out
 
     def reset(self) -> None:
         self.messages = [{"role": "system", "content": self.system}]

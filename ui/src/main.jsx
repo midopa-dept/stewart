@@ -6,9 +6,9 @@ import { useEffect, useRef, useState, useLayoutEffect } from 'preact/hooks'
 import './app.css'
 import { get, post, fmtK, estTokens } from './lib.js'
 import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
-import { Thread, Md, TodoItems } from './thread.jsx'
+import { Thread, Md, TodoItems, UserImgs } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
-import { Sidebar, ConnDot, ModelDot, ExternalChip } from './side.jsx'
+import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips } from './side.jsx'
 import { Panel } from './panel.jsx'
 import { useWorker, WorkerThread, WorkerControls, WorkerInfo } from './worker.jsx'
 
@@ -75,7 +75,8 @@ function Prior() {
       {open && p && <div class="mt-2 text-fg text-[14px] border-t border-line pt-2 max-h-[60vh] overflow-auto">
         {p.start > 0 && <button class="btn btn-ghost w-full mb-2" onClick={more}>앞 {p.start}줄 더 보기</button>}
         {p.items.map((it, i) => it.kind === 'assistant' ? <div key={i} class="my-2"><Md text={it.text} /></div>
-          : <div key={i} class={'my-1 whitespace-pre-wrap ' + (it.kind === 'user' ? 'font-semibold' : 'text-mute text-[13px]')}>{it.kind === 'user' ? '사람: ' : it.kind === 'tool' ? '⏺ ' : ''}{it.text.slice(0, 2000)}</div>)}
+          : <div key={i} class={'my-1 whitespace-pre-wrap ' + (it.kind === 'user' ? 'font-semibold' : 'text-mute text-[13px]')}>{it.kind === 'user' ? '사람: ' : it.kind === 'tool' ? '⏺ ' : ''}{it.text.slice(0, 2000)}
+            {it.imgs?.length > 0 && <UserImgs names={it.imgs} />}</div>)}
       </div>}
     </div>
   )
@@ -136,7 +137,7 @@ function Center() {
       {/* 둘째 줄: 상태 칩(넘쳐도 첫 줄의 문맥 막대·단추를 밀지 않게 따로, 가로로 넘기면 옆으로 민다) */}
       <div class="flex items-center gap-1.5 px-5 max-md:px-3 pb-2 overflow-x-auto scroll-thin whitespace-nowrap text-xs">
         {isMain && main?.workdir && <span class="chip truncate max-w-64 flex-none" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span>}
-        <ConnDot /><ModelDot /><ExternalChip />
+        <ConnDot /><ModelDot /><ExternalChip /><ModeChips /><ToolChips />
       </div>
       </div>
       <div class="flex-1 overflow-auto scroll-thin" ref={ref} onScroll={onScroll}>

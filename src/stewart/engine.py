@@ -162,6 +162,8 @@ def _error_kind(name: str, tc: dict, result: str) -> str:
     r = result or ""
     if r.startswith(("인자가 빠졌다", "모르는 인자")):
         return "schema"
+    if r.startswith(("old 문자열을 찾지 못했다", "old 문자열이")):   # 판 102: 편집 불일치를 따로 센다(R1 사다리)
+        return "edit_mismatch"
     if r.startswith("없는 도구") or "모르는 도구" in r[:40]:
         return "unknown_tool"
     if r.startswith("[시간 초과]") or "시간 초과" in r[:60]:
@@ -451,6 +453,12 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         **({"images": img_desc} if img_desc else {}),
         "started": datetime.now().isoformat(timespec="seconds"),
     }
+    from . import features as _FT, selfcheck as _SCK, toolrepair as _TRK
+    meta["features"] = _FT.fingerprint(messages[0].get("content") if messages and messages[0].get("role") == "system" else "",
+                                       tool_defs, "run", {"selfcheck": {k: v for k, v in _SCK.flags(profile).items() if k in _SCK.ENVS},
+                                                          "repair": _TRK.on("STEWART_TOOLCALL_REPAIR", False),
+                                                          "edit_feedback": _TRK.on("STEWART_EDIT_FEEDBACK", False),
+                                                          "passback": _TRK.passback()})
     rec.event("run_start", meta=meta, messages=messages)
     if tool_defs:   # 학습 내보내기(판 90): 보낸 도구 정의 그대로(대화형은 chat 이 바뀔 때마다 남긴다)
         rec.event("tool_defs", step=0, defs=tool_defs)

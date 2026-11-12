@@ -16,10 +16,10 @@ from tests import test_u60 as U60
 from tests.test_u60 import resp
 from tests.test_u68 import call, write_events
 
-LOCAL = {"name": "q27", "base_url": "http://127.0.0.1:8080/v1", "model": "qwen-27b"}
+LOCAL = {"name": "local-a", "base_url": "http://127.0.0.1:8080/v1", "model": "base-model"}
 CLAUDE = {"name": "claude", "base_url": "https://api.anthropic.com", "model": "claude-x", "provider": "Anthropic", "external": True}
 DSEEK = {"name": "ds", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "provider": "api.deepseek.com", "external": True}
-POD = {"name": "pod", "base_url": "http://203.0.113.9:8000/v1", "model": "qwen-27b", "provider": "203.0.113.9", "external": True}
+POD = {"name": "pod", "base_url": "http://203.0.113.9:8000/v1", "model": "base-model", "provider": "203.0.113.9", "external": True}
 DEFS = [{"type": "function", "function": {"name": "read_file", "description": "읽기", "parameters": {"type": "object"}}}]
 
 
@@ -58,7 +58,7 @@ class TFormat(unittest.TestCase):
         self.assertEqual(r["tools"], DEFS)
         m = r["meta"]
         self.assertEqual((m["schema"], m["track"], m["license_tier"], m["turn"]), ("stewart-train/1", "live", "train-ok", 1))
-        self.assertEqual(m["backend"], {"name": "q27", "model": "qwen-27b", "provider": "local", "kind": "local"})
+        self.assertEqual(m["backend"], {"name": "local-a", "model": "base-model", "provider": "local", "kind": "local"})
         self.assertEqual(m["task_hash"], hashlib.sha256("a.txt 를 읽어라".encode()).hexdigest())   # 공백 접기·64자
         self.assertEqual((m["tool_calls"], m["tool_errors"]), (1, 1))
         self.assertEqual(m["run"], hashlib.sha256(b"20261112-090000-hub-main").hexdigest()[:12])
@@ -73,7 +73,7 @@ class TFormat(unittest.TestCase):
         self.assertEqual(st["written"], 2)
         self.assertEqual(st["excluded_tier"], {"private-eval-only": 1, "unknown": 1})
         got = {r["meta"]["backend"]["name"]: r["meta"]["license_tier"] for r in self.lines(self.tmp / "o")}
-        self.assertEqual(got, {"q27": "train-ok", "ds": "train-ok"})
+        self.assertEqual(got, {"local-a": "train-ok", "ds": "train-ok"})
         st = TRAIN.export(self.runs, self.tmp / "o2", "good", include_tiers={"train-ok", "private-eval-only", "unknown"})
         pod = [r for r in self.lines(self.tmp / "o2") if r["meta"]["backend"]["name"] == "pod"][0]
         self.assertEqual(pod["meta"]["backend"]["provider"], "ip-host")     # IP 는 싣지 않는다

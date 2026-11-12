@@ -28,7 +28,26 @@ With the same Claude models on the same coding tasks, stewart used 0.69–0.77×
 - **Context compaction:** following work showing that masking old tool output is as efficient as summarizing (The Complexity Trap), stewart masks first and summarizes only when that is not enough. The summary format draws on ACON and on writing from Anthropic and OpenHands.
 - **Memory:** building on MemGPT and Mem0 (a small always-loaded core plus searchable storage; checking new facts against old memories), memory is split three ways: policy, profile and knowledge.
 - **Working with a person:** step plans with check-ins, reflection and hand-off cards came from failures seen in real use, not from papers.
+- **Learning from past work:** good patterns are kept as examples and only one is attached to a similar task (no training), and marked runs can be exported as training data ([section below](#learning-from-past-work)).
 - [docs/research-notes.md](docs/research-notes.md) lists what each source contributed and where it is in stewart (in, partial, planned).
+
+## Contents
+
+- [How it differs from other runners](#how-it-differs-from-other-runners)
+- [Background](#background)
+- [Direction](#direction)
+- [How it works](#how-it-works)
+- [Ways to use it](#ways-to-use-it)
+- [Web hub](#web-hub)
+- [Tools the model gets](#tools-the-model-gets)
+- [Safety](#safety)
+- [Memory](#memory)
+- [Learning from past work](#learning-from-past-work)
+- [Same model, different runner](#same-model-different-runner)
+- [Install and first run](#install-and-first-run)
+- [Configuration](#configuration)
+- [Credits and references](#credits-and-references)
+- [License](#license)
 
 ## How it differs from other runners
 
@@ -78,7 +97,7 @@ Every run leaves a record, so you can check what the model said it did against t
 | `stewart hub` | The same work in a browser. One main conversation can start several worker sessions |
 | `stewart run` | Run one task to the end without a person (`auto` or `--plan`) |
 
-Other commands: `ping` (check the server), `backends`, `profiles`, `rewind`, `dream` (memory upkeep), `sessions` (clean up past hub sessions), `hub-user` (hub accounts), `organize` (folder clean-up plans), `queue` and `bench` (run many tasks). See `stewart <command> --help`.
+Other commands: `ping` (check the server), `backends`, `profiles`, `rewind`, `dream` (memory upkeep), `sessions` (clean up past hub sessions), `hub-user` (hub accounts), `organize` (folder clean-up plans), `queue` and `bench` (run many tasks), `improve` (learn from past conversations), `train` (export training data, teacher runs), `adapter` (LoRA adapters). See `stewart <command> --help`.
 
 ## Web hub
 
@@ -94,6 +113,10 @@ uv run stewart hub --project ~/my-project
   - Several conversations: start a new main conversation, branch the current one, or reopen a closed one. Approvals and stops apply per conversation. `/clear`, `/reset` and `/help` work.
   - Side panel: board, memory, steps, plan, always-allow rules, tokens.
   - Input: `/commands`, `@file`, pasted images. Large phone photos and HEIC are shrunk in the browser to 1600 px JPEG.
+  - Header: switch the mode (plan, ask, edit, auto) and thinking (default, on, off), and shrink this conversation's context budget (the window compaction is measured against). The mode cannot go wider than the one the hub was started with.
+  - Changed-files card: when a turn ends, the files it created or changed show with Open and Download. Markdown is rendered; images and PDFs open in a new tab. Clicking a path in code inside a reply also opens it. Files outside the working folder or with secret-looking names are refused, and HTML and SVG are download-only.
+  - Rewind: ↶ on one of your messages removes that turn and restores the files tools changed after it; your message comes back to the input box. ↶ on the files card restores the files only. Files changed by shell commands cannot be restored.
+  - Uploads and choices: 📎 in the input box puts documents, spreadsheets or PDFs in `inbox/` in the working folder (up to 20 MB, never overwriting). When the model asks with options, pick one with the buttons under the question.
   - Model server status dot: ready, starting, unreachable, auth refused.
 - New approvals raise a browser notification. Set `[hub] ntfy_url` to also send them to your phone with [ntfy](https://ntfy.sh).
 - By default the hub listens on loopback only (`127.0.0.1`, `::1`). To use it from another device, put something in front (an SSH tunnel, for example) or turn on account mode.
@@ -141,6 +164,27 @@ stewart runs shell commands the model chooses on your machine. The guards below 
 - Memory consolidation: `/memory` or "clean up my memory" in the hub, `stewart memory consolidate` in the terminal. The model reads the three parts once and proposes moves between parts, merges, removal candidates and shorter rewrites; you take or keep each item. A copy is saved before anything is applied and `--revert` restores it (`--dry-run` only shows the proposals).
 - Hand-written rule files (`AGENTS.md`, `STEWART.md`) win over memory when they conflict.
 - The memory folder is `~/.local/share/stewart/memory` (`STEWART_MEMORY_DIR`).
+
+## Learning from past work
+
+There are two ways: learning from past conversations without training, and exporting them as training data. Either way, only what a person picks and accepts is kept.
+
+- **Marking:** press 👍 or 👎 on a reply in the hub, or type `/good` or `/bad` in chat. When the next message asks for a correction, the previous turn gets a "corrected" tag (click to remove it).
+- **Example bank:** good patterns live in `examples.md` in the memory folder. At the start of a turn, only **one** example, the one sharing the most words with your message, is appended to your message. The system prompt stays the same, so the prompt cache is not broken. Turn it off with `STEWART_EXAMPLES=0`.
+- **Learn from past conversations:** `/improve` or "learn from past conversations" in the hub, or `stewart improve` in the terminal.
+  - The model reads the 👍 and corrected turns once and proposes examples, policies and skill drafts.
+  - Code re-checks that the cited turns exist, and checks secrets, length and overlap. You take or keep each item.
+  - Skill drafts are kept aside and only turn on once you move them in.
+  - A copy is saved before anything is applied, and `--revert` restores it. `--stats` compares 👍 and correction rates for turns with and without an example.
+  - With an external API backend, the selected turns go to that provider, so it asks first.
+- **Export as training data:** `stewart train export` writes the marked turns as OpenAI chat JSONL.
+  - Secrets, home paths and user names are masked; engine nudges and failed calls are left out.
+  - By default it filters by a table of terms tiers per data source.
+  - `stewart train teacher` runs a task pool with test commands on another backend and keeps only runs whose tests pass, with cost and run caps.
+  - Training and evaluation are handled by the separate tool [stewart-tune](https://github.com/midopa-dept/stewart-tune).
+- **Choosing a LoRA adapter:** `adapters` and `adapter` in the backends table pick an adapter loaded on the server (the model field for vLLM, the lora field for llama.cpp).
+  - `STEWART_ADAPTER=off` goes back to the base model in one line.
+  - `stewart adapter` checks that it is loaded on the server.
 
 ## Same model, different runner
 

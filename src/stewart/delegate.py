@@ -34,9 +34,48 @@ WORKER_NOTE = ("너는 부모 에이전트가 맡긴 일 하나만 하는 작업
                "맡은 일 밖의 일(다른 파일 고치기, 코드 새로 쓰기 등)은 맡은 글에 적힌 경우에만 한다. "
                "다 하면 도구 호출 없이, 찾은 값·한 일·바꾼 파일을 사실 그대로 짧게 적어 끝낸다.")
 
+# 맡기기 넛지(판 97, SW-43 ①): 모델이 스스로 delegate 를 고르는 일이 거의 없어서(평가 code 기록 9,171 중 0), 한 차례에 읽기를
+# 많이 할 때 한 번 "맡기면 문맥이 덜 찬다"를 끼운다. chat·허브만(엔진 평가 길은 쓰지 않는다). STEWART_DELEGATE_NUDGE=0 이면 끔.
+READ_TOOLS = frozenset({"read_file", "search", "glob", "list_dir", "doc_search", "peek", "scan_read", "folder_scan"})
+NUDGE_READS = 8
+NUDGE_PER_SESSION = 3
+NUDGE_NOTE = ("\n\n[엔진] 이 차례에 읽기 도구를 {n}번 불렀다. 남은 조사가 넓으면 delegate(task=…)로 맡기고 결과 글만 받아라 — "
+              "이 대화 문맥이 덜 찬다(작업자는 이 대화를 못 보니 task 에 목표·범위·돌려받을 것을 다 적는다). 곧 끝날 일이면 그대로 한다.")
+
+
+def nudge_on(env=None) -> bool:
+    import os
+    return (os.environ if env is None else env).get("STEWART_DELEGATE_NUDGE", "1") != "0"
+
+
+class Nudge:
+    def __init__(self, on: bool = True):
+        self.on, self.turn_done, self.session_n = on, False, 0
+
+    def reset_turn(self) -> None:
+        self.turn_done = False
+
+    def on_step(self, calls: list[dict]) -> str:
+        """이 차례 호출들(_turn_calls) → 끼울 글(없으면 "")."""
+        if not self.on or self.turn_done or self.session_n >= NUDGE_PER_SESSION:
+            return ""
+        if any(c.get("name") == NAME for c in calls):
+            return ""
+        n = sum(1 for c in calls if c.get("name") in READ_TOOLS)
+        if n < NUDGE_READS:
+            return ""
+        self.turn_done = True
+        self.session_n += 1
+        return NUDGE_NOTE.format(n=n)
+
+
+# 엔진(평가) 길의 설명은 판 97 전 그대로 둔다(평가 조건을 바꾸지 않게). chat·허브는 CHAT_DEFINITION(언제 맡기는지 적힘)을 쓴다.
+DESC_SHORT = "새 문맥의 작업자에게 일 하나를 맡기고 결과 글만 받는다. 작업자는 이 대화를 못 보니 task 에 다 적는다. 짧은 일은 직접 한다."
+
+
 DEFINITION = {"type": "function", "function": {
     "name": NAME,
-    "description": "새 문맥의 작업자에게 일 하나를 맡기고 결과 글만 받는다. 작업자는 이 대화를 못 보니 task 에 다 적는다. 짧은 일은 직접 한다.",
+    "description": DESC_SHORT,
     "parameters": {"type": "object", "properties": {
         "task": {"type": "string", "description": "작업자에게 줄 일(목표·범위·돌려받을 것)"},
         "kind": {"type": "string", "description": "작업자 프로필 이름(없으면 지금 프로필에서 도구만 줄여 쓴다)"},

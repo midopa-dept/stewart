@@ -93,7 +93,8 @@ def backend_meta(b: dict) -> dict:
         prov = "ip-host"
     except ValueError:
         pass
-    return {"name": b.get("name"), "model": b.get("model"), "provider": prov, "kind": "api" if ext else "local"}
+    return {"name": b.get("name"), "model": b.get("model"), "provider": prov, "kind": "api" if ext else "local",
+            **({"adapter": b["adapter"]} if b.get("adapter") else {})}
 
 
 def _plain(c) -> str:
@@ -213,6 +214,8 @@ def select(turns: list[dict], how: str) -> list[dict]:
         return list(turns)
     if how == "good":
         return [t for t in turns if "good" in t["labels"]]
+    if how == "passed":   # teacher 돌리기(판 95): 시험이 통과하고 답으로 끝난 한 번 실행
+        return [t for t in turns if t.get("test_pass") and t.get("reason") == "answered"]
     if how == "after_fix":   # 교정된 차례 바로 뒤의 차례가 answered 로 끝났고 그 차례 자체는 교정·나쁨이 아니면
         out = []
         for i, t in enumerate(turns):
@@ -277,6 +280,9 @@ def clean(t: dict, keep_engine: bool = False, home: str = "", user: str = "") ->
                 cnt["clipped"] += 1
             if role in ("user", "tool") and not keep_engine and "\n\n[엔진]" in c:
                 c = c.split("\n\n[엔진]")[0]
+                cnt["engine_notes"] += 1
+            if role == "user" and not keep_engine and "\n\n[예시] " in c:   # 예시 은행이 붙인 블록(판 92)
+                c = c.split("\n\n[예시] ")[0]
                 cnt["engine_notes"] += 1
             out["content"] = sc(c)
         else:

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import queue
 import threading
@@ -17,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import hubtools as HT
+from . import tools as T
 from .chat import ChatSession
 from .hub import Hub, now
 from .worker import HubUI
@@ -25,7 +27,7 @@ LOG_MAX = 500
 # 허브 메인에만 붙는 역할 지시(U2-2 3a). 사람과의 대화를 가볍게 두고, 큰 일은 쪼개 맡긴다. STEWART_HUB_ROLE=0 이면 붙이지 않는다
 HUB_MAIN_NOTE = """허브 메인으로서 일을 나눠 맡긴다:
 - 서로 독립인 큰 일(바꿀 파일 묶음이 다른 둘 이상, 또는 오래 걸리는 구현·시험)은 session_spawn 으로 작업자를 띄워 동시에 돌린다. 하나씩 띄우고 기다리지 말고, 나눌 수 있으면 한 번에 여럿 띄운다. 작업자는 이 대화를 못 보니 task 에 목표·범위·바꿀 파일·끝의 기준·보고할 것을 다 적는다. 같은 파일을 두 작업자에게 주지 않는다.
-- 넓게 읽어야 하는 조사(코드 찾기·구조 파악·여러 파일 대조·원인 찾기)는 delegate 로 맡기고 결과 글만 받는다. 이 대화에 긴 파일 내용을 쌓지 않는다.
+- 넓게 읽어야 하는 조사(코드 찾기·구조 파악·여러 파일 대조·원인 찾기 — 파일 셋 넘게 읽을 것 같으면)는 delegate 로 맡기고 결과 글만 받는다. 이 대화에 긴 파일 내용을 쌓지 않는다.
 - 맡기지 않는 것: 파일 한두 개 고침, 명령 한두 번으로 끝나는 확인, 이 대화의 앞 내용을 알아야 하는 일, 사람에게 바로 답할 수 있는 물음. 이런 것은 직접 한다.
 - 작업자 보고가 오면 확인할 것만 확인하고 사람에게 짧게 알린다. 사람의 말에는 일을 하는 사이사이에도 먼저 짧게 답한다.
 - 세 걸음 넘는 일은 시작할 때 todo_write 로 할 일 목록을 만든다(사람 화면에 목록이 뜬다). 하나를 시작할 때 in_progress, 끝내면 곧바로 done 으로 고친다. 작업자에게 맡긴 항목은 내용 앞에 작업자 이름을 적는다(예: "w-docs: README 고치기"). 계획을 글로만 쓰지 않는다.
@@ -38,6 +40,8 @@ TICK_S = 0.5
 RESULT_KEEP = 20   # 화면 상태에 결과 전문을 싣는 최근 도구 수(그 앞은 끝 15줄 화면 줄만 — SSE 크기)
 
 
+IMG_NAME_RX = re.compile(r"^[0-9a-f]{16}\.(png|jpg|webp|gif)$")   # images.store 가 짓는 이름
+IMG_KEEP = 300
 THINK_KEEP = 4000   # 생각 블록에 남기는 끝 글자 수(판 56)
 
 
@@ -58,8 +62,9 @@ class HubMainUI(HubUI):
         self.on_backend_error = None          # 허브가 모델 서버 감시를 깨우는 고리
         self.err_count: dict = {}
         self.turn_no = 0                      # 지금 차례 번호(답 줄의 👍👎 가 어느 차례인지, 판 89)
+        self.imgs: dict = {}                  # 작업 카드 그림 이름 → 파일(판 91, 이 화면이 받은 것만 내준다)
         self.full_narration = True
-        self.goal_notes = True                # 새 사람 말이 앞 목표를 덮는다는 엔진 알림, 같은 결과 두 번째 알림(허브만)            # 도구와 함께 온 모델 글을 한 줄로 자르지 않는다(걸음 사이 말)             # 같은 오류(도구 + 오류 첫 줄) 몇 번째인지 — 화면 "같은 오류 N번째"(U2-8)
+        self.goal_notes = os.environ.get("STEWART_GOAL_NOTES", "1") != "0"   # 판 100 손잡이 — 새 사람 말이 앞 목표를 덮는다는 엔진 알림, 같은 결과 두 번째 알림(허브만)            # 도구와 함께 온 모델 글을 한 줄로 자르지 않는다(걸음 사이 말)             # 같은 오류(도구 + 오류 첫 줄) 몇 번째인지 — 화면 "같은 오류 N번째"(U2-8)
 
     def _add(self, kind: str, text: str) -> None:
         self.log.append({"ts": datetime.now().strftime("%H:%M:%S"), "kind": kind, "text": text})
@@ -72,6 +77,37 @@ class HubMainUI(HubUI):
         self._add("assistant", s)
         if self.turn_no:
             self.log[-1]["turn"] = self.turn_no
+
+    def asked_options(self, opts: list[str]) -> None:
+        """판 106: ask_user 의 선택지를 바로 앞 질문 줄에 단다(화면 단추 — 누르면 그 글이 다음 사람 말로 간다)."""
+        for e in reversed(self.log):
+            if e.get("kind") == "assistant":
+                e["options"] = list(opts)
+                return
+
+    def register_imgs(self, paths: list) -> list[str]:
+        """그림 파일들을 이 화면이 내줄 수 있게 적고 이름 목록을 돌려준다(/api/img, 판 91·98)."""
+        names = []
+        for p in paths:
+            name = Path(p).name
+            if not IMG_NAME_RX.match(name):
+                continue
+            with self._lock:
+                self.imgs[name] = str(p)
+                while len(self.imgs) > IMG_KEEP:
+                    self.imgs.pop(next(iter(self.imgs)))
+            names.append(name)
+        return names
+
+    def tool_images(self, paths: list) -> None:
+        """도구가 모델에게 보인 그림(view_image 등)을 바로 앞 작업 줄에 단다(판 91). 화면은 이름만 받고 /api/img 로 가져간다."""
+        names = self.register_imgs(paths)
+        if not names:
+            return
+        for e in reversed(self.log):
+            if e.get("kind") == "tool":
+                e["imgs"] = (e.get("imgs") or []) + names
+                return
 
     def labeled(self, turn: int, kind: str, by: str) -> None:
         """학습 표시(판 89)를 화면 기록의 그 차례 답 줄에: good·bad·clear → label, corrected·uncorrect → corrected."""
@@ -213,6 +249,10 @@ class HubMainUI(HubUI):
 
     def turn_files(self, paths: list[str]) -> None:
         self._add("files", f"이번 차례에 바뀐 파일 {len(paths)}개: " + ", ".join(paths[:20]) + (" …" if len(paths) > 20 else ""))
+        self.log[-1]["paths"] = list(paths[:50])   # 판 104: 화면 "만든 파일" 카드의 [열기]·[받기]
+        if self.turn_no:
+            self.log[-1]["turn"] = self.turn_no     # 판 105: [이 차례 되돌리기]
+        self.last_files = len(paths)
 
     def ask(self, prompt: str) -> str:
         self.now = {"what": "사람 승인 기다리는 중 — 승인 칸", "since": time.time(), "ask": True}
@@ -275,7 +315,8 @@ class HubMainUI(HubUI):
 
 HUB_COMMANDS = (("clear", "지금 대화를 기록에 남기고 빈 문맥으로 새 대화"), ("reset", "/clear 와 같다"),
                 ("compact", "오래된 도구 결과 줄이기('/compact 요약' 은 앞 대화를 요약해 접기)"),
-                ("memory", "기억 정리 제안 — 모델이 방침·프로필·자료를 읽고 고칠 것을 카드로(항목별 받기·두기)"), ("help", "이 목록"))
+                ("memory", "기억 정리 제안 — 모델이 방침·프로필·자료를 읽고 고칠 것을 카드로(항목별 받기·두기)"),
+                ("improve", "지난 대화로 배워 두기 — 👍·교정된 차례에서 예시·방침 제안을 카드로"), ("help", "이 목록"))
 
 
 class HubMain:
@@ -366,11 +407,22 @@ class HubMain:
                         + " ".join(n for n in notes) + "]")
         text = text or "(붙인 이미지를 봐라)"
         self.ui._add("user", text + (f"  [이미지 {len(parts)}장]" if parts else ""))
+        if not self.busy:
+            self.ui.log[-1]["turn"] = self.sess.st["turns"] + 1   # 판 105: 이 말이 여는 차례(되감기 단추)
+        if parts:   # 보낸 말 줄 아래 작은 그림(판 98) — 전에는 "[이미지 n장]" 글만 남아 화면에 안 보였다
+            from . import images as IMG
+            names = self.ui.register_imgs([str(x) for x in (IMG.path_of(q) for q in parts) if x])
+            if names:
+                self.ui.log[-1]["imgs"] = names
+                self.ui.log[-1]["text"] = text
         if not parts:
             self.ui.last_user = text
         if not parts and re.match(r"^\s*(기억\s*(을|를)?\s*(좀\s*)?정리|memory\s+consolidate)", text, re.I) and len(text) <= 40:
             self.ui._add("user", text)
             return self.memory_consolidate()   # "기억 정리해 줘" 도 /memory 와 같이(판 88)
+        if not parts and re.match(r"^\s*지난\s*(대화|일)\s*(로|에서|으로)\s*배워", text) and len(text) <= 40:
+            self.ui._add("user", text)
+            return self.improve()
         if text.startswith("/"):   # 프로젝트 명령(.stewart/commands, 호환 .claude/commands)은 펼쳐 보낸다. stewart 내장 명령은 허브 메인 칸에서 쓰지 않는다
             from .chat import COMMANDS
             exp = self.sess.expand_command(text)
@@ -395,6 +447,8 @@ class HubMain:
                 return "cleared"
             elif text.split()[0] == "/memory":   # 기억 정리(판 88, SW-40)
                 return self.memory_consolidate()
+            elif text.split()[0] == "/improve":   # 지난 대화로 배워 두기(판 93)
+                return self.improve(confirm=text.split()[1:2] == ["yes"])
             elif text.split()[0] == "/help":
                 self.ui._add("info", "허브 메인 칸 명령: " + " · ".join(f"/{n} — {d}" for n, d in HUB_COMMANDS)
                              + " · 그 밖 /이름 은 프로젝트·사용자 명령(.stewart/commands)")
@@ -465,6 +519,10 @@ class HubMain:
         mins = f"{int(secs // 60)}분 {int(secs % 60)}초" if secs >= 60 else f"{int(secs)}초"
         text = {"끝": f"stewart: 차례 끝({mins})", "질문": f"stewart: 묻는 것이 있다({mins}) — 화면에서 답", 
                 "막힘": f"stewart: 막혀서 멈춤({mins}, {reason}) — 화면에서 확인"}[kind]
+        nf = getattr(self.ui, "last_files", 0)
+        if nf:
+            text += f" · 파일 {nf}개"   # 판 104: 화면 "만든 파일" 카드에서 열기·받기
+        self.ui.last_files = 0
         lab = getattr(self._root(), "label", "")
         self.hub._notify((f"[{lab}] " if lab else "") + text)
         return kind
@@ -657,6 +715,61 @@ class HubMain:
             self.hub.event("memory_plan", n=len(plan))
         threading.Thread(target=run, daemon=True).start()
         return "memory_plan"
+
+    # ---- 지난 대화로 배워 두기(판 93, SW-41 ④ 판 B): 표시된 차례 → 예시·방침 제안 카드 ----
+    def improve(self, confirm: bool = False) -> str:
+        mem = getattr(self.sess, "mem", None)
+        if mem is None:
+            self.ui._add("warn", "배워 두기: 기억이 꺼져 있다(STEWART_MEMORY)")
+            return "memory_off"
+        if self.busy:
+            self.ui._add("warn", "배워 두기: 차례가 끝난 뒤에 부른다")
+            return "busy"
+        from . import improve as IM
+        picked = IM.collect(self._runs_dir, mem.store.dir)
+        if not picked:
+            self.ui._add("info", "배워 두기: 새로 볼 차례가 없다 — 답 줄의 👍 나 교정됨 표시가 붙은 차례만 본다")
+            return "nothing"
+        b = self.sess.backend
+        if b.external() and not confirm:
+            self.ui._add("warn", f"배워 두기: 표시된 차례 {len(picked)}개의 글(비밀·홈 경로는 가림)이 {b.provider_label()} 로 나간다. "
+                                 "그래도 하려면 /improve yes")
+            return "confirm"
+        self.ui._add("info", f"배워 두기: 차례 {len(picked)}개로 제안을 만드는 중(모델 한 번)…")
+
+        def run():
+            from .backend import BackendError
+            try:
+                plan, got = IM.propose(mem, b, self._runs_dir, picked=picked)
+            except (BackendError, OSError, ValueError) as e:
+                self.ui._add("warn", f"배워 두기: 모델을 부르지 못했다({str(e)[:160]})")
+                return
+            self._imp_plan = (plan, got)
+            if not plan:
+                IM.mark_seen(mem.store.dir, [x["ref"] for x in got])
+                self.ui._add("info", "배워 두기: 남길 만한 것이 없다고 한다(본 차례는 다음에 다시 보지 않는다)")
+                return
+            self.ui._add("memory_plan", f"배워 두기 제안 {len(plan)}개 — 예시는 비슷한 일에 하나씩 붙고, 방침은 늘 지킨다. 받은 것만 쓴다(적용 전 사본)")
+            self.ui.log[-1].update(plan=[{**p, "desc": IM.describe(p)} for p in plan], api="/api/improve/apply",
+                                   revert="stewart improve --revert")
+            self.hub.event("improve_plan", n=len(plan))
+        threading.Thread(target=run, daemon=True).start()
+        return "memory_plan"
+
+    def improve_apply(self, accept: list[int] | None) -> dict:
+        from . import improve as IM
+        plan, got = getattr(self, "_imp_plan", None) or ([], [])
+        mem = getattr(self.sess, "mem", None)
+        if not plan or mem is None:
+            return {"applied": [], "error": "배워 두기 제안이 없다(/improve 로 다시)"}
+        r = IM.apply(mem, plan, accept, got)
+        self._imp_plan = None
+        if r["applied"]:
+            self.ui._add("info", f"배워 두기: {len(r['applied'])}개 받음 — 되돌리기: stewart improve --revert {Path(r['backup']).name}"
+                                 + "".join(f" · 스킬 초안 {Path(x).name}(켜려면 사용자 스킬 폴더로 옮김)" for x in r.get("drafts") or []))
+        else:
+            self.ui._add("info", "배워 두기: 받은 것이 없어 바꾸지 않았다")
+        return r
 
     def memory_apply(self, accept: list[int] | None) -> dict:
         from . import memconsolidate as MC
@@ -854,7 +967,73 @@ class HubMain:
                 "tokens": self.tokens(), "resume_note": self.resume_note(), "model": self.watch.status,
                 "web": getattr(self.sess, "web_status", None),
                 "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view(),
-                "chats": self._chat_list()}
+                "chats": self._chat_list(), "mode": self.sess.mode, "mode_max": getattr(self._root(), "_mode", "edits"),
+                "think": self.sess.think, "budget": self.sess.backend.budget(), "budget_set": getattr(self.sess, "_backend0", None) is not None
+                and self.sess.backend is not self.sess._backend0, **self._tool_ui()}
+
+    def _tool_ui(self) -> dict:
+        """판 99: 켬·끔 손잡이(프로필에 toggle_tools 가 없으면 비어 있다)."""
+        sess = self.sess
+        tg = [{"name": n, "on": n not in sess.disabled_tools} for n in getattr(sess, "toggleable", [])]
+        return {"tool_toggles": tg} if tg else {}
+
+    # ---- 차례 되감기(판 105, SW-45 ①) ----
+    def undo_turn(self, turn: int, cut: bool) -> dict:
+        if not self._busy.acquire(blocking=False):
+            return {"ok": False, "error": "메인이 일하는 중이다 — 멈추거나 끝난 뒤에"}
+        try:
+            r = self.sess.undo_turn(int(turn), files=True, cut=cut)
+        except (ValueError, OSError) as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            self._busy.release()
+        if cut:   # 화면 기록도 그 차례 사람 말부터 지운다
+            with self.ui._lock:
+                keep = []
+                for e in list(self.ui.log):
+                    if e.get("kind") == "user" and e.get("turn") == int(turn):
+                        break
+                    keep.append(e)
+                self.ui.log.clear()
+                self.ui.log.extend(keep)
+        msg = (f"차례 {turn} 을 " + ("지웠다 — 내 말을 입력 칸에 되돌렸다" if cut else "파일만 되돌렸다")
+               + (f" · 되돌린 파일 {len(r['restored'])}개" if r["restored"] else " · 되돌릴 파일 없음")
+               + " (셸 명령이 바꾼 파일은 되돌리지 못한다)")
+        self.ui._add("info", msg)
+        return {"ok": True, **r}
+
+    # ---- 머리줄 모드·생각(판 103, SW-45 ②): 문맥 값 0 — 계획 모드 안내만 지금처럼 사람 말 앞에 ----
+    def set_mode(self, mode: str) -> dict:
+        from .hub import MODE_RANK
+        top = getattr(self._root(), "_mode", "edits")
+        if mode not in MODE_RANK or MODE_RANK[mode] > MODE_RANK.get(top, 0):
+            return {"ok": False, "error": f"허브를 켤 때 정한 모드({top})보다 넓힐 수 없다"}
+        msg = self.sess.set_mode(mode)
+        self.tools.main_mode = mode
+        self.ui._add("info", f"모드 {mode}" + (f" — {msg}" if msg else ""))
+        return {"ok": True, "mode": mode}
+
+    def set_budget(self, tokens) -> dict:
+        if tokens is not None and not (isinstance(tokens, int) and tokens > 0):
+            return {"ok": False, "error": "tokens"}
+        w = self.sess.set_budget(tokens)
+        self.ui._add("info", f"문맥 예산 {w:,} 토큰" + (" (백엔드 설정 그대로)" if tokens is None else "")
+                     + f" — 서버 창 {self.sess.backend.max_context:,} 안. 줄이면 압축·요약이 일찍 돈다")
+        return {"ok": True, "budget": w}
+
+    def set_think(self, think) -> dict:
+        if think not in (True, False, None):
+            return {"ok": False, "error": "think"}
+        self.sess.think = think
+        self.sess.rec.event("think", value=think)
+        self.ui._add("info", "생각(thinking) " + {None: "백엔드 기본", True: "켜짐", False: "꺼짐"}[think])
+        return {"ok": True, "think": think}
+
+    def set_tool(self, name: str, on: bool) -> dict:
+        ok = self.sess.set_tool(name, on)
+        if ok:
+            self.ui._add("info", f"{name} 도구를 {'켰다 — 다음 걸음부터 모델이 쓸 수 있다' if on else '껐다 — 모델에게 안 보인다'}")
+        return {"ok": ok}
 
     def tokens(self) -> dict:
         """화면 문맥 막대·토큰 줄: 지난 단계 입력(= 지금 문맥), 창, 줄이기 선, 누계, 이번(마지막) 차례 몫."""

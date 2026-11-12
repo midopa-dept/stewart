@@ -221,6 +221,49 @@ export function ModelDot({ withText }) {
 }
 
 // 바깥 API(회사 서버로 작업 내용이 나간다): 늘 보이게 — 제공자 이름
+// 판 103(SW-45 ②): 머리줄 모드·생각 — 켤 때 정한 모드보다 넓히지 못한다
+const MODE_KO = { plan: '계획', ask: '묻기', edits: '편집', auto: '자동' }
+const RANK = { plan: 0, ask: 1, edits: 2, auto: 3 }
+export function ModeChips() {
+  const st = hub.value
+  if (!st?.mode) return null
+  const modes = Object.keys(RANK).filter(m => RANK[m] <= RANK[st.mode_max || 'edits'])
+  const setMode = mode => cpost('/api/main/mode', { mode }).then(refresh, e => toast('안 됨: ' + e.message))
+  const nextThink = st.think == null ? true : st.think ? false : null
+  const setThink = () => cpost('/api/main/think', { think: nextThink }).then(refresh, e => toast('안 됨: ' + e.message))
+  const setBudget = () => {
+    const v = window.prompt('이 대화의 문맥 예산(토큰, 예 24000). 비우면 백엔드 설정 그대로.', String(st.budget || ''))
+    if (v === null) return
+    const n = v.trim() === '' ? null : parseInt(v.replace(/[^0-9]/g, ''), 10)
+    if (n !== null && !(n > 0)) { toast('숫자를 넣는다'); return }
+    cpost('/api/main/budget', { tokens: n }).then(refresh, e => toast('안 됨: ' + e.message))
+  }
+  return <span class="flex gap-1 items-center flex-none">
+    <select class="chip flex-none !pr-1" value={st.mode} title="모드: 계획(읽기만)·묻기(바꾸기 전 묻기)·편집(파일은 바로, 셸은 묻기)·자동"
+      onChange={e => setMode(e.currentTarget.value)} aria-label="모드">
+      {modes.map(m => <option key={m} value={m}>{MODE_KO[m]}</option>)}
+    </select>
+    <button class={'chip flex-none ' + (st.think ? '!text-ok' : '')} onClick={setThink}
+      title={'생각(thinking): ' + (st.think == null ? '백엔드 기본' : st.think ? '켬' : '끔') + ' — 누르면 ' + (nextThink == null ? '기본' : nextThink ? '켬' : '끔')}>
+      생각 {st.think == null ? '기본' : st.think ? '켬' : '끔'}</button>
+    {st.budget && <button class={'chip flex-none ' + (st.budget_set ? '!text-warn' : '')} onClick={setBudget}
+      title="이 대화의 문맥 예산(압축 문턱을 재는 창) — 누르면 바꾼다. 서버 창보다 크게는 못 한다. 줄이면 압축·요약이 일찍 돈다">
+      문맥 {Math.round(st.budget / 1000)}k</button>}
+  </span>
+}
+
+// 판 99: 도구 켬·끔 손잡이(프로필 toggle_tools) — 꺼진 도구는 모델에게 안 보인다
+export function ToolChips() {
+  const t = hub.value?.tool_toggles || []
+  if (!t.length) return null
+  const toggle = (name, on) => cpost('/api/tools/toggle', { name, on }).then(refresh, e => toast('안 됨: ' + e.message))
+  return <span class="flex gap-1 items-center flex-none">
+    {t.map(x => <button key={x.name} class={'chip flex-none ' + (x.on ? '!text-ok' : '')} aria-pressed={x.on}
+      title={x.on ? `${x.name} 켜짐 — 누르면 끈다(모델에게 안 보임)` : `${x.name} 꺼짐 — 누르면 켠다`}
+      onClick={() => toggle(x.name, !x.on)}>{x.on ? '●' : '○'} {x.name}</button>)}
+  </span>
+}
+
 export function ExternalChip() {
   const b = hub.value?.backend, ext = b?.external
   if (!ext) return null

@@ -57,10 +57,79 @@ def _common(p: argparse.ArgumentParser, task: bool = True) -> None:
     p.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
 
 
+def _adapter(a) -> int:
+    """stewart adapter (판 96): 고르기는 backends 표의 adapter = "<판>" 한 줄, 되돌리기는 STEWART_ADAPTER=off 또는 그 줄을 지움."""
+    import urllib.request
+    backends, _ = load_backends()
+    names = [a.backend] if a.backend else [n for n, b in backends.items() if b.adapters]
+    if not names:
+        print("adapters 가 있는 백엔드가 없다 — backends 표에 adapters = { 판 = \"서버 쪽 이름\" } 와 adapter = \"판\" 을 적는다")
+        return 0
+    for n in names:
+        b = backends[n]
+        cur = b.active_adapter()
+        env = os.environ.get("STEWART_ADAPTER")
+        print(f"{n}: 꼴 {b.adapter_style} · 지금 {cur or '기반'}" + (f" (STEWART_ADAPTER={env})" if env is not None else "")
+              + " · 판: " + (", ".join(f"{k}={v}" for k, v in b.adapters.items()) or "없음"))
+        if a.no_probe or not b.adapters:
+            continue
+        root = b.base_url[:-3] if b.base_url.endswith("/v1") else b.base_url
+        url = (b.base_url + "/models") if b.adapter_style == "model" else (root + "/lora-adapters")
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {b.api_key()}"} if b.api_key() else {})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+        except (OSError, ValueError) as e:
+            print(f"  서버에 묻지 못했다({str(e)[:120]})")
+            continue
+        if b.adapter_style == "model":
+            have = {m.get("id") for m in data.get("data") or []}
+            for k, v in b.adapters.items():
+                print(f"  {k}: {v} — {'실림' if v in have else '서버 목록에 없음(--lora-modules 확인)'}")
+        else:
+            have = {x.get("id"): x.get("path") for x in data} if isinstance(data, list) else {}
+            for k, v in b.adapters.items():
+                print(f"  {k}: 번호 {v} — " + (f"실림({Path(str(have[v])).name})" if v in have else "서버에 없음(--lora 확인)"))
+    return 0
+
+
+def _teacher(a) -> int:
+    """stewart train teacher (판 95, SW-41 ②) — 공개 과제 풀을 teacher 백엔드로 돌려 시험 통과 궤적을 모은다."""
+    from datetime import datetime
+    from . import teacher as TC
+    if not a.pool:
+        raise ConfigError("teacher 에는 --pool 과제 풀 TOML 이 필요하다")
+    pool = TC.load_pool(Path(a.pool))
+    wd0 = pool["tasks"][0]["start"]
+    profile, backend = resolve(a.profile, a.backend, str(wd0))
+    n = len(pool["tasks"]) * max(1, a.repeat)
+    if a.max_runs is not None:
+        n = min(n, a.max_runs)
+    out = Path(a.out) if a.out else Path(a.runs_dir) / f"teacher-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    print(f"과제 풀 '{pool['name']}' 과제 {len(pool['tasks'])}개 × {max(1, a.repeat)}회 = 회차 {n}개 → 백엔드 {backend.name}({backend.model})"
+          + (f" · 비용 상한 ${a.max_cost}" if a.max_cost is not None else "") + f"\n기록: {out}")
+    if backend.external():
+        print(f"과제 풀의 지문과 시작 폴더 내용이 {backend.provider_label()} 로 나간다 — 공개 과제만 쓴다(사용자 코드·대화는 넣지 않는다).")
+        if not backend.price:
+            print("  (이 백엔드에는 가격표(price)가 없어 비용을 셀 수 없다 — --max-runs 로 회차를 막는 것을 권한다)")
+    if a.dry_run:
+        return 0
+    if backend.external() and not a.yes:
+        if input("돌릴까? [y/N] ").strip().lower() not in ("y", "yes", "ㅇ"):
+            print("하지 않았다")
+            return 0
+    s = TC.run_pool(pool, profile, backend, out, a.repeat, a.max_cost, a.max_runs)
+    print(f"통과 {s['passed']}/{s['runs']} · 모델 걸음 {s['model_steps']} · 비용 ${s['cost_usd']}" + (f" · 멈춤: {s['stopped']}" if s["stopped"] else ""))
+    print(f"내보내기: stewart train export --runs-dir {out} --select passed --track teacher")
+    return 0
+
+
 def _train(a) -> int:
     """stewart train export|show (판 89, SW-39). 화면에는 개수·통계만(내용은 show 로 사람이 고른 만큼)."""
     from datetime import date, datetime
     from . import train as TRAIN
+    if a.action == "teacher":
+        return _teacher(a)
     if a.action == "show":
         if not a.folder:
             raise ConfigError("show 에는 내보낸 폴더를 준다: stewart train show <폴더>")
@@ -129,6 +198,64 @@ def _memory_consolidate(a) -> int:
     r = MC.apply(mem, plan, acc)
     print(f"받음 {len(r['applied'])}개" + (f" — 사본 {Path(r['backup']).name}/ · 되돌리기: stewart memory consolidate --revert {Path(r['backup']).name}"
                                         if r["backup"] else ""))
+    return 0
+
+
+def _improve(a) -> int:
+    """stewart improve [--dry-run] [--yes] [-b 백엔드] [--since 날짜] [--revert improve-<시각>] — 판 93(SW-41 ④ 판 B)."""
+    import tempfile
+    from datetime import date
+    from . import improve as IM
+    from .config import Profile
+    from .memory import Memory
+    wd = Path(tempfile.mkdtemp(prefix="stewart-improve-"))
+    os.environ["STEWART_MEMORY_MIGRATE"] = "0"
+    mem = Memory(Profile(name="chat", path=wd / "p.toml", system="", tools=[], workdir=wd), wd / "run")
+    if a.revert:
+        print("되돌렸다: " + (", ".join(IM.revert(mem.store.dir, a.revert)) or "(바꾼 파일 없음)"))
+        return 0
+    if a.stats:
+        print(IM.stats_text(IM.stats(Path(a.runs_dir), mem.store.dir, date.fromisoformat(a.since) if a.since else None)))
+        return 0
+    picked = IM.collect(Path(a.runs_dir), mem.store.dir, date.fromisoformat(a.since) if a.since else None)
+    if not picked:
+        print("새로 볼 차례가 없다 — 👍(허브 답 줄·chat /good)나 교정됨 표시가 붙은 차례만 본다")
+        return 0
+    backends, default = load_backends()
+    bk = backends[a.backend or default]
+    print(f"표시된 차례 {len(picked)}개")
+    if bk.external() and not a.yes:
+        ans = input(f"이 차례들의 글(비밀·홈 경로는 가림)이 {bk.provider_label()} 로 나간다. 할까? [y/N] ").strip().lower()
+        if ans not in ("y", "yes", "ㅇ"):
+            print("하지 않았다")
+            return 0
+    plan, got = IM.propose(mem, bk, Path(a.runs_dir), picked=picked)
+    if not plan:
+        if not a.dry_run:
+            IM.mark_seen(mem.store.dir, [x["ref"] for x in got])
+        print("남길 만한 것이 없다고 한다")
+        return 0
+    for p in plan:
+        print(IM.describe(p))
+    if a.dry_run:
+        print("\n미리 보기 — 아무것도 바꾸지 않았다(본 차례 표시도 안 함). 받으려면 --dry-run 없이(항목마다 묻는다) 또는 --yes.")
+        return 0
+    if a.yes:
+        acc = None
+    else:
+        acc = []
+        for p in plan:
+            ans = input(f"{p['n']}번 받을까? [y/N/a=나머지 모두] ").strip().lower()
+            if ans == "a":
+                acc += [q["n"] for q in plan if q["n"] >= p["n"]]
+                break
+            if ans in ("y", "yes", "ㅇ"):
+                acc.append(p["n"])
+    r = IM.apply(mem, plan, acc, got)
+    print(f"받음 {len(r['applied'])}개" + (f" — 사본 {Path(r['backup']).name}/ · 되돌리기: stewart improve --revert {Path(r['backup']).name}"
+                                        if r["backup"] else ""))
+    for dr in r.get("drafts") or []:
+        print(f"스킬 초안: {dr} — 켜려면 그 폴더를 사용자 스킬 폴더(~/.config/stewart/skills/)로 옮긴다")
     return 0
 
 
@@ -407,18 +534,38 @@ def main(argv: list[str] | None = None) -> int:
     dr.add_argument("--accept", metavar="대상", help="제안된 MEMORY.md 를 들인다(모델을 부르지 않음)")
     dr.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
     mm = sub.add_parser("memory", help="기억 세 갈래(방침·프로필·자료): migrate [--dry-run|--revert] — 옛 remember.jsonl 옮기기·되돌리기")
-    mm.add_argument("action", choices=["migrate", "consolidate"])
+    mm.add_argument("action", choices=["migrate", "consolidate", "examples"])
+    mm.add_argument("--rm", metavar="ID", help="examples: 예시 하나 지우기(ex-…)")
     mm.add_argument("-b", "--backend", help="consolidate: 정리를 맡길 모델의 백엔드(없으면 기본)")
     mm.add_argument("--yes", action="store_true", help="consolidate: 묻지 않고 제안을 모두 받는다")
     mm.add_argument("--dry-run", action="store_true", help="쓰지 않고 옮길 표만")
     mm.add_argument("--revert", nargs="?", const=True, default=False,
                     help="migrate: 세 갈래 파일을 reverted-<날짜>/ 로 옮기고 옛 파일로 / consolidate: --revert consolidate-<시각> 로 그 사본을 되살림")
+    im = sub.add_parser("improve", help="지난 대화로 배워 두기: 👍·교정된 차례에서 예시·방침 제안(모델 한 번) → 항목별 받기")
+    im.add_argument("-b", "--backend", help="제안을 만들 모델의 백엔드(없으면 기본)")
+    im.add_argument("--yes", action="store_true", help="묻지 않고 모두 받는다(바깥 API 로 보낼 때도 묻지 않음)")
+    im.add_argument("--dry-run", action="store_true", help="제안만 보이고 아무것도 바꾸지 않는다")
+    im.add_argument("--since", help="이 날(YYYY-MM-DD) 이후 기록만")
+    im.add_argument("--revert", metavar="improve-<시각>", help="그 사본으로 examples.md·policy.md 를 되돌리고 그때 둔 스킬 초안을 지운다")
+    im.add_argument("--stats", action="store_true", help="예시가 붙은 차례 대 안 붙은 차례의 👍·교정 비율, 예시별 쓰임·지움 후보(모델 안 부름)")
+    im.add_argument("--runs-dir", default=os.environ.get("STEWART_RUNS_DIR") or str(DEFAULT_RUNS_DIR))
+    ad = sub.add_parser("adapter", help="LoRA 어댑터 판 보기: backends 표의 adapters·지금 판(STEWART_ADAPTER 포함)·서버에 실렸는지")
+    ad.add_argument("-b", "--backend", help="이 백엔드만(없으면 adapters 가 있는 모든 백엔드)")
+    ad.add_argument("--no-probe", action="store_true", help="서버에 묻지 않는다")
     tr = sub.add_parser("train", help="실사용 기록을 학습 자료로: export(표시한 차례를 JSONL 로, 비밀·경로 가림) · show(몇 건 훑기)")
-    tr.add_argument("action", choices=["export", "show"])
+    tr.add_argument("action", choices=["export", "show", "teacher"])
     tr.add_argument("folder", nargs="?", help="show: 내보낸 폴더")
     tr.add_argument("--out", help="export: 쓸 폴더(없으면 데이터 폴더 아래 train-export/<시각>)")
-    tr.add_argument("--select", choices=["good", "after_fix", "all"], default="good",
-                    help="good = 👍·/good 차례(기본) · after_fix = 교정 뒤 다시 잘 끝난 차례 · all = 전부(분석용)")
+    tr.add_argument("--select", choices=["good", "after_fix", "passed", "all"], default="good",
+                    help="good = 👍·/good 차례(기본) · after_fix = 교정 뒤 다시 잘 끝난 차례 · passed = 시험 통과한 teacher 실행 · all = 전부(분석용)")
+    tr.add_argument("--pool", help="teacher: 과제 풀 TOML([[task]] id·prompt·start·verify)")
+    tr.add_argument("-b", "--backend", help="teacher: 돌릴 백엔드(더 센 모델)")
+    tr.add_argument("-p", "--profile", default="code", help="teacher: 프로필(기본 code)")
+    tr.add_argument("--repeat", type=int, default=1, help="teacher: 과제마다 몇 번")
+    tr.add_argument("--max-cost", type=float, help="teacher: 비용 합 상한(달러, 가격표 있는 백엔드) — 닿으면 멈춤")
+    tr.add_argument("--max-runs", type=int, help="teacher: 회차 상한")
+    tr.add_argument("--yes", action="store_true", help="teacher: 바깥 API 로 과제를 보낼 때 묻지 않음")
+    tr.add_argument("--dry-run", action="store_true", help="teacher: 과제·회차·보낼 곳만 보이고 돌리지 않음")
     tr.add_argument("--since", help="export: 이 날(YYYY-MM-DD) 이후 기록만")
     tr.add_argument("--keep-engine", action="store_true", help="export: 엔진 넛지([엔진] 줄)도 남김")
     tr.add_argument("--exclude-hashes", help="export: 평가 과제 첫 말 해시(줄마다 하나) 파일 — 같은 차례는 뺀다")
@@ -431,7 +578,11 @@ def main(argv: list[str] | None = None) -> int:
     og = sub.add_parser("organize", help="폴더 정리 계획 검토·실행·되돌리기(review|apply|undo)", add_help=False)
     og.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("backends", help="백엔드 목록")
-    sub.add_parser("profiles", help="프로필 목록")
+    pf = sub.add_parser("profiles", help="프로필 목록 · --cost 면 프로필마다 첫 요청 고정 몫(시스템·도구 정의·환경 블록) 토큰 어림")
+    pf.add_argument("names", nargs="*", help="--cost: 잴 프로필(없으면 chat·code)")
+    pf.add_argument("--cost", action="store_true")
+    pf.add_argument("--hub", action="store_true", help="--cost: 허브 메인 꼴(역할 지시 + 세션 도구)")
+    pf.add_argument("--clean", action="store_true", help="--cost: 기억·사용자 스킬을 끈 뼈대")
     hb = sub.add_parser("hub", help="허브: 메인 세션 + 작업자 세션들을 웹 화면(127.0.0.1) 하나로 본다")
     hb.add_argument("action", nargs="?", choices=["url"], help="url: 떠 있는 허브의 접속 주소·로그인 토큰을 다시 보인다(허브는 띄우지 않음)")
     hb.add_argument("--project", default=None, help="프로젝트 폴더(메인의 작업 폴더, 기본: 지금 폴더)")
@@ -500,8 +651,25 @@ def main(argv: list[str] | None = None) -> int:
             r = cloud.wait(backends[a.backend], a.port, Path(a.runs_dir), timeout_s=a.timeout_min * 60)
             print(json.dumps(r, ensure_ascii=False, indent=1))
             return 0 if r["ok"] else 1
+        if a.cmd == "adapter":
+            return _adapter(a)
         if a.cmd == "train":
             return _train(a)
+        if a.cmd == "improve":
+            return _improve(a)
+        if a.cmd == "memory" and a.action == "examples":   # 예시 은행(판 92): 목록·지우기(더하기는 /improve 또는 파일을 손으로)
+            from . import examples as EX
+            from .memory import USER, memory_dir
+            d = memory_dir() / USER["key"]
+            if a.rm:
+                ok = EX.remove(d, a.rm)
+                print(f"지웠다: {a.rm}" if ok else f"없다: {a.rm}")
+                return 0 if ok else 1
+            xs = EX.load(d)
+            print(f"예시 {len(xs)}개 — {EX.path_of(d)}" + ("" if EX.enabled() else " (STEWART_EXAMPLES=0 — 붙이지 않음)"))
+            for x in xs:
+                print(f"  {x['id']}  {x['title'][:80]}")
+            return 0
         if a.cmd == "memory" and a.action == "consolidate":
             return _memory_consolidate(a)
         if a.cmd == "memory":
@@ -572,6 +740,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigError(str(e)) from None
             print(json.dumps({k: rep[k] for k in ("to", "restored", "moved_aside", "outside_changes", "skipped", "aside_dir")},
                              ensure_ascii=False, indent=1))
+            return 0
+        if a.cmd == "profiles" and a.cost:
+            from . import ctxcost as CC
+            print(CC.table([CC.measure(n, hub=a.hub, clean=a.clean) for n in (a.names or ["chat", "code"])]))
             return 0
         if a.cmd == "profiles":
             names = Counter(n for n, _, _ in list_profiles())

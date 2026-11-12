@@ -192,3 +192,31 @@ def walk(base: Path, gitignore: bool = True, skip=None):
                 yield p
 
     yield from rec(base, root_rules)
+
+
+def path_ok(root: Path, rel: str, is_secret=None) -> Path | None:
+    """작업 폴더 root 안의 보통 파일 rel 을 사람에게 내줘도 되는가(판 104 — @파일 고르기와 같은 경계):
+    절대 경로·..·밖으로 가는 링크·.git 등 건너뛰는 폴더·.gitignore·비밀 꼴 이름이면 None. 되면 resolve 된 경로."""
+    if not rel or rel.startswith(("/", "\\")) or "\x00" in rel:
+        return None
+    root = Path(root).resolve()
+    p = (root / rel)
+    try:
+        rp = p.resolve()
+    except OSError:
+        return None
+    if root not in rp.parents or not rp.is_file():
+        return None
+    parts = rp.relative_to(root).parts
+    if any(x == ".." for x in Path(rel).parts) or any(x in SKIP_DIRS for x in parts[:-1]):
+        return None
+    if is_secret is not None and any(is_secret(root.joinpath(*parts[:i + 1])) for i in range(len(parts))):
+        return None
+    rules = ancestor_rules(root)
+    d = root
+    for i, name in enumerate(parts):
+        rules = rules + read_rules(d)
+        d = d / name
+        if ignored(rules, d, i < len(parts) - 1):
+            return None
+    return rp

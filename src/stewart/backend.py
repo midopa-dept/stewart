@@ -146,6 +146,13 @@ def _body(backend: Backend, messages, tools=None, response_format=None, **extra)
     if response_format:
         body["response_format"] = response_format
     body.update(extra)
+    if getattr(backend, "adapters", None):   # LoRA 어댑터 고르기(판 96)
+        a = backend.active_adapter()
+        if backend.adapter_style == "model":
+            if a:
+                body["model"] = str(backend.adapters[a])
+        else:   # llama.cpp: 실린 어댑터마다 scale 을 분명히(고르지 않은 것은 0 — 기반)
+            body["lora"] = [{"id": int(v), "scale": (backend.adapter_scale if k == a else 0.0)} for k, v in backend.adapters.items()]
     return body
 
 

@@ -12,6 +12,7 @@ export const panel = signal(store.get('stewart-panel', null))   // 오른쪽(폰
 export const drawer = signal(false)          // 폰 세션 서랍
 export const sideOpen = signal(store.get('stewart-side', true))  // 데스크톱 사이드바 접기
 export const toasts = signal([])
+export const composerFill = signal(null)       // 판 105: 되감은 차례의 말을 입력 칸에 되돌림 {target, text}
 
 export const queue = computed(() => hub.value?.queue || [])
 export const sessions = computed(() => hub.value?.sessions || [])

@@ -27,6 +27,7 @@ from urllib.parse import urlsplit, parse_qs, urlparse
 
 COOKIE = "stewart_hub"
 IMAGES_MAX = 4   # 한 번에 붙이는 이미지 장수
+UPLOAD_MAX = 20 * 1024 * 1024   # 올리는 파일 하나(판 106)
 BODY_MAX = 64 * 1024
 
 
@@ -334,7 +335,8 @@ class WebApp:
                 return self._json(h, 200, {"ok": True}, headers={"Set-Cookie": f"{self.cookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
             from .images import max_bytes
             # 메인에게 보내는 글에는 이미지가 붙을 수 있다(base64 는 4/3 배, 장수 IMAGES_MAX)
-            body = self._body(h, BODY_MAX + IMAGES_MAX * (max_bytes() * 4 // 3 + 1024) if path == "/api/main" else BODY_MAX)
+            body = self._body(h, BODY_MAX + IMAGES_MAX * (max_bytes() * 4 // 3 + 1024) if path == "/api/main"
+                              else UPLOAD_MAX * 4 // 3 + 4096 if path == "/api/main/upload" else BODY_MAX)
             if body is None:
                 return self._json(h, 413, {"error": "too_large"})
             try:
@@ -343,12 +345,43 @@ class WebApp:
                 return self._json(h, 400, {"error": "json"})
             if path == "/api/main":
                 return self.main_send(h, data)
+            if path == "/api/main/upload":   # 판 106: 그림 밖 파일 올리기 → 작업 폴더 inbox/
+                return self.upload(h, data)
+            if path == "/api/main/undo_turn":   # 판 105: {turn, cut} — cut=false 면 파일만, true 면 차례를 지우고 말을 돌려줌
+                if not isinstance(data.get("turn"), int) or not isinstance(data.get("cut"), bool):
+                    return self._json(h, 400, {"error": "fields"})
+                r = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None).undo_turn(data["turn"], data["cut"])
+                return self._json(h, 200 if r.get("ok") else 409, r)
+            if path == "/api/main/mode":   # 판 103: 머리줄 모드(켤 때 모드보다 넓히지 못함)
+                if not isinstance(data.get("mode"), str):
+                    return self._json(h, 400, {"error": "fields"})
+                r = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None).set_mode(data["mode"])
+                return self._json(h, 200 if r.get("ok") else 400, r)
+            if path == "/api/main/budget":   # 판 105: 대화별 문맥 예산 {tokens: 정수 | null}
+                r = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None).set_budget(data.get("tokens"))
+                return self._json(h, 200 if r.get("ok") else 400, r)
+            if path == "/api/main/think":   # 판 103: 생각 켬·끔·기본(null)
+                r = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None).set_think(data.get("think"))
+                return self._json(h, 200 if r.get("ok") else 400, r)
+            if path == "/api/tools/toggle":   # 판 99: 도구 켬·끔 손잡이
+                if not isinstance(data.get("on"), bool) or not isinstance(data.get("name"), str):
+                    return self._json(h, 400, {"error": "fields"})
+                cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
+                r = cv.set_tool(data["name"], data["on"])
+                return self._json(h, 200 if r.get("ok") else 400, r)
             if path == "/api/train/label":   # 답 줄 👍👎·교정됨 떼기(판 89): {turn, label: good|bad|clear|uncorrect, chat?}
                 if not isinstance(data.get("turn"), int) or not isinstance(data.get("label"), str):
                     return self._json(h, 400, {"error": "fields"})
                 cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
                 r = cv.train_label(data["turn"], data["label"])
                 return self._json(h, 200 if r.get("ok") else 400, r)
+            if path == "/api/improve/apply":   # 배워 두기 카드(판 93): accept = [번호…] 또는 "all"
+                acc = data.get("accept")
+                if acc != "all" and not (isinstance(acc, list) and all(isinstance(x, int) for x in acc)):
+                    return self._json(h, 400, {"error": "fields", "detail": "accept 는 번호 목록 또는 \"all\""})
+                cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
+                r = cv.improve_apply(None if acc == "all" else acc)
+                return self._json(h, 200 if "error" not in r else 409, r)
             if path == "/api/memory/consolidate":   # 기억 정리 카드(판 88): accept = [번호…] 또는 "all"
                 acc = data.get("accept")
                 if acc != "all" and not (isinstance(acc, list) and all(isinstance(x, int) for x in acc)):
@@ -481,6 +514,22 @@ class WebApp:
                 return self._json(h, 200, self.main.conv(self._chat_q(url)).state())
             except KeyError:
                 return self._json(h, 200, {**self.main.state(), "chat_gone": True})
+        if path == "/api/file":   # 판 104: 작업 폴더 파일 열기·내려받기(읽기 전용, @파일과 같은 경계, HTML·SVG 는 내려받기만)
+            return self.serve_file(h, url)
+        if path == "/api/img":   # 작업 카드 그림(판 91): 이 화면이 받은 이름만(images.store 이름 꼴), 그 밖은 404
+            from .hubmain import IMG_NAME_RX
+            name = (parse_qs(url.query).get("n") or [""])[0]
+            cv = self._conv_q(url)
+            f = getattr(cv.ui, "imgs", {}).get(name) if IMG_NAME_RX.match(name) else None
+            if not f and IMG_NAME_RX.match(name):   # 허브를 다시 켠 뒤·지난 대화: 이 허브 기록 폴더의 images/ 에서(이름 꼴 그대로만)
+                runs = getattr(cv, "_runs_dir", None)
+                hit = next((x for x in sorted(Path(runs).glob(f"*/images/{name}"), reverse=True)), None) if runs else None
+                f = str(hit) if hit else None
+            if not f or not Path(f).is_file():
+                return self._json(h, 404, {"error": "not_found"})
+            ext = name.rsplit(".", 1)[1]
+            return self._send(h, 200, Path(f).read_bytes(), {"jpg": "image/jpeg"}.get(ext, "image/" + ext),
+                              headers={"Cache-Control": "private, max-age=3600"})
         if path == "/sw.js":
             return self._send(h, 200, SW_JS, "text/javascript; charset=utf-8", headers={"Service-Worker-Allowed": "/"})
         if path == "/api/session":
@@ -526,7 +575,7 @@ class WebApp:
             return self._json(h, 200, {"rules": [{"id": r.id, "pattern": r.pattern, "warn": broad_note(r.pattern),
                                                   "scope": "session" if r.origin == "session" else "project"}
                                                  for r in self.hub.allow_rules()]})
-        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm", "/api/memory/consolidate", "/api/train/label", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
+        if path in ("/api/answer", "/api/main", "/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/rules/delete", "/logout", "/api/rules/add", "/api/sessions/manage", "/api/main/unban", "/api/board/close", "/api/memory/forget", "/api/memory/update", "/api/memory/deny", "/api/memory/add", "/api/memory/confirm", "/api/memory/consolidate", "/api/improve/apply", "/api/train/label", "/api/tools/toggle", "/api/main/mode", "/api/main/think", "/api/main/undo_turn", "/api/main/budget", "/api/main/upload", "/api/rules/test_allow", "/api/session/new", "/api/session/send",
                     "/api/session/control"):
             return self._json(h, 405, {"error": "method"})
         return self._json(h, 404, {"error": "not_found"})
@@ -601,6 +650,40 @@ class WebApp:
             return self._json(h, 409, {"error": str(e)})
         return self._json(h, 200, {"ok": True})
 
+    def upload(self, h, data: dict) -> None:
+        """사람이 올린 파일 하나를 작업 폴더 inbox/ 에 둔다(덮지 않음, 비밀 꼴 이름 거부). 모델 문맥은 사람 말 끝 경로 한 줄뿐(화면이 붙인다)."""
+        import base64
+        import re as _re
+        name = str(data.get("name") or "")
+        name = _re.sub(r"[\x00-\x1f\x7f/\\:]", "_", name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]).strip().lstrip(".")[:120] or "file"
+        try:
+            raw = base64.b64decode(str(data.get("data") or ""), validate=True)
+        except ValueError:
+            return self._json(h, 400, {"error": "fields", "detail": "자료가 base64 가 아니다"})
+        if len(raw) > UPLOAD_MAX:
+            return self._json(h, 413, {"error": "too_large", "detail": f"파일 하나 {UPLOAD_MAX // (1024 * 1024)}MB 까지"})
+        try:
+            cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
+        except KeyError:
+            return self._json(h, 404, {"error": "no_chat"})
+        env = cv.sess.env
+        root = Path(env.workdir).resolve()
+        d = root / "inbox"
+        if env.is_secret(d / name):
+            return self._json(h, 400, {"error": "secret", "detail": "비밀 꼴 이름(.env·키 등)은 올리지 않는다 — 이름을 바꿔 올린다"})
+        d.mkdir(exist_ok=True)
+        if root not in d.resolve().parents and d.resolve() != root / "inbox":
+            return self._json(h, 400, {"error": "inbox"})
+        stem, dot, ext = name.rpartition(".")
+        f, n = d / name, 1
+        while f.exists():
+            n += 1
+            f = d / (f"{stem}-{n}.{ext}" if dot and stem else f"{name}-{n}")
+        f.write_bytes(raw)
+        rel = str(f.relative_to(root))
+        cv.ui._add("info", f"파일을 올렸다: {rel} ({len(raw):,} 바이트)")
+        return self._json(h, 200, {"ok": True, "path": rel, "size": len(raw)})
+
     def main_send(self, h, data: dict) -> None:
         """메인에게 말: 글과(있으면) 이미지 [{name, data(base64)}]. 이미지는 vision 백엔드·메인이 쉴 때만."""
         import base64
@@ -646,6 +729,33 @@ class WebApp:
             return self.main.conv(self._chat_q(url))
         except KeyError:
             return self.main
+
+    FILE_MAX = 20 * 1024 * 1024
+    FILE_INLINE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+                   ".pdf": "application/pdf"}
+    FILE_TEXT = {".md", ".txt", ".csv", ".tsv", ".json", ".toml", ".yaml", ".yml", ".py", ".js", ".ts", ".jsx", ".tsx", ".sh",
+                 ".log", ".ini", ".cfg", ".rs", ".go", ".java", ".c", ".h", ".cpp", ".css", ".sql", ".rst", ".tex"}
+
+    def serve_file(self, h, url):
+        from urllib.parse import quote
+        from . import fswalk
+        q = parse_qs(url.query)
+        rel = (q.get("path") or [""])[0]
+        conv = self._conv_q(url)
+        env = conv.sess.env
+        f = fswalk.path_ok(Path(env.workdir), rel, env.is_secret)
+        if f is None:
+            return self._json(h, 404, {"error": "not_found", "detail": "작업 폴더 안의 내줄 수 있는 파일이 아니다"})
+        size = f.stat().st_size
+        if size > self.FILE_MAX:
+            return self._json(h, 413, {"error": "too_large", "detail": f"{size} 바이트 — 상한 {self.FILE_MAX}"})
+        ext = f.suffix.lower()
+        dl = (q.get("dl") or ["0"])[0] == "1" or ext not in self.FILE_INLINE and ext not in self.FILE_TEXT
+        ctype = "application/octet-stream" if dl else self.FILE_INLINE.get(ext, "text/plain; charset=utf-8")
+        disp = ("attachment" if dl else "inline") + f"; filename*=UTF-8''{quote(f.name)}"
+        return self._send(h, 200, f.read_bytes(), ctype,
+                          headers={"Content-Disposition": disp, "Cache-Control": "no-store",
+                                   **({} if ctype == "application/pdf" else {"Content-Security-Policy": "sandbox"})})   # PDF 보기는 sandbox 면 막힌다
 
     def file_names(self, q: str, conv=None) -> list[str]:
         """@파일 고르기 후보: 작업 폴더 안 파일의 상대 경로 가운데 q 가 든 것(대소문자 무시). 비밀 파일 이름·.gitignore·
@@ -852,8 +962,9 @@ class WebApp:
                 if role == "user" and isinstance(m.get("content"), str):
                     user(m["content"])
                 elif role == "user" and isinstance(m.get("content"), list):   # 이미지가 붙은 사람 말(자리표는 "[이미지]")
-                    from .images import text_of
-                    user(text_of(m["content"]))
+                    from .images import path_of, text_of
+                    names = [x.name for x in (path_of(q) for q in m["content"] if isinstance(q, dict)) if x]
+                    user(text_of(m["content"]), **({"imgs": names} if names else {}))
                 elif role == "assistant":
                     if m.get("content"):
                         out.append({"kind": "assistant", "text": str(m["content"])})
@@ -873,7 +984,10 @@ class WebApp:
         if k == "run_start":
             msgs([m for m in ev.get("messages") or [] if m.get("role") != "system"])   # 이어 간 앞 대화
         elif k == "user":
-            user(str(ev.get("content") or "") + (f"\n[이미지 {ev['images']}장]" if ev.get("images") else ""))
+            if ev.get("img_names"):   # 판 98: 그림 이름이 있으면 줄 아래 작은 그림으로
+                user(str(ev.get("content") or ""), imgs=list(ev["img_names"]))
+            else:
+                user(str(ev.get("content") or "") + (f"\n[이미지 {ev['images']}장]" if ev.get("images") else ""))
         elif k == "interject":
             user(str(ev.get("content") or ""), interject=True)
         elif k == "step":

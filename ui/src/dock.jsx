@@ -5,7 +5,7 @@ import { signal } from '@preact/signals'
 import { post, get, store } from './lib.js'
 import { copyText, flash } from './copy.js'
 import { prepImage, pastedFiles } from './imgprep.js'
-import { hub, queue, busy, refresh, toast, view, sessions, chat, cpost } from './state.js'
+import { hub, queue, busy, refresh, toast, view, sessions, chat, cpost, composerFill } from './state.js'
 
 const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
 export const sheetAsk = signal(null)      // 폰: 승인 전문 시트에 띄운 건(session#seq)
@@ -203,6 +203,10 @@ export function Composer({ target }) {
   const main = sessions.value.find(s => s.role === 'main')
 
   useEffect(() => { setText(store.get('stewart-draft-' + target, '')); setFailed(null) }, [target])
+  const fill = composerFill.value
+  useEffect(() => {   // 판 105: 되감은 차례의 내 말을 입력 칸으로
+    if (fill && fill.target === target) { setText(fill.text); composerFill.value = null; ta.current?.focus() }
+  }, [fill, target])
   useEffect(() => { store.set('stewart-draft-' + target, text) }, [text, target])
   useEffect(() => {   // 높이를 글에 맞춘다(최대 40% 화면)
     const t = ta.current; if (!t) return
@@ -229,6 +233,18 @@ export function Composer({ target }) {
     } catch (e) { /* 고르기는 없어도 된다 */ }
     hideSug()
   }
+  // 판 106: 그림 밖 파일 → 작업 폴더 inbox/ (말 끝에 경로 한 줄 — 모델은 read_file 등으로 읽는다)
+  async function uploadFiles(fs) {
+    for (const f of fs) {
+      if (f.size > 20 * 1024 * 1024) { toast(f.name + ': 20MB 넘음'); continue }
+      try {
+        const b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = bad; r.readAsDataURL(f) })
+        const r = await cpost('/api/main/upload', { name: f.name, data: b64 })
+        setText(t => (t ? t.replace(/\s*$/, '') + '\n' : '') + `[올린 파일: ${r.path}]`)
+      } catch (e) { toast(f.name + ': ' + e.message) }
+    }
+  }
+
   function pick(i) {
     const it = sug.items[i]; if (!it) return
     const [a, b] = sug.range
@@ -326,6 +342,7 @@ export function Composer({ target }) {
           onPaste={e => { const fs = pastedFiles(e.clipboardData); if (fs.length) { e.preventDefault(); addFiles(fs) } }} />
         <div class="flex items-center gap-1.5 mt-1">
           {vision && <label class="btn btn-ghost px-2.5" title="이미지 붙이기(붙여넣기·끌어다 놓기도 됨)">＋<input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; addFiles(fs) }} /></label>}
+          {isMain && <label class="btn btn-ghost px-2.5" title="파일 올리기(문서·표·PDF 등 — 작업 폴더 inbox/ 에 두고 말 끝에 경로를 붙인다, 20MB 까지)">📎<input type="file" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; uploadFiles(fs) }} /></label>}
           {isMain && main?.mode && <span class="chip" title="메인 권한 모드">{main.mode}</span>}
           <span class="flex-1" />
           {working && isMain && <span class="chip max-md:hidden">Esc 멈춤</span>}

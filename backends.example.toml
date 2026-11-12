@@ -54,3 +54,15 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # max_tokens = 32000
 # # cache_ttl = "1h"                   # 프롬프트 캐시 유지(기본 5분)
 # # price = { input = 4.0, output = 20.0, cache_read = 0.2, cache_write = 5.0 }   # 1M 토큰당 $, 없으면 안의 표
+
+# ── LoRA 어댑터 고르기(판 96) — 학습한 어댑터를 서빙에 올린 뒤 ──
+# vLLM(--enable-lora --lora-modules my-lora-v1=/경로): 요청의 model 칸을 어댑터 이름으로 바꾼다
+# [backends.cloud]
+# adapters = { v1 = "my-lora-v1" }   # 판 이름 → 서버 쪽 이름
+# adapter = "v1"                       # 지금 판(지우면 기반). 되돌리기 한 줄: STEWART_ADAPTER=off
+# llama.cpp(--lora 파일 --lora-init-without-apply): 요청의 lora 칸에 [{id, scale}] — 고르지 않은 어댑터는 scale 0
+# adapters = { v1 = 0 }                # 판 이름 → 서버에 실린 순서 번호
+# adapter = "v1"
+# adapter_style = "lora"
+# adapter_scale = 1.0
+# 확인: stewart adapter [-b cloud]  (서버 목록에 실렸는지 대조)

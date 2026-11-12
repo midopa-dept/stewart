@@ -62,7 +62,19 @@ class Backend:
     used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0,
                                                  "cache_hit": 0, "cache_seen": 0})   # 이 프로세스 누계(화면). cache_seen = 캐시 칸을 준 호출의 입력 토큰
     retries: int | None = None  # 429·5xx·연결 끊김에 다시 보낼 횟수. None 이면 실사용(chat·허브) 4·평가(run) 0. STEWART_BACKEND_RETRIES 가 이긴다
+    adapters: dict = field(default_factory=dict)   # 판 96: LoRA 어댑터 판 이름 → 서버 쪽 이름(vLLM --lora-modules 이름) 또는 llama.cpp 어댑터 번호
+    adapter: str = ""            # 지금 쓰는 판(비면 기반 모델). STEWART_ADAPTER=<판>|off 가 이긴다
+    adapter_style: str = "model"  # model = 요청 model 칸을 어댑터 이름으로(vLLM) · lora = 요청 lora 칸 [{id, scale}](llama.cpp)
+    adapter_scale: float = 1.0
     context_budget: int | None = None   # 실사용 문맥 몫(토큰). 창(max_context)이 커도 이 값을 창으로 보고 압축한다(길수록 느리고 비싸고 흐려진다). STEWART_CONTEXT_BUDGET 가 이긴다
+
+    def active_adapter(self) -> str:
+        """지금 쓰는 어댑터 판 이름("" = 기반). STEWART_ADAPTER: off·base·빈 값 = 기반, 판 이름 = 그 판(이 백엔드에 없으면 기반)."""
+        if not self.adapters:
+            return ""
+        env = os.environ.get("STEWART_ADAPTER")
+        a = self.adapter if env is None else ("" if env.strip().lower() in ("", "off", "base", "none") else env.strip())
+        return a if a in self.adapters else ""
 
     def budget(self) -> int:
         """압축·화면에 쓰는 창: min(max_context, 문맥 몫)."""
@@ -123,6 +135,7 @@ class Backend:
             **({"kind": self.kind} if self.kind != "openai" else {}),
             **({"tool_mode": self.tool_mode} if self.tool_mode != "native" else {}),
             **({"provider": self.provider_label(), "external": True} if self.external() else {}),
+            **({"adapter": self.active_adapter() or "기반"} if self.adapters else {}),
         }
 
 
@@ -194,7 +207,18 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 price=dict(b.get("price") or {}),
                 retries=(int(b["retries"]) if b.get("retries") is not None else None),
                 context_budget=(int(b["context_budget"]) if b.get("context_budget") else None),
+                adapters=dict(b.get("adapters") or {}),
+                adapter=str(b.get("adapter") or ""),
+                adapter_style=str(b.get("adapter_style") or "model"),
+                adapter_scale=float(b.get("adapter_scale", 1.0)),
             )
+            ad = out[name]
+            if ad.adapter_style not in ("model", "lora"):
+                raise ConfigError(f"{path}: backends.{name}.adapter_style 는 model 또는 lora")
+            if ad.adapter and ad.adapter not in ad.adapters:
+                raise ConfigError(f"{path}: backends.{name}.adapter '{ad.adapter}' 가 adapters 표에 없다(있는 것: {', '.join(ad.adapters) or '없음'})")
+            if ad.adapter_style == "lora" and not all(isinstance(v, int) and v >= 0 for v in ad.adapters.values()):
+                raise ConfigError(f"{path}: backends.{name}.adapters 는 adapter_style = lora 면 llama.cpp 어댑터 번호(0 이상 정수)")
             if out[name].kind not in ("openai", "anthropic"):
                 raise ConfigError(f"{path}: backends.{name}.kind 는 openai 또는 anthropic")
             if out[name].tool_mode not in ("native", "text"):
@@ -298,7 +322,7 @@ def list_profiles() -> list[tuple[str, Path, str]]:
 OUTPUT_KEYS = {"format", "schema", "schema_file", "language_fields"}
 TOP_KEYS = {"name", "description", "system", "tools", "workdir", "max_steps", "max_consecutive_errors", "shell_timeout_s",
             "backend", "action_check", "verify_command", "language", "web_search", "output", "max_tokens", "confirm",
-            "memory_files", "memory_max_chars",
+            "memory_files", "memory_max_chars", "toggle_tools", "toggle_on",
             "compact_ratio", "compact_keep_recent", "compact_fold", "mode", "secret_files", "extends",
             "skills", "claude_compat", "claude_compat_user", "manager_tools", "delegate_budget", "rollback_unfinished",
             "check_on_stop", "check_on_stop_max", "check_on_stop_skip_exit", "hooks", "memory",

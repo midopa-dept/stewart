@@ -58,7 +58,7 @@ class TNewMainWeb(TWeb):
         h = {"Cookie": ck, "X-Stewart-Token": csrf, "Origin": self.origin, "Content-Type": "application/json"}
         r, data = self.req("GET", "/api/commands", headers={"Cookie": ck})
         names = [c["name"] for c in json.loads(data)["commands"]]
-        self.assertEqual(names[:5], ["/clear", "/reset", "/compact", "/memory", "/help"])   # 판 88: /memory(기억 정리)
+        self.assertEqual(names[:6], ["/clear", "/reset", "/compact", "/memory", "/improve", "/help"])   # 판 88: /memory · 판 93: /improve
         old = str(self.main.sess.rec.dir)
         r, data = self.req("POST", "/api/main/new", "{}", h)
         self.assertEqual(r.status, 200, data)

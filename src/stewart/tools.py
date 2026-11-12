@@ -44,6 +44,7 @@ class ToolEnv:
     zero_queries: list = field(default_factory=list)  # 0건이었던 검색어(비슷한 검색어를 다시 묻지 않게)
     vision: bool = False                             # 백엔드가 이미지를 받나(images.py) — view_image·read_file 의 이미지 한 줄
     pending_images: list = field(default_factory=list)   # view_image 가 연 이미지 자리표(엔진이 다음 user 메시지에 붙이고 비운다)
+    turn_extra_files: list = field(default_factory=list)   # 판 107: 도구가 체크포인트 밖에서 만든 파일(작업 폴더 상대 경로) — 차례 끝 "만든 파일" 카드에
     zero_streak: int = 0                             # 연속 0건 수(묻지 않고 돌려준 비슷한 검색어 포함)
     last_search_zero: bool = False                   # 마지막 검색이 0건이었다(그 뒤 plan_add 항목은 미확정으로)
     quota: dict | None = None                        # brave 이달 셈(/quota.json). 못 읽으면 None
