@@ -59,6 +59,7 @@ class TTiers(unittest.TestCase):
         self.assertEqual(seen[0], ("small", 12000))                                    # 가벼운 등급 = 작은 백엔드·작은 예산
         self.assertIn("작업자 w1 · light]", json.dumps(s.messages, ensure_ascii=False))   # 결과 머리 꼬리표 "자리 · 등급"(판 115)
         self.assertEqual(s.pool.w["w1"]["tier"], "light")                               # 허브 작업자 띠 "작업자 w1 · light"
+        self.assertIn("── 작업자 w1 · light (끝)", json.dumps(s.messages, ensure_ascii=False))   # 판 115.1: 모은 결과 머리도 같은 꼴
         self.assertEqual(s.pool.tier_sem["light"]._value, 1)
 
 

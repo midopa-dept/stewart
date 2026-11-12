@@ -186,7 +186,7 @@ class Pool:
 
 
 def results_text(rs: list[dict], still: list[str] | None = None) -> str:
-    parts = [f"── {r['id']}" + (f" · 등급 {r['tier']}" if r.get("tier") else "") + f" ({'취소' if r['status'] == 'cancelled' else '끝'})\n{r['result'] or '(결과 없음)'}" for r in rs]
+    parts = [f"── 작업자 {r['id']}" + (f" · {r['tier']}" if r.get("tier") else "") + f" ({'취소' if r['status'] == 'cancelled' else '끝'})\n{r['result'] or '(결과 없음)'}" for r in rs]
     if still:
         parts.append(f"아직 도는 작업자: {', '.join(still)} — 더 기다리려면 wait, 필요 없으면 cancel")
     return "\n\n".join(parts) or "거둘 결과가 없다(끝난 작업자 없음)"
