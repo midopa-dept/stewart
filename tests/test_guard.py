@@ -1,6 +1,7 @@
 """반복 감지(guard.py): 같은 호출·같은 결과(성공 포함) 3·5 알림, 6 이면 run 은 도구 없이 최종 보고, chat 은 묻기."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -150,9 +151,12 @@ class TGuardChat(unittest.TestCase):
             self.assertEqual(s.turn("읽어"), "answered")
 
     def test_chat_auto_stops(self):
-        s = self.sess(FakeUI(), "auto")
-        with mock.patch.object(C, "chat", side_effect=self.reads(G.STOP)):
+        """사람 없이(auto) 멈출 때는 도구 없이 마지막 답을 한 번 받는다(판 122). 되짚기는 꺼서 멈춤 길만 본다."""
+        with mock.patch.dict(os.environ, {"STEWART_REFLECT": "0"}):
+            s = self.sess(FakeUI(), "auto")
+        with mock.patch.object(C, "chat", side_effect=self.reads(G.STOP) + [_resp("본 것으로는 모른다")]):
             self.assertEqual(s.turn("읽어"), "repeated_call")
+        self.assertEqual(s._last_answer(), "본 것으로는 모른다")
 
 
 if __name__ == "__main__":

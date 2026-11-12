@@ -548,8 +548,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         RF.append_user(messages, RF.PROMPT.format(why=RF.WHY[trigger], facts=facts_text))
         rec.event("reflect_start", step=step, trigger=trigger, last_k=consecutive,
                   fails={RF._hash(k): v for k, v in fail_count.items()})
-        cap = RF.cap_tokens(rf, tks["max_tokens"], TH.is_on(backend, None))
-        r = RF.call(chat, backend, messages, mt, cap)
+        kw, cap = RF.notool_kw(rf, mt, backend=backend, think_max=tks["max_tokens"])
+        r = RF.call(chat, backend, messages, kw, cap)
         u = r["usage"]
         st["model_time_s"] += r["elapsed_s"]
         st["completion_tokens"] += u.get("completion_tokens") or 0

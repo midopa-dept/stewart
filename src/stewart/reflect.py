@@ -5,7 +5,7 @@
   연속 실패 수는 0 으로, 이미 3번 넘게 실패한 같은 호출은 한 번만 더 실패해도 끝나게 낮춘다. 또 문턱이면 지금처럼 끝낸다.
 - 건너뛰는 때: 꺼짐, 횟수를 다 씀, 문턱에 닿은 실패가 모두 거부(사람·규칙·경계), 반복 감지 마무리·형식 강제 중.
 - 켜고 끄기: 프로필 reflect_on_fail(없으면 chat·허브 켬, run 끔) < 환경 변수 STEWART_REFLECT=0|1.
-  reflect_max(기본 1, run 은 실행당·chat 은 차례당), reflect_max_tokens(기본 1200, 생각 켬이면 생각 상한을 더한다).
+  reflect_max(기본 1, run 은 실행당·chat 은 차례당), reflect_max_tokens(기본 1200, 되짚기는 생각 끔으로 보낸다 — 판 122).
 - 메시지는 뒤에 붙이기만 한다(앞 메시지를 고치지 않아 prefix cache 유지). 되짚기는 단계로 세지 않고 모델 호출 1번으로 따로 센다.
 """
 
@@ -30,9 +30,11 @@ WHY = {"consecutive_errors": "도구 호출이 모두 실패한 단계가 이어
        "repeated_failure": "똑같은 호출이 거듭 실패함",
        "repeated_call": "같은 호출을 결과가 같은 채로 되풀이함(결과는 이미 받았다 — 새로 알게 된 것이 없다)",
        "intent_only": "할 일을 말로만 하고 도구를 부르지 않은 채 두 번 멈춤",
-       "same_error": "다른 명령인데 같은 오류가 거듭 나옴(같은 계열을 또 돌려도 새로 알 것이 없다)"}
+       "same_error": "다른 명령인데 같은 오류가 거듭 나옴(같은 계열을 또 돌려도 새로 알 것이 없다)",
+       "length_streak": "생각이 단계 생성 상한에 연달아 닿아 답(도구 호출·글)을 내지 못함"}
 LABEL = {"consecutive_errors": "실패가 이어짐", "repeated_failure": "같은 실패 되풀이",
-         "repeated_call": "같은 호출 되풀이", "intent_only": "말만 하고 멈춤", "same_error": "같은 오류 되풀이"}
+         "repeated_call": "같은 호출 되풀이", "intent_only": "말만 하고 멈춤", "same_error": "같은 오류 되풀이",
+         "length_streak": "생각이 연달아 잘림"}
 
 CHAT_PROMPT = ("[엔진] 이대로면 이 차례가 막힌다(사유: {why}). 이번 답은 도구를 부르지 말고 글로만 되짚어라.\n"
           "엔진이 본 것(최근 것부터 아래로):\n{facts}\n"
@@ -166,8 +168,15 @@ def append_user(messages: list[dict], text: str) -> None:
         messages.append({"role": "user", "content": text})
 
 
-def cap_tokens(cfg: dict, think_max: int | None, thinking_on: bool) -> int:
-    return cfg["max_tokens"] + (think_max if (think_max and thinking_on) else 0)
+def notool_kw(cfg: dict, kw: dict | None = None, backend=None, think_max: int | None = None) -> tuple[dict, int]:
+    """도구 없는 한 번(되짚기·마지막 답)의 (키워드, 상한): 생각을 끄고 reflect_max_tokens 로 보낸다.
+    생각을 켜 두면 상한이 생각에 다 먹혀 빈 답이 된다. 실물 검색 과제 문맥으로 재 보니 상한 1200 은 거의 늘 비었고,
+    단계 생성 상한만큼 더해도 절반쯤 비면서 몇 배 느렸다. 생각 끔은 모두 답했다(판 122).
+    생각을 끌 수 없는 백엔드(thinking_control = none)만 생각 몫(생각 상한, 없으면 백엔드 max_tokens)을 더한다."""
+    cap = cfg["max_tokens"]
+    if backend is not None and getattr(backend, "thinking_control", "chat_template") == "none":
+        cap += think_max or int((getattr(backend, "params", None) or {}).get("max_tokens") or 0)
+    return {**(kw or {}), "thinking": False}, cap
 
 
 def call(chat_fn, backend, messages: list[dict], kw: dict, max_tokens: int) -> dict:

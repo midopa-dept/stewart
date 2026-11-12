@@ -1,7 +1,8 @@
 """웹 넛지(판 80): 모델이 웹을 스스로 잘 안 쓸 때, 문구 대신 실행기가 알맞은 때에 "웹으로 확인할 때다"를 끼워 넣는다.
 
 - 같은 오류(오류 꼴 err_sig)가 다른 명령에서 두 번째로 나면 — 되짚기(세 번째) 앞에서 오류 문구 검색을 권한다.
-- 처음 보는 모듈·명령·속성·옵션 오류(ModuleNotFoundError·command not found·has no attribute·unrecognized arguments …)는 첫 번에.
+- 처음 보는 모듈·속성·옵션 오류(ModuleNotFoundError·has no attribute·unrecognized arguments …)는 첫 번에.
+  셸에 명령이 없는 것(command not found)은 빼고 짧은 셸 안내 한 줄(missing_note)로 — 문서로 풀 일이 아니다.
 - 사람 말이 학습 뒤에 바뀌었을 사실(최신·요즘·가격 — 또는 현재·버전·출시를 묻는 물음, 폴더·커밋 같은 작업 말은 빼고)을 물으면 차례 시작에 "답하기 전에 웹으로 확인".
 - 끝맺기(판 90): 웹을 부른 차례에서 남은 걸음이 WRAP_AT 이하가 되면 한 번 "더 찾지 말고 지금까지 찾은 것으로 답하라"(작은 모델이 검색만 되풀이하다 상한에 걸림).
 - 웹 도구가 있을 때만(검색이 없으면 web_fetch 로 공식 문서를). 상한: 차례당 PER_TURN, 세션당 PER_SESSION.
@@ -46,6 +47,27 @@ def recent_hit(text: str) -> str:
     if m and ASK_RX.search(t) and not LOCAL_RX.search(t):
         return m.group(0)
     return ""
+
+
+# 셸에 그 명령이 없는 것(판 122): 문서로 풀 일이 아니다 — 웹 넛지에서 빼고 chat 이 짧은 셸 안내 한 줄을 붙인다(missing_note).
+MISSING_CMD_RX = re.compile(
+    r"(?:^|\n|: )([\w.+-]+): command not found(?!: )|command not found: ([\w.+-]+)"
+    r"|'([\w.+-]+)' is not recognized as an internal or external command", re.I)
+NOTE_MISSING = "\n\n[엔진] `{name}` 명령이 이 셸에 없다. 환경 정보에 있다고 적힌 것{alt}을 써라."
+
+
+def missing_command(result: str) -> str | None:
+    """셸이 '명령 없음'을 냈으면 그 명령 이름."""
+    m = MISSING_CMD_RX.search(result or "")
+    return next((g for g in m.groups() if g), None) if m else None
+
+
+def missing_note(name: str, pythons: list[str]) -> str:
+    """명령 없음 안내 한 줄. 파이썬 계열이면 환경 정보에서 찾은 파이썬 명령을 적는다."""
+    alt = ""
+    if pythons and re.match(r"^(python|pip)[\d.]*$", name):
+        alt = f"(파이썬은 `{pythons[0]}`)"
+    return NOTE_MISSING.format(name=name, alt=alt)
 
 
 UNKNOWN_RX = re.compile(
@@ -111,6 +133,8 @@ class Nudger:
     def on_error(self, sig: str, n: int, result: str) -> str:
         """실패한 명령 하나: 넣을 글(없으면 "")."""
         if not self._room():
+            return ""
+        if missing_command(result):   # 셸에 명령이 없다 — 웹으로 찾을 일이 아니다(판 122)
             return ""
         m = UNKNOWN_RX.search(result or "")
         if m and (sig or m.group(0)) not in self.seen_sigs:

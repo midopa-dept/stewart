@@ -2,7 +2,9 @@
 
 - 세션(run 하나, chat 하나) 시작 때 한 번 재고 그 동안 바꾸지 않는다(시스템 지시문 앞부분 cache 유지).
   이어 하기(--continue·--resume)는 지시문을 새로 만들므로 다시 잰다.
-- 파이썬 명령은 run_shell 의 셸과 같은 PATH(이 프로세스의 PATH, bash --noprofile)로 찾는다.
+- 파이썬 명령은 run_shell 의 셸이 실제로 쓰는 PATH(shell.tool_env — stewart 자신의 가상 환경 bin 을 뺀 것)로 찾는다.
+  그래야 "있음"과 판이 셸에서 부를 때와 같다(판 122 — 전에는 이 프로세스의 PATH 라 `uv run` 으로 띄우면 셸에 없는 python 을 있다고 했다).
+- 작업 폴더에 .venv 파이썬이 있으면(stewart 자신의 가상 환경이 아니면) 부르는 법 한 줄을 붙인다.
 - 셸은 osdep.shell_spec(POSIX /bin/bash, Windows 동봉 busybox-w32 sh 또는 설정한 셸).
 - Windows: 판(--version)을 내지 못하는 파이썬(스토어 안내 대역 WindowsApps 의 python3.exe 등)은 "없음"으로 친다.
 - 넣지 않는 것: 환경 변수 값, 키·토큰, 작업 폴더 밖 파일 목록.
@@ -10,6 +12,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
@@ -39,9 +42,15 @@ def _os_name() -> str:
     return f"{sysname} {rel} ({mach})"
 
 
-def _python(name: str, win: bool | None = None) -> dict:
+def _shell_path() -> str | None:
+    """run_shell 이 쓰는 PATH(stewart 자신의 가상 환경 bin 을 뺀 것)."""
+    from .shell import tool_env
+    return tool_env().get("PATH")
+
+
+def _python(name: str, win: bool | None = None, path_env: str | None = None) -> dict:
     win = osdep.IS_WIN if win is None else win
-    path = shutil.which(name)
+    path = shutil.which(name, path=path_env)
     if not path:
         return {"name": name, "path": None, "version": None}
     v = _first_line([path, "--version"])
@@ -63,6 +72,19 @@ def _shell_label(spec: "osdep.ShellSpec | None", err: str | None = None) -> str:
     return label + (f" — 주의: {spec.warning}" if spec.warning else "")
 
 
+def _project_venv(workdir: Path) -> str | None:
+    """작업 폴더의 .venv 파이썬(작업 폴더 기준 상대 경로). 없거나 stewart 자신의 가상 환경이면 None."""
+    from .shell import own_venv
+    venv = Path(workdir) / ".venv"
+    for rel in ("Scripts/python.exe", "bin/python") if osdep.IS_WIN else ("bin/python",):
+        if (venv / rel).exists():
+            own = own_venv()
+            if own and os.path.realpath(venv) == own:
+                return None
+            return f".venv/{rel}"
+    return None
+
+
 def measure(workdir: Path, today: date | None = None) -> dict:
     """한 번 잰 값(meta 에도 남긴다)."""
     workdir = Path(workdir)
@@ -70,6 +92,7 @@ def measure(workdir: Path, today: date | None = None) -> dict:
         spec, err = osdep.shell_spec(), None
     except osdep.ShellNotFound as e:
         spec, err = None, str(e)
+    sp = _shell_path()
     git = None
     if shutil.which("git") and workdir.is_dir():
         git = _first_line(["git", "rev-parse", "--is-inside-work-tree"], workdir) == "true"
@@ -79,7 +102,8 @@ def measure(workdir: Path, today: date | None = None) -> dict:
         "workdir": str(workdir),
         "date": (today or date.today()).isoformat(),
         "git": git,
-        "python": [_python("python3"), _python("python")],
+        "python": [_python("python3", path_env=sp), _python("python", path_env=sp)],
+        "project_venv": _project_venv(workdir),
     }
 
 
@@ -97,7 +121,9 @@ def block(info: dict) -> str:
             f"- 작업 폴더: {info['workdir']}\n"
             f"- git 저장소 안: {git}\n"
             f"- 오늘 날짜: {info['date']}\n"
-            f"- 파이썬: {' · '.join(py(p) for p in pys)}{hint}")
+            f"- 파이썬: {' · '.join(py(p) for p in pys)}{hint}"
+            + (f"\n- 작업 폴더 .venv 파이썬: `{info['project_venv']}`(uv 프로젝트면 `uv run python`)"
+               if info.get("project_venv") else ""))
 
 
 def user_note(info: dict) -> str:

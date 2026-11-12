@@ -43,6 +43,7 @@ from . import intent as IN
 from . import images as IMG
 from . import manager as MG
 from . import guard as G
+from . import webnudge as WN
 from . import steer as ST
 from . import forge as FG
 from . import clarify
@@ -186,6 +187,31 @@ def make_diff(before: str | None, after: str | None, name: str, max_lines: int =
 def _one_line(s: str, n: int = 100) -> str:
     s = " ".join((s or "").split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# 판 122: 한 응답 안에서 글자까지 같은 읽기 호출은 한 번만 돌린다(둘째부터는 짧은 안내만 — 같은 결과를 두 번 싣지 않는다).
+# 읽기 도구만: 셸·쓰기·화면 조작은 같은 호출을 두 번 내는 것이 뜻일 수 있다. 가드는 실제로 돈 호출만 센다.
+DUP_NOTE = "[엔진] 이 응답 안 앞 호출과 글자까지 같아 다시 돌리지 않았다. 결과는 바로 앞 같은 호출의 결과를 보라."
+
+
+LENGTH_STREAK_ENV = "STEWART_LENGTH_STREAK"
+
+
+def length_streak_at(env=None) -> int:
+    """연속 잘림 끊기 문턱(판 122 손잡이, 기본 끔). 한 차례에서 '생각이 상한에 닿아 빈 답 → 생각 끄고 다시'가
+    이만큼 걸음 연달아 나면 다시 보내기를 그만두고 도구 없는 되짚기(남았으면) → 사람 없으면 마지막 답으로 올린다. 0·빈 값 = 끔."""
+    env = os.environ if env is None else env
+    try:
+        n = int(env.get(LENGTH_STREAK_ENV) or 0)
+    except ValueError:
+        return 0
+    return n if n >= 1 else 0
+
+
+def _call_key(rc: dict) -> tuple[str, str]:
+    fn = rc.get("function") or {}
+    raw = fn.get("arguments") or "{}"
+    return fn.get("name", ""), raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, sort_keys=True)
 
 
 TODO_NUDGE_AFTER = 4     # 진행 중 항목이 있는데 도구 호출이 이만큼 지나도록 목록이 그대로면 한 번 끼운다(판 85)
@@ -416,6 +442,9 @@ class ChatSession:
         self._asked: str | None = None
         self.rf = RF.settings(profile, interactive=True)   # 실패 문턱에서 도구 없는 되짚기(기본 켬, STEWART_REFLECT=0 이면 끔)
         self._err_sigs, self._human_noted, self._samerr_hit = {}, set(), None
+        self._missing_noted: set[str] = set()   # 셸에 없다고 알린 명령(세션에 한 번씩, 판 122)
+        self.len_streak_at = length_streak_at()   # 연속 잘림 끊기 문턱(판 122, 기본 끔 = 0)
+        self._len_streak, self._len_streak_hit = 0, False
         self._rstate = RF.State()
         self._fail_steps: list[list[dict]] = []
         self._recent_fail: list[dict] = []
@@ -675,6 +704,17 @@ class ChatSession:
         self.rec.event("todo_final_nudge", step=step, why=why)
         self.comps.fire("todo_nudge", step, "before_answer", "nudge", reasons=len(why))
         return True
+
+    def _dup_in_response(self, rc: dict, step: int, seen: dict) -> dict | None:
+        """이 응답 안 앞에 글자까지 같은 읽기 호출이 있었으면 돌리지 않은 tc(짧은 안내), 아니면 None."""
+        key = _call_key(rc)
+        first = seen.get(key)
+        if first is None or key[0] not in M.READ_TOOLS:
+            return None
+        self.st["dup_calls"] = self.st.get("dup_calls", 0) + 1
+        self.rec.event("dup_call", step=step, name=key[0], dup_of=first["id"])
+        return {"id": rc["id"], "name": key[0], "raw_arguments": key[1], "ok": first["ok"], "result": DUP_NOTE,
+                "dup_of": first["id"], "elapsed_s": 0.0}
 
     def _exec(self, rc: dict, step: int) -> dict:
         fn = rc.get("function") or {}
@@ -1106,6 +1146,17 @@ class ChatSession:
                 self.ui.dim(f"  (문맥 넘침 → 오래된 도구 결과 {c['clipped']}개를 줄이고 다시 보낸다)")
                 continue
             if length_done or not empty_length(resp):
+                if not length_done:
+                    self._len_streak = 0   # 다시 보내지 않고 받은 걸음 — 연속이 끊긴다
+                self._pmark = len(self.messages)
+                return resp, dt, streamed
+            self._len_streak += 1
+            if self.len_streak_at and self._len_streak >= self.len_streak_at:   # 연속 잘림 끊기(손잡이): 다시 보내지 않고 올린다
+                u0 = resp.get("usage") or {}
+                self.st["model_time_s"] += dt
+                self.st["completion_tokens"] += u0.get("completion_tokens") or 0
+                self.rec.event("length_streak", step=step, streak=self._len_streak, at=self.len_streak_at, usage=u0)
+                self._len_streak_hit = True
                 self._pmark = len(self.messages)
                 return resp, dt, streamed
             length_done = True
@@ -1138,6 +1189,13 @@ class ChatSession:
             if cmd not in cmds:
                 cmds.append(cmd)
             n = len(cmds)
+        miss = WN.missing_command(result)   # 셸에 명령이 없다(판 122): 웹 넛지 대신 짧은 안내 한 줄, 명령마다 한 번
+        if miss and miss not in self._missing_noted:
+            self._missing_noted.add(miss)
+            pys = [p["name"] for p in (self.env_info or {}).get("python", []) if p.get("path")]
+            note += WN.missing_note(miss, pys)
+            tc["missing_command"] = miss
+            self.rec.event("missing_command", name=miss)
         wn = self.nudge.on_error(sig, n, result)   # 웹 넛지(판 80): 같은 오류 두 번째·처음 보는 이름 오류
         if wn:
             note += wn
@@ -1319,6 +1377,7 @@ class ChatSession:
         self._last_reflect = ""
         self._asked = None
         self._err_sigs, self._human_noted, self._samerr_hit = {}, set(), None   # 같은 오류·사람 경계(판 62), 차례마다
+        self._len_streak, self._len_streak_hit = 0, False   # 연속 잘림(판 122), 차례마다
         self.compact(estimate=True)   # 차례 시작에도 문턱을 본다(판 65): 도구 없이 답만 하는 차례가 이어지면 단계 뒤 판정이 돌지 않았다
         self._rstate = RF.State()     # 되짚기 횟수는 차례마다(사람이 "계속" 하면 다시 한 번 쓸 수 있다)
         self._fail_steps, self._recent_fail = [], []
@@ -1430,12 +1489,16 @@ class ChatSession:
                     self.messages.append({"role": "assistant", "content": content or None, "tool_calls": calls, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
                                           **({"reasoning_content": think} if TR_keep(self.passback, think, True) else {})})   # 생각 블록 되보내기(판 69)·OpenAI 길 손잡이(판 81)
                     any_ok = False
+                    seen_here: dict[tuple[str, str], dict] = {}
                     for rc in calls:
-                        tc = self._exec(rc, step)
+                        tc = self._dup_in_response(rc, step, seen_here)
+                        if tc is None:
+                            tc = self._exec(rc, step)
+                            seen_here.setdefault(_call_key(rc), tc)
                         done = getattr(self.ui, "tool_done", None)   # 허브 화면: 모든 길(일찍 끝난 것 포함)의 끝 — ✓/✕ 표시
                         if done is not None:
                             done(tc)
-                        if not tc["ok"]:
+                        if not tc["ok"] and not tc.get("dup_of"):
                             self._recent_fail.append(tc)
                             del self._recent_fail[:-RF.RECENT_KEEP]
                         srec["tool_calls"].append(tc)
@@ -1526,6 +1589,8 @@ class ChatSession:
                         if self._ask_loop(n, step, "repeated_call", f"같은 호출을 결과가 같은 채로 {hit}번 되풀이했다"):
                             self.guard.reset()
                         else:
+                            if self.mode == "auto":   # 물을 사람이 없다(auto·--once): 도구 없이 마지막 답 한 차례(판 122)
+                                self._final_answer("repeated_call", step, G.CHAT_FINAL_PROMPT.format(why=f"같은 호출을 결과가 같은 채로 {hit}번 되풀이해"))
                             reason = "repeated_call"
                             break
                     self.compact()
@@ -1533,7 +1598,20 @@ class ChatSession:
                 if empty_length(resp):   # 생각 끔으로 다시 보냈어도 빈 잘림 — 빈 답으로 받지 않는다
                     self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
                     self.rec.md_step(step, srec)
-                    self.ui.warn("  생각 끄고 다시 보냈어도 생성 상한에 닿아 답이 비었다. 다시 묻거나 /think off 로 바꿔 본다.")
+                    if self._len_streak_hit:   # 연속 잘림 끊기(손잡이): 되짚기 → 사람 없으면 마지막 답
+                        self._len_streak_hit = False
+                        k = self._len_streak
+                        facts = f"- 생각이 단계 생성 상한에 {k}걸음 연달아 닿아 도구 호출도 글도 내지 못했다."
+                        if self._reflect("length_streak", step, consecutive, calls=[], facts=facts, label=f"생각 잘림 {k}번"):
+                            self._len_streak = 0
+                            self.compact()
+                            continue
+                        if self.mode == "auto":
+                            self._final_answer("length_streak", step,
+                                               G.CHAT_FINAL_PROMPT.format(why=f"생각이 단계 생성 상한에 {k}걸음 연달아 닿아"))
+                        self.ui.warn(f"  생각이 생성 상한에 {k}걸음 연달아 닿아 멈췄다. 다시 묻거나 /think off 로 바꿔 본다.")
+                    else:
+                        self.ui.warn("  생각 끄고 다시 보냈어도 생성 상한에 닿아 답이 비었다. 다시 묻거나 /think off 로 바꿔 본다.")
                     reason = "length_empty"
                     break
                 self.messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
@@ -1721,8 +1799,7 @@ class ChatSession:
             card("start", trigger, label, "")
         else:
             self.ui.dim(f"  ({label} — 도구 없이 한 번 되짚는다)")
-        kw = {"thinking": self.think} if self.think is not None else {}
-        cap = RF.cap_tokens(self.rf, self.tks["max_tokens"], TH.is_on(self.backend, self.think))
+        kw, cap = self._notool_kw()
         r = RF.call(chat, self.backend, self._clean(), kw, cap)
         u = r["usage"]
         self.st["model_time_s"] += r["elapsed_s"]
@@ -1753,6 +1830,32 @@ class ChatSession:
         self._repeat_stop = False
         self._fail_steps.clear()
         self.rec.md(f"> 실패가 이어져({trigger}) 도구 없이 되짚음\n\n{r['content']}\n")
+        return True
+
+    def _notool_kw(self) -> tuple[dict, int]:
+        """도구 없는 한 번(되짚기·마지막 답)의 (키워드, 상한) — 생각 끔(reflect.notool_kw)."""
+        return RF.notool_kw(self.rf, backend=self.backend, think_max=self.tks["max_tokens"])
+
+    def _final_answer(self, trigger: str, step: int, prompt: str) -> bool:
+        """멈추기 직전 도구 없이 한 번 답을 받는다(되짚기와 같은 생각·상한 꼴). 답을 받았으면 True."""
+        RF.append_user(self.messages, prompt)
+        kw, cap = self._notool_kw()
+        self.ui.dim("  (멈추기 전에 도구 없이 지금까지 본 것으로 답을 받는다)")
+        r = RF.call(chat, self.backend, self._clean(), kw, cap)
+        u = r["usage"]
+        self.st["model_time_s"] += r["elapsed_s"]
+        self.st["completion_tokens"] += u.get("completion_tokens") or 0
+        self.st["prompt_tokens_total"] += u.get("prompt_tokens") or 0
+        self.st["last_prompt_tokens"] = u.get("prompt_tokens") or self.st["last_prompt_tokens"]
+        self._pmark = len(self.messages)
+        self.rec.event("final_answer", step=step, trigger=trigger, **r)
+        if not r["ok"]:
+            self.messages.append({"role": "assistant", "content": f"(마지막 답을 받지 못했다: {r['error']})"})
+            self.ui.warn(f"  마지막 답을 받지 못했다({r['error']}).")
+            return False
+        self.messages.append({"role": "assistant", "content": r["content"]})
+        self.ui.assistant(r["content"])
+        self.rec.md(f"> 같은 호출 되풀이로 멈추기 전 도구 없이 받은 마지막 답\n\n{r['content']}\n")
         return True
 
     def _ask_more(self, n: int, why: str | None = None, kind: str = "steps_limit") -> bool:

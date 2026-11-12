@@ -42,11 +42,11 @@ class TEnvInfo(unittest.TestCase):
 
     def test_python_hint(self):
         real = shutil.which
-        with mock.patch.object(envinfo.shutil, "which", side_effect=lambda n: None if n == "python" else real(n)):
+        with mock.patch.object(envinfo.shutil, "which", side_effect=lambda n, path=None: None if n == "python" else real(n, path=path)):
             b = envinfo.block(envinfo.measure(self.tmp))
         if real("python3"):
             self.assertIn("python 없음 → 파이썬은 `python3` 로 부른다", b)
-        with mock.patch.object(envinfo.shutil, "which", side_effect=lambda n: None if n.startswith("python") else real(n)):
+        with mock.patch.object(envinfo.shutil, "which", side_effect=lambda n, path=None: None if n.startswith("python") else real(n, path=path)):
             self.assertIn("파이썬 명령이 없다", envinfo.block(envinfo.measure(self.tmp)))
 
     def test_chat_measures_once_and_resume_again(self):

@@ -35,7 +35,8 @@ class TNudger(unittest.TestCase):
         self.assertEqual(n.on_error("TypeError", 2, "TypeError: x"), "")              # 같은 꼴은 다시 안 함
         self.assertEqual(len(n.log), 3)
         f = WN.Nudger(search=False, fetch=True)
-        self.assertIn("web_fetch", f.on_error("", 0, "bash: foo: command not found"))
+        self.assertIn("web_fetch", f.on_error("", 0, "error: unrecognized arguments: --foo"))
+        self.assertEqual(f.on_error("", 0, "bash: foo: command not found"), "")      # 셸에 명령이 없는 것은 웹 넛지가 아니다(판 122)
         self.assertEqual(WN.Nudger(search=False, fetch=False).on_turn("최신 버전?"), "")   # 웹 도구가 없으면 안 함
 
     def test_recent_words(self):
