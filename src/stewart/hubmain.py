@@ -319,6 +319,18 @@ HUB_COMMANDS = (("clear", "지금 대화를 기록에 남기고 빈 문맥으로
                 ("improve", "지난 대화로 배워 두기 — 👍·교정된 차례에서 예시·방침 제안을 카드로"), ("help", "이 목록"))
 
 
+def _profile_workdir(name) -> str | None:
+    """판 118: --project 가 없으면 프로필에 적힌 작업 폴더(예: 대화 자리의 대화 폴더). 프로필에 없으면 None(지금 폴더)."""
+    if not name:
+        return None
+    from .config import ConfigError, load_profile
+    try:
+        p = load_profile(name)
+    except (ConfigError, OSError):
+        return None
+    return str(p.workdir) if "workdir" in (p.raw or {}) else None
+
+
 def main_tier(a, workdir: str):
     """판 113: --tier 가 있으면 그 등급(backends 표 [tiers.<이름>])의 백엔드·프로필·문맥 예산으로 메인을 켠다.
     등급에 slim = true 면 얇은 메인(slim.py). -b 는 작업자 기본 백엔드로 남는다. 없으면 -p·-b 그대로."""
@@ -370,7 +382,8 @@ class HubMain:
         import dataclasses
         import os
         from . import slim as SL
-        if SL.conf(profile) is None and os.environ.get("STEWART_HUB_ROLE") != "0":   # 얇은 메인(판 113)은 짧은 지시 하나만
+        if (SL.conf(profile) is None and os.environ.get("STEWART_HUB_ROLE") != "0"   # 얇은 메인(판 113)은 짧은 지시 하나만
+                and (profile.raw or {}).get("hub_role", True) is not False):   # 판 118: 대화 자리 등 프로필이 끈 경우
             from .board import NOTE as BOARD_NOTE
             profile = dataclasses.replace(profile, system=(profile.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
         hub.register_main(profile.workdir, mode)
@@ -1310,7 +1323,7 @@ def run_sessions(a) -> int:
     from pathlib import Path
     from .trash import KEEP_DAYS_NOTE, Manager
     cfg = hub_config(a.config)
-    project = Path(a.project or os.getcwd()).resolve()
+    project = Path(a.project or _profile_workdir(getattr(a, "profile", None)) or os.getcwd()).resolve()
     state_dir = Path(os.path.expanduser(a.state_dir or cfg.get("state_dir") or str(default_state_dir(project))))
     if not (state_dir / "sessions.json").is_file():
         print(f"허브 기록이 없다: {state_dir}", file=sys.stderr)
@@ -1489,7 +1502,7 @@ def run_hub_user(a) -> int:
     import sys
     from .accounts import AccountError, Store
     cfg = hub_config(a.config)
-    project = Path(a.project or os.getcwd()).resolve()
+    project = Path(a.project or _profile_workdir(getattr(a, "profile", None)) or os.getcwd()).resolve()
     st = Store(_state_dir(a, cfg, project))
     try:
         if a.action == "list":
@@ -1525,7 +1538,8 @@ def run_hub(a) -> int:
     from .record import Recorder
     from .web import LOOPBACK, SESSION_DAYS, WebApp, make_token
     cfg = hub_config(a.config)
-    project = Path(a.project or os.getcwd()).resolve()
+    project = Path(a.project or _profile_workdir(getattr(a, "profile", None)) or os.getcwd()).resolve()
+    project.mkdir(parents=True, exist_ok=True)   # 판 118: 프로필의 대화 폴더가 처음이면 만든다
     state_dir = _state_dir(a, cfg, project)
     if getattr(a, "action", None) == "url":
         return hub_url(state_dir)

@@ -282,7 +282,8 @@ class ChatSession:
         web = web_search_config(profile, interactive=True)
         self.web_status = {"search": bool(web and web["url"]), "fetch": bool(web and web["fetch"]),
                            "why": (web or {}).get("why") or ("" if web else "웹 도구 꺼짐(검색 주소 없음·읽기 끔)")}
-        base_names = [t for t in DG.other_tools(clarify.other_tools(profile.tools)) if t != SK.NAME]
+        from . import runcode as RC
+        base_names = [t for t in DG.other_tools(clarify.other_tools(profile.tools)) if t not in (SK.NAME, RC.NAME)]
         defs = T.definitions(base_names) if base_names else []
         if profile.tools and clarify.wanted(profile.tools):
             defs.append(clarify.DEFINITION)   # 되묻기: 질문을 보이고 그 차례를 끝낸다(다음 사람 입력이 답)
@@ -298,6 +299,12 @@ class ChatSession:
         if ((profile.tools == ["*"] or "doc_search" in profile.tools) and os.environ.get("STEWART_DOC_SEARCH") != "0"
                 and "doc_search" not in [d["function"]["name"] for d in defs]):   # 문서 찾기(판 64): 실사용 기본 켬
             defs += T.definitions(["doc_search"])
+        self.code_off = ""
+        if RC.NAME in (profile.tools or []):   # 판 118: 대화 자리 run_code — 울타리를 못 만드는 곳에서는 싣지 않고 까닭을 지시문에
+            if RC.available():
+                defs.append(RC.DEFINITION)
+            else:
+                self.code_off = RC.OFF_WHY
         if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(실사용 기본 도구 목록은 그대로)
             defs = [d for d in defs if d["function"]["name"] != "view_image"]
         self.pfl = PC.flags(profile, interactive=True)   # 대화형: Claude Code 꼴 호환 기본 켬(사용자 전역 ~/.claude 는 기본 끔)
@@ -370,8 +377,12 @@ class ChatSession:
             system += "\n\n" + mtext
         self._env_note: str | None = (envinfo.user_note(self.env_info)   # 다이어트 안 a: 이 세션 첫 사람 입력 앞에 붙인다
                                       if os.environ.get("STEWART_ENV_BLOCK", "1") != "0" else None)   # 판 100: 끄는 손잡이
+        if self._env_note and (profile.raw or {}).get("env_block") == "date":   # 판 118: 대화 자리는 날짜만
+            self._env_note = f"[엔진이 붙인 환경 정보 — 과제가 아니다]\n오늘 날짜: {self.env_info['date']}"
         if self.forge is not None and not (self.slim is not None and "forge_remote" in self.disabled_tools):
             system += "\n\n" + FG.note(self.forge)
+        if self.code_off:   # 판 118: 코드 실행이 꺼진 까닭(사람에게 그대로 말하게)
+            system += f"\n\n{self.code_off}(run_code 없음). 계산·그래프를 부탁받으면 그렇다고 말하고 손으로 계산하거나 표로 답한다."
         if self.disabled_tools:   # 판 117.1: 꺼진 도구 이름을 모델이 알게(말없이 안 쓰는 대신 켜 달라고 말하게)
             system += "\n\n" + OFF_TOOLS_NOTE.format(names=", ".join(sorted(self.disabled_tools)))
         if profile.language == "ko":
@@ -481,6 +492,8 @@ class ChatSession:
         d = M.decide(self.mode, name)
         if d == "deny":
             return M.PLAN_DENY
+        if name == "run_code" and (self.profile.raw or {}).get("run_code_ask") and d == "run":   # 판 118: 프로필이 매번 묻게 했으면
+            d = "ask"
         if name == "run_shell":   # 판 117: 이 컴퓨터 화면 조작 — 꺼져 있으면 거절(묻지도 않음), 켜져 있으면 모드·규칙과 관계없이 대상을 밝혀 묻는다
             from . import hostgui as HG
             cmd0 = str(args.get("command") or "")
@@ -820,7 +833,16 @@ class ChatSession:
             self.ui.warn(f"    hook 이 막음: {_one_line(why, 200)}")
         else:
             self.cps.before_write(name, args)
-            ok, result = T.execute(self.env, name, args)
+            if name == "run_code":   # 판 118: 울타리 안 파이썬(대화 자리)
+                from . import runcode as RC
+                raw = self.profile.raw or {}
+                if not getattr(self, "_code_told", False):
+                    self._code_told = True
+                    self.ui.dim("    (코드를 울타리 안에서 돌린다 — 인터넷·내 파일·이 컴퓨터의 앱에 닿지 않음, 30초 상한)")
+                ok, result = RC.run(self.env, str(args.get("code") or ""), args.get("files"), python=raw.get("code_python"),
+                                    timeout_s=raw.get("run_code_timeout") or 30)
+            else:
+                ok, result = T.execute(self.env, name, args)
             self.cps.after_write(name, args, ok)
             if ok and self.edit_fb and name in ("edit_file", "write_file", "multi_edit"):   # 고친 자리·문법 한 줄(가-3)
                 from . import toolrepair as TR

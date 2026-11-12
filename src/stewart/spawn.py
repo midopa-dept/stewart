@@ -53,10 +53,10 @@ def load_tiers(path=None, main: bool = False) -> dict:
     생각 칸(think·think_max_tokens·think_max_tokens_first·reasoning_effort·reasoning_effort_at·think_sampling)은 안 적으면 지금과 같다.
     main 인자는 예전 호출과 맞추려고 남긴다."""
     import tomllib
-    from .config import backends_path
-    try:
+    from .config import ConfigError, backends_path
+    try:   # 판 118.1: 백엔드 표가 아예 없으면(코드로 Backend 를 준 세션 등) 등급 없이 — 등급은 선택 기능
         data = tomllib.loads(Path(path or backends_path()).read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError, ConfigError):
         return {}
     out = {}
     for name, t in (data.get("tiers") or {}).items():

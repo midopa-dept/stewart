@@ -40,6 +40,7 @@ A small agent runner that lets a model you host work on a local folder.
 - [앞으로의 방향](#앞으로의-방향)
 - [어떻게 도나](#어떻게-도나)
 - [쓰는 길](#쓰는-길)
+  - [대화 자리](#대화-자리)
 - [웹 허브](#웹-허브)
 - [모델이 쓰는 도구](#모델이-쓰는-도구)
   - [작업자 등급](#작업자-등급)
@@ -96,11 +97,27 @@ vLLM·llama.cpp 같은 OpenAI 호환 서버(또는 Anthropic Messages API)에 �
 
 | 명령 | 하는 일 |
 |---|---|
+| `stewart` | 인자 없이 치면 코드 자리(`stewart chat` 과 같음)로 들어갑니다 |
 | `stewart chat` | 터미널에서 대화하며 일을 맡깁니다. 기본 모드는 `edits` 입니다 |
+| `stewart parlando` | 대화 자리(`chat -p talk`). 묻고 찾고 정리해 건네는 자리입니다(아래 절) |
 | `stewart hub` | 같은 일을 브라우저 화면으로 합니다. 메인 대화 하나에 작업자 세션을 여럿 붙일 수 있습니다 |
 | `stewart run` | 과제 하나를 사람 없이 끝까지 돌립니다(`auto` 또는 `--plan`) |
 
 그 밖의 명령: `ping`(서버 확인), `backends`, `profiles`, `rewind`(되돌리기), `dream`(기억 정리), `sessions`(허브의 지난 세션 정리), `hub-user`(허브 계정), `organize`(폴더 정리 계획), `queue`·`bench`(여러 과제 돌리기), `improve`(지난 대화로 배워 두기), `train`(학습 자료 내보내기·teacher 돌리기), `adapter`(LoRA 어댑터 보기). 모두 `stewart <명령> --help` 로 볼 수 있습니다.
+
+### 대화 자리
+
+parlando 는 악보에 적는 말로, '말하듯'이라는 뜻입니다. 이야기하는 자리라 그렇게 부릅니다.
+
+- 프로필 `talk` 는 묻고 찾고 정리해 건네는 자리입니다. 코드 자리(`chat`)와 달리 프로젝트 셸·편집이 없습니다.
+  - 자기 대화 폴더(기본 `~/.local/share/stewart/talk`, `--project` 로 바꿈) 안에서만 읽고 씁니다.
+  - 도구: 웹 검색·읽기, 받은 파일·그림 보기, 글·파일 만들어 건네기, 기억·문서 찾기, 묻기, 할 일 목록, 울타리 안 계산(`run_code`).
+  - 허브 전체를 대화 자리로 켜려면 `stewart hub -p talk` 입니다.
+- `run_code`: 계산·표·그래프용 파이썬을 울타리 안에서 돌립니다.
+  - 실행마다 대화 폴더의 `.code/<시각-번호>/` 에서 돌고, 쓰기는 그 칸만입니다. 홈·외장 볼륨 읽기, 인터넷, 이 컴퓨터의 앱 열기, 다른 프로그램 실행은 막힙니다.
+  - 상한: 30초(`run_code_timeout`, 최대 120), 출력 20,000자, 만든 파일 합 50MB·50개. 만든 그림·CSV 는 "만든 파일" 카드로 건넵니다.
+  - macOS 는 `sandbox-exec`, 리눅스는 `bwrap` 이 있을 때만 씁니다. 울타리를 만들 수 없으면 도구를 싣지 않습니다.
+  - 다른 꾸러미(matplotlib 등)는 프로필 `code_python` 에 그 꾸러미가 깔린 파이썬 경로를 적습니다. 매번 묻게 하려면 `run_code_ask = true`.
 
 ## 웹 허브
 

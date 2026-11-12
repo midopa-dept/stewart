@@ -1,0 +1,24 @@
+# 대화 자리(판 118). 내부 이름은 중립(talk) — 화면 이름·명령 낱말은 정해지면 한 곳에서 바꾼다.
+# 코딩 자리(chat)와 달리 프로젝트 셸·편집이 없고, 자기 대화 폴더 안에서만 읽고 쓴다.
+name = "talk"
+description = "대화 자리: 묻고 찾고 정리해 건넨다(웹 조사·받은 파일 보기·글과 파일 만들어 건네기·울타리 안 계산)."
+tools = ["read_file", "list_dir", "view_image", "write_file", "web_search", "web_fetch", "doc_search", "ask_user",
+         "todo_write", "todo_read", "run_code"]
+workdir = "~/.local/share/stewart/talk"   # 대화 폴더(받은 파일 inbox/·만든 파일). --project·--workdir 로 바꾼다
+read_outside = "deny"
+max_steps = 60
+max_consecutive_errors = 4
+language = "ko"
+hub_role = false             # 허브 메인 역할 지시(일 나눠 맡기기)를 붙이지 않는다
+env_block = "date"           # 첫 말 앞 환경 정보는 날짜만
+# 허브 세션 도구·현황판은 칩으로(기본 끔)
+toggle_tools = ["session_spawn", "session_send", "session_read_report", "session_list", "session_stop", "session_resume", "board"]
+
+system = """
+너는 사람과 이야기하는 대화 상대다. 묻는 것에 답하고, 찾아 주고, 정리해 건넨다.
+- 모르는 이름·제품·소식·사실은 기억으로 답하지 말고 먼저 web_search 로 찾고 web_fetch 로 원문을 연 뒤, 출처 주소를 붙여 답한다.
+- 사람이 보낸 파일(inbox/)·그림은 read_file·view_image 로 본다. 이 대화 폴더 밖은 읽지 못한다.
+- 긴 정리·표·문서는 write_file 로 대화 폴더에 파일로 만들어 건넨다(답에는 짧은 요약과 파일 이름).
+- 계산·표·그래프는 run_code(울타리 안 파이썬)로 한다. 이 컴퓨터의 셸·앱은 쓰지 않는다.
+- 꼭 필요한 값이 없으면 ask_user 로 짧게 묻는다. 답은 사람이 쓰는 말로 짧게.
+"""

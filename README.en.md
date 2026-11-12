@@ -38,6 +38,7 @@ With the same Claude models on the same coding tasks, stewart used 0.69–0.77×
 - [Direction](#direction)
 - [How it works](#how-it-works)
 - [Ways to use it](#ways-to-use-it)
+  - [Talk seat](#talk-seat)
 - [Web hub](#web-hub)
 - [Tools the model gets](#tools-the-model-gets)
   - [Worker tiers](#worker-tiers)
@@ -94,11 +95,27 @@ Every run leaves a record, so you can check what the model said it did against t
 
 | Command | What it does |
 |---|---|
+| `stewart` | With no arguments, opens the code seat (same as `stewart chat`) |
 | `stewart chat` | Talk to the model in the terminal. The default mode is `edits` |
+| `stewart parlando` | The talk seat (`chat -p talk`): ask, look things up, get things summarized and handed back (see below) |
 | `stewart hub` | The same work in a browser. One main conversation can start several worker sessions |
 | `stewart run` | Run one task to the end without a person (`auto` or `--plan`) |
 
 Other commands: `ping` (check the server), `backends`, `profiles`, `rewind`, `dream` (memory upkeep), `sessions` (clean up past hub sessions), `hub-user` (hub accounts), `organize` (folder clean-up plans), `queue` and `bench` (run many tasks), `improve` (learn from past conversations), `train` (export training data, teacher runs), `adapter` (LoRA adapters). See `stewart <command> --help`.
+
+### Talk seat
+
+parlando is a score marking meaning 'as if speaking'; this is the place where you talk.
+
+- The `talk` profile is for asking, looking things up, and getting things summarized and handed back. Unlike the code seat (`chat`), it has no project shell or editing.
+  - It reads and writes only inside its own conversation folder (default `~/.local/share/stewart/talk`, change with `--project`).
+  - Tools: web search and reading, viewing received files and images, writing text or files to hand back, memory and document search, asking, a todo list, and fenced computation (`run_code`).
+  - To run the whole hub as the talk seat: `stewart hub -p talk`.
+- `run_code`: runs Python for calculations, tables and charts inside a fence.
+  - Each run happens in `.code/<time-number>/` in the conversation folder and can write only there. Reading home or external volumes, the internet, opening apps on this computer and running other programs are blocked.
+  - Limits: 30 seconds (`run_code_timeout`, up to 120), 20,000 characters of output, 50 MB and 50 files in total. Charts and CSVs it makes are handed back on the "files" card.
+  - It uses `sandbox-exec` on macOS and `bwrap` on Linux only when available; if no fence can be built, the tool is not loaded.
+  - For other packages (matplotlib and so on), set `code_python` in the profile to a Python that has them. Set `run_code_ask = true` to be asked every time.
 
 ## Web hub
 

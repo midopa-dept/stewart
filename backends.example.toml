@@ -78,15 +78,15 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # # backend = "<다른 모델이 있으면 그 백엔드 이름>"
 # budget = 24000
 # slim = true                  # 메인으로 앉힐 때 얇은 허브(작업자일 때는 뜻 없음)
-# use = "곧. 찾기·읽기·요약, 검산할 것."
+# use = "찾기·읽기·요약(결과는 검산)"
 # default_for = ["read"]
 # [tiers.moderato]
 # budget = 32000               # 잠정값 — 개발 실측(압축 창·대화 몫) 결과로 다시 정한다. 등급을 안 고르면 지금 동작 그대로
-# use = "보통으로. 코딩·대화의 기본."
+# use = "코딩·대화의 기본"
 # default_for = ["write"]
 # [tiers.largo]
 # max = 1                      # 서버 창 전부(budget 없음) — 모든 기능의 메인: stewart hub --tier largo
-# use = "넓게. 계획·분배·검토."
+# use = "계획·분배·검토"
 # rubato(바깥의 큰 모델)는 이 표에 두지 않는다 — 글이 그 회사로 나가고 돈이 드니, 따로 도는 허브로 띄워 사람이 열 때만 쓴다.
 #   표에 없는 등급을 --tier 로 부르면 거절한다(기본 모델로 대신하지 않는다):
 #   stewart instance <이름> start   (자기 backends·작업 폴더·기억, OS 샌드박스 — README "따로 도는 허브")

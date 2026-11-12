@@ -34,9 +34,12 @@ def decide(mode: str, tool: str) -> str:
         return "run"
     if mode == "plan":
         return "deny"
-    if mode == "edits" and tool in EDIT_TOOLS:
+    if mode == "edits" and (tool in EDIT_TOOLS or tool in SANDBOXED):
         return "run"
     return "ask"
+
+
+SANDBOXED = frozenset({"run_code"})   # 판 118: 울타리 안 실행(망·사람 파일·앱 못 닿음) — edits 에서 바로, plan 에서 막음
 
 
 def check_mode(mode: str, interactive: bool) -> str:

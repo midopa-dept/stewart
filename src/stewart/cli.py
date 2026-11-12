@@ -448,6 +448,19 @@ def _history(a, workdir: Path | None, chat: bool) -> tuple[list[dict] | None, st
 
 def main(argv: list[str] | None = None) -> int:
     args0 = list(sys.argv[1:] if argv is None else argv)
+    if not args0 and sys.stdin.isatty() and sys.stdout.isatty():   # 판 118: 인자 없는 실행 = 코딩(chat, 모드 edits 그대로)
+        args0 = ["chat"]
+    from . import surfaces as SF
+    if args0[:1] == [SF.TALK_COMMAND]:   # 판 118: 대화 자리 = chat -p talk(이름은 surfaces.py 한 곳)
+        from .config import ConfigError as _CE, load_profile as _lp   # main 안 지역 이름을 가리지 않게 별칭으로
+        try:
+            Path(_lp(SF.TALK_PROFILE).workdir).mkdir(parents=True, exist_ok=True)
+        except (_CE, OSError):
+            pass
+        rest = args0[1:]
+        if any(x in ("-h", "--help") for x in rest):   # 도움말 첫 줄에 이름 한 줄(판 118)
+            print(SF.TALK_ABOUT)
+        args0 = ["chat", "-p", SF.TALK_PROFILE] + rest if not any(x in ("-p", "--profile") for x in rest) else ["chat"] + rest
     if args0[:1] == ["instance"]:   # stewart instance <이름> start|run|check|profile|dirs — 따로 도는 허브(instance.py)
         from .instance import main as instance_main
         return instance_main(args0[1:])
@@ -590,6 +603,9 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--clean", action="store_true", help="--cost: 기억·사용자 스킬을 끈 뼈대")
     pf.add_argument("--slim", action="store_true", help="--cost: 얇은 허브 메인 꼴(등급 slim = true, 판 113 — --hub 를 뜻함)")
     pf.add_argument("--chat-slim", action="store_true", help="--cost: chat 길의 얇은 꼴(stewart chat --tier <slim 등급>, 판 114 — 허브 도구 없음)")
+    from . import surfaces as _SF
+    sub.add_parser(_SF.TALK_COMMAND, help=f"{_SF.TALK_LABEL} 자리(프로필 {_SF.TALK_PROFILE}) — chat -p {_SF.TALK_PROFILE} 과 같다. 인자 없는 실행은 코딩 자리",
+                   add_help=False)
     hb = sub.add_parser("hub", help="허브: 메인 세션 + 작업자 세션들을 웹 화면(127.0.0.1) 하나로 본다")
     hb.add_argument("action", nargs="?", choices=["url"], help="url: 떠 있는 허브의 접속 주소·로그인 토큰을 다시 보인다(허브는 띄우지 않음)")
     hb.add_argument("--project", default=None, help="프로젝트 폴더(메인의 작업 폴더, 기본: 지금 폴더)")
@@ -626,7 +642,10 @@ def main(argv: list[str] | None = None) -> int:
     wk.add_argument("--session-dir", required=True)
     wk.add_argument("--approval-fd", type=int)
     wk.add_argument("--resume")
-    a = ap.parse_args(argv)
+    if not args0:   # 판 118: 터미널이 아니면(파이프 등) 인자 없는 stewart 는 도움말
+        ap.print_help()
+        return 0
+    a = ap.parse_args(args0)
     from . import osdep
     if osdep.IS_WIN:   # 콘솔 Ctrl-C 가 막혀 있는 소켓 읽기를 깨우지 못하므로 받는 중인 연결을 먼저 끊는다(WIN-4)
         from .backend import abort_streams

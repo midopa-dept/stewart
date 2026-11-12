@@ -38,7 +38,8 @@ def measure(profile_name: str, hub: bool = False, clean: bool = False, slim: boo
             from . import hubtools as HT
             from .board import NOTE as BOARD_NOTE
             from .hubmain import HUB_MAIN_NOTE
-            p = dataclasses.replace(p, system=(p.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
+            if (p.raw or {}).get("hub_role", True) is not False:   # 판 118: 대화 자리 등은 허브 역할 지시를 안 붙인다
+                p = dataclasses.replace(p, system=(p.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
             extra = (HT.DEFINITIONS, None)
         s = C.ChatSession(p, Backend("cost", "http://127.0.0.1:9/v1", "m", "-", 100000, vision=True), Recorder(tmp / "runs", "cost"),
                           C.UI(out=io.StringIO(), color=False), stream=False, mode="auto", extra_tools=extra)
