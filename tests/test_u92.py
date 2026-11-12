@@ -114,5 +114,12 @@ class TCost(unittest.TestCase):
         self.assertIn("얇은 chat", CC.table([r]))
 
 
+class TKnob(unittest.TestCase):
+    def test_compact_window_in_fingerprint(self):   # 판 114.1: 평가 창 1 W 칸을 지문으로 가른다
+        from stewart import features as FT
+        with mock.patch.dict(os.environ, {"STEWART_COMPACT_WINDOW": "24000"}):
+            self.assertEqual(FT.fingerprint("s", [], "run")["knobs"].get("STEWART_COMPACT_WINDOW"), "24000")
+
+
 if __name__ == "__main__":
     unittest.main()
