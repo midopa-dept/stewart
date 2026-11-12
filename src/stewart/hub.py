@@ -370,11 +370,11 @@ class Hub:
         self._save(reg)
 
     @_locked
-    def register_chat(self, name: str, workdir: Path, mode: str, title: str = "", origin: str = "fresh") -> None:
+    def register_chat(self, name: str, workdir: Path, mode: str, title: str = "", origin: str = "fresh", kind: str = "code") -> None:
         """사람이 연 대화(메인과 같은 채팅, 허브 안에서 돈다 — 프로세스 없음). 승인은 같은 대기열에 session=이름 으로 온다."""
         reg = self.registry()
         self.sdir(name).make()
-        reg["sessions"][name] = {"name": name, "role": "chat", "title": title, "origin": origin,
+        reg["sessions"][name] = {"name": name, "role": "chat", "title": title, "origin": origin, "kind": kind,
                                  "workdir": str(Path(workdir).resolve()), "worktree": None, "profile": None,
                                  "backend": None, "mode": mode, "executor": {"kind": "local"}, "status": "idle",
                                  "pid": os.getpid(), "started": now(), "last_event": None, "run_dir": None,

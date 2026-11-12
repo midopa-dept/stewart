@@ -612,6 +612,9 @@ def main(argv: list[str] | None = None) -> int:
     hb.add_argument("--new-token", action="store_true", help="로그인 토큰을 새로 만든다(예전 로그인은 모두 끝남). 기본은 상태 폴더의 것을 다시 쓴다")
     hb.add_argument("-p", "--profile", default="chat", help="메인 프로필(기본 chat)")
     hb.add_argument("-b", "--backend", default=None)
+    hb.add_argument("--kind", choices=["code", "talk"], default=None,
+                    help="메인 칸의 종류: code(코드 — 이 프로젝트를 읽고 고침, 기본) | talk(대화 — 대화 폴더, 프로젝트는 안 건드림). "
+                         "＋새 대화에서는 둘 다 연다. 판 120")
     hb.add_argument("--tier", default=None, help="메인을 backends 표 [tiers.<이름>] 등급(백엔드·프로필·문맥 예산)으로 켠다. "
                     "등급에 slim = true 면 작은 모델용 얇은 메인(짧은 지시·핵심 도구만, 나머지는 칩). -b 는 작업자 기본으로 남는다")
     hb.add_argument("--worker-profile", default=None, help="작업자 기본 프로필(기본: 메인과 같음)")

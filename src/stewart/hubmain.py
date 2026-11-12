@@ -375,17 +375,60 @@ def _reach(backend) -> str:
     return ""
 
 
+def _run_kind(run_dir: Path, default: str) -> str:
+    """지난 기록의 종류: 그 기록을 연 프로필의 자리(대화 프로필이면 talk)."""
+    from . import surfaces as SF
+    try:
+        with open(Path(run_dir) / "events.jsonl", encoding="utf-8") as f:
+            meta = json.loads(f.readline()).get("meta") or {}
+    except (OSError, ValueError):
+        return default
+    return "talk" if meta.get("profile") == SF.TALK_PROFILE else "code" if meta.get("profile") else default
+
+
+def with_role(profile):
+    """허브 역할 지시(일 나눠 맡기기) + 현황판 지시를 붙인 프로필. 얇은 꼴(판 113)·hub_role = false(판 118)·STEWART_HUB_ROLE=0 이면 그대로."""
+    import dataclasses
+    import os
+    from . import slim as SL
+    if (SL.conf(profile) is None and os.environ.get("STEWART_HUB_ROLE") != "0"
+            and (profile.raw or {}).get("hub_role", True) is not False and HUB_MAIN_NOTE not in (profile.system or "")):
+        from .board import NOTE as BOARD_NOTE
+        profile = dataclasses.replace(profile, system=(profile.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
+    return profile
+
+
+def kind_of(profile) -> str:
+    """판 120: 대화 칸의 종류 — 프로필 surface 가 talk 면 talk(대화), 아니면 code(코드)."""
+    return "talk" if str((getattr(profile, "raw", None) or {}).get("surface") or "") == "talk" else "code"
+
+
+def kind_resolver(a, project: Path, backend_name):
+    """판 120: run_hub 이 쓰는 종류 → (프로필, 백엔드). 대화는 대화 프로필·대화 폴더, 코드는 -p(대화 프로필이면 chat)·허브 프로젝트."""
+    from . import surfaces as SF
+    from .cli import resolve
+    from .config import load_profile
+
+    def r(kind: str):
+        if kind == "talk":
+            wd = Path(load_profile(SF.TALK_PROFILE).workdir)
+            wd.mkdir(parents=True, exist_ok=True)
+            return resolve(SF.TALK_PROFILE, backend_name, str(wd))
+        name = a.profile if a.profile and a.profile != SF.TALK_PROFILE else "chat"
+        p, b = resolve(name, backend_name, str(project))
+        return (p, b) if kind_of(p) == "code" else resolve("chat", backend_name, str(project))
+    return r
+
+
 class HubMain:
     def __init__(self, hub: Hub, profile, backend, rec, mode: str = "edits", worker_profile: str = "chat",
                  worker_backend: str | None = None, history: list | None = None, resumed_from: str | None = None):
         self.hub = hub
         import dataclasses
         import os
-        from . import slim as SL
-        if (SL.conf(profile) is None and os.environ.get("STEWART_HUB_ROLE") != "0"   # 얇은 메인(판 113)은 짧은 지시 하나만
-                and (profile.raw or {}).get("hub_role", True) is not False):   # 판 118: 대화 자리 등 프로필이 끈 경우
-            from .board import NOTE as BOARD_NOTE
-            profile = dataclasses.replace(profile, system=(profile.system or "").rstrip() + "\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE)
+        profile = with_role(profile)
+        self.kind = kind_of(profile)   # 판 120: 메인 칸의 종류(code·talk) — 새 대화의 기본
+        self.kind_resolver = None      # run_hub 이 넣는다: 종류 → (프로필, 백엔드). 없으면 메인과 같은 종류만
         hub.register_main(profile.workdir, mode)
         self.name = "main"
         self.chats: dict = {}                 # 사람이 연 대화(메인과 같은 채팅): 이름 → HubChat
@@ -898,9 +941,11 @@ class HubMain:
 
     def _chat_list(self) -> list[dict]:
         root = self._root()
-        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir)}]
+        tier = (((root._profile.raw or {}).get("tier") or {}).get("name")) or ""
+        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": tier}]
         for c in root.chats.values():
-            out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir)})
+            out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir),
+                        "kind": getattr(c, "kind", root.kind), "tier": tier if getattr(c, "kind", root.kind) == root.kind else ""})
         return out
 
     def conv(self, name: str | None) -> "HubMain":
@@ -910,33 +955,63 @@ class HubMain:
             return root
         return root.chats[name]
 
-    def new_chat(self, how: str = "fresh", source: str = "main", run_dir: str = "", title: str = "") -> "HubChat":
+    def search_dirs(self) -> list:
+        """판 120: 지난 대화 찾기가 볼 폴더 — 메인 칸 폴더와 다른 종류 칸의 폴더(종류 꼬리표)."""
+        root = self._root()
+        out = [(Path(root._profile.workdir), root.kind)]
+        if root.kind_resolver is not None:
+            try:
+                k2 = "code" if root.kind == "talk" else "talk"
+                out.append((Path(root.kind_profile(k2)[0].workdir), k2))
+            except Exception:   # noqa: BLE001 — 풀이 실패는 찾기를 막지 않는다
+                pass
+        return out
+
+    def kind_profile(self, kind: str):
+        """판 120: 그 종류 대화의 (프로필, 백엔드). 메인과 같은 종류면 메인 것. 종류마다 한 번만 풀어 둔다."""
+        root = self._root()
+        if kind == root.kind:
+            return root._profile, root._backend
+        cache = root.__dict__.setdefault("_kind_cache", {})
+        if kind not in cache:
+            if root.kind_resolver is None:
+                raise ValueError(f"이 허브는 {'대화' if kind == 'talk' else '코드'} 칸을 열 수 없다(종류 풀이가 없음)")
+            p, b = root.kind_resolver(kind)
+            cache[kind] = (with_role(p), b)
+        return cache[kind]
+
+    def new_chat(self, how: str = "fresh", source: str = "main", run_dir: str = "", title: str = "", kind: str | None = None) -> "HubChat":
         """새 대화. fresh = 빈 문맥(격리), fork = source 대화를 지금까지 복사해 갈라짐(이후 서로 독립),
         reopen = 지난 대화 기록(run_dir)을 새 칸으로. 같은 프로젝트·기억·현황판·허용 규칙을 쓰고, 기록 폴더·압축·문맥 % 는 따로."""
         root = self._root()
         history, resumed = None, None
+        if kind not in (None, "talk", "code"):
+            raise ValueError("kind 는 talk·code")
         if how == "fork":
             src = root.conv(source)
             if src.busy:
                 raise RuntimeError(f"{'메인' if src.name == 'main' else src.title} 이 일하는 중이다 — 차례가 끝난 뒤 가른다")
             history = json.loads(json.dumps(src.sess.messages, ensure_ascii=False))
             resumed = str(src.sess.rec.dir)
+            kind = getattr(src, "kind", root.kind)   # 갈래는 원래 대화와 같은 종류
         elif how == "reopen":
             from .resume import load_messages
             if run_dir not in {x["run_dir"] for x in root.past_mains(50)}:
                 raise ValueError("지난 대화 목록에 없는 기록")
             history, resumed = load_messages(Path(run_dir)), run_dir
+            kind = kind or _run_kind(Path(run_dir), root.kind)
         elif how != "fresh":
             raise ValueError("how 는 fresh·fork·reopen")
+        kind = kind or root.kind
         root._chat_n += 1
         while f"chat-{root._chat_n}" in root.chats:
             root._chat_n += 1
         name = f"chat-{root._chat_n}"
         if not title:
             title = {"fresh": f"대화 {root._chat_n}", "fork": f"갈래 {root._chat_n}", "reopen": f"다시 연 대화 {root._chat_n}"}[how]
-        c = HubChat(root, name, title=title, origin=how, history=history, resumed_from=resumed)
+        c = HubChat(root, name, title=title, origin=how, history=history, resumed_from=resumed, kind=kind)
         root.chats[name] = c
-        root.hub.event("chat_new", chat=name, how=how, source=source if how == "fork" else None, run_dir=str(c.sess.rec.dir))
+        root.hub.event("chat_new", chat=name, how=how, chat_kind=kind, source=source if how == "fork" else None, run_dir=str(c.sess.rec.dir))
         return c
 
     def close_chat(self, name: str) -> str:
@@ -1185,18 +1260,20 @@ class HubChat(HubMain):
     현황판·기억·모델 감시·허용 규칙은 메인 것을 함께 쓰고, ChatSession·기록 폴더·화면 기록·바쁨은 따로."""
 
     def __init__(self, main: HubMain, name: str, title: str = "", origin: str = "fresh",
-                 history: list | None = None, resumed_from: str | None = None):
+                 history: list | None = None, resumed_from: str | None = None, kind: str | None = None):
         from .record import Recorder
         hub = main.hub
         self.hub, self.main, self.name, self.title, self.origin = hub, main, name, title, origin
+        self.kind = kind or main.kind   # 판 120: 만들 때 정하고 바뀌지 않는다(지시문·도구 고정 → 앞부분 캐시 유지)
+        prof, back = main.kind_profile(self.kind)
         self.chats = {}
-        hub.register_chat(name, main._profile.workdir, main._mode, title=title, origin=origin)
+        hub.register_chat(name, prof.workdir, main._mode, title=title, origin=origin, kind=self.kind)
         self.ui = HubMainUI(hub, name)
         self.ui.hub_rules = hub.allow_rules
         hub.chat_answers[name] = self.ui.put_answer
         self.tools = HT.MainTools(hub, main_mode=main._mode, default_profile=main._worker_profile,
                                   default_backend=main._worker_backend)
-        self._profile, self._backend, self._mode, self._runs_dir = main._profile, main._backend, main._mode, main._runs_dir
+        self._profile, self._backend, self._mode, self._runs_dir = prof, back, main._mode, main._runs_dir
         self._worker_profile, self._worker_backend = main._worker_profile, main._worker_backend
         rec = Recorder(self._runs_dir, "hub-main")
         self.sess = ChatSession(self._profile, self._backend, rec, ui=self.ui, stream=True, mode=self._mode, default_mode="edits",
@@ -1557,11 +1634,21 @@ def run_hub(a) -> int:
     if ntfy is not None:
         ntfy.hub = hub
         ntfy.on_error = lambda why: hub.event("ntfy_fail", detail=why)
-    profile, backend = main_tier(a, str(project))
+    if getattr(a, "kind", None) == "talk" and a.profile in (None, "chat"):   # 판 120: 메인 칸을 대화로(코드 칸은 이 프로젝트)
+        from . import surfaces as SF
+        a.profile = SF.TALK_PROFILE
+    elif getattr(a, "kind", None) == "code" and a.profile == "talk":
+        a.profile = "chat"
+    main_wd = _profile_workdir(a.profile) if a.profile == "talk" else None
+    if main_wd:
+        Path(main_wd).mkdir(parents=True, exist_ok=True)
+    profile, backend = main_tier(a, str(main_wd or project))
     history, prev = last_main(hub) if not getattr(a, "new_main", False) else (None, None)
     rec = Recorder(Path(a.runs_dir), "hub-main")
     main = HubMain(hub, profile, backend, rec, mode=a.mode, worker_profile=a.worker_profile or a.profile,
                    worker_backend=a.backend, history=history, resumed_from=prev)
+    main.kind_resolver = kind_resolver(a, project, backend.name)   # 판 120: ＋새 대화에서 대화·코드 칸
+    main._project = project
     main.label, main.color = str(cfg.get("label") or ""), str(cfg.get("color") or "")   # 허브가 여럿일 때 가름(머리 이름·색 띠)
     main.image_ocr, main.image_tiles = bool(cfg.get("image_ocr", False)), bool(cfg.get("image_tiles", False))   # 판 82 손잡이
     resumed = hub.recover()

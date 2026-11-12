@@ -428,14 +428,18 @@ class WebApp:
                 except KeyError:
                     return self._json(h, 404, {"error": "no_chat", "detail": "닫혔거나 없는 대화다 — 화면을 새로 고친다"})
             if path == "/api/chat/new":   # 새 대화: fresh(격리)·fork(지금 대화 복사해 갈라짐)·reopen(지난 기록을 새 칸으로)
+                from .config import ConfigError as _ConfigError
                 try:
                     c = self.main.new_chat(str(data.get("how") or "fresh"), source=str(data.get("from") or "main"),
-                                           run_dir=str(data.get("run_dir") or ""), title=str(data.get("title") or "")[:80])
+                                           run_dir=str(data.get("run_dir") or ""), title=str(data.get("title") or "")[:80],
+                                           kind=data.get("kind") if data.get("kind") in ("talk", "code") else None)
                 except (ValueError, KeyError) as e:
                     return self._json(h, 400, {"error": "chat", "detail": str(e)})
                 except RuntimeError as e:
                     return self._json(h, 409, {"error": "chat", "detail": str(e)})
-                return self._json(h, 200, {"ok": True, "chat": c.name, "title": c.title})
+                except (OSError, _ConfigError) as e:   # 판 120: 다른 종류 칸의 프로필·폴더를 못 풀면 끊지 말고 까닭을
+                    return self._json(h, 400, {"error": "chat", "detail": f"칸을 열지 못했다: {e}"[:300]})
+                return self._json(h, 200, {"ok": True, "chat": c.name, "title": c.title, "kind": c.kind})
             if path == "/api/chat/close":
                 try:
                     return self._json(h, 200, {"ok": True, "run_dir": self.main.close_chat(str(data.get("chat") or ""))})
@@ -518,7 +522,7 @@ class WebApp:
             from .trash import past_search
             q = (parse_qs(url.query).get("q") or [""])[0][:200]
             m = self.main
-            return self._json(h, 200, {"hits": past_search(m._runs_dir, Path(m._profile.workdir), q)})
+            return self._json(h, 200, {"hits": past_search(m._runs_dir, m.search_dirs(), q)})
         if path == "/api/status_info":   # 판 111: [상태] 탭
             return self._json(h, 200, self._conv_q(url).status_info())
         if path == "/api/file":   # 판 104: 작업 폴더 파일 열기·내려받기(읽기 전용, @파일과 같은 경계, HTML·SVG 는 내려받기만)

@@ -128,6 +128,7 @@ uv run stewart hub --project ~/my-project
   - Approval bar: allow or deny what the model asks to run. ⌘/Ctrl+Enter allows, ⇧⌘/Ctrl+Backspace denies.
   - Conversation: edits show as diff cards with line numbers, thinking as a folding block, and every code block has a copy button.
   - Hand-off card: when the model reaches something only a person can do (a password, keychain prompt, sudo, a login), it stops retrying and hands it to you.
+  - Talk and code tabs: "+ New conversation" lets you pick **talk** (ask, read things up, get text or files back; the project folder is left alone) or **code** (hand over one folder to read, edit and run commands in). The kind is fixed when the conversation is created and shown as a tag in the list and header. Set the main tab's kind with `stewart hub --kind talk|code` (default code).
   - Several conversations: start a new main conversation, branch the current one, or reopen a closed one. Approvals and stops apply per conversation. `/clear`, `/reset` and `/help` work.
   - Side panel: board, memory, steps, plan, always-allow rules, tokens, status (backend, mode, thinking, context budget, estimated fixed-prefix tokens, tool list).
   - Past conversation search: the search box in the sidebar finds words in your messages and the model's replies in past conversations and opens them.

@@ -30,22 +30,39 @@ function Board() {
 
 const MODES = ['plan', 'ask', 'edits', 'auto']
 // ＋새 대화: 새로(빈 문맥, 격리) · 갈래(지금 보는 대화를 복사해 갈라짐) · 작업자 맡기기(메인이 일을 맡긴 것처럼 따로 프로세스)
+// 판 120: 대화 칸의 종류 — 대화(묻고 찾고 건넴, 프로젝트 안 건드림) · 코드(폴더 하나를 맡겨 읽고 고치고 명령)
+export const KIND_LABEL = { talk: '대화', code: '코드' }
+export const kindTag = c => c?.kind ? KIND_LABEL[c.kind] + (c.tier ? ' · ' + c.tier : '') : ''
+const KIND_KEY = 'stewart.newKind'
+function lastKind() { try { return localStorage.getItem(KIND_KEY) || 'talk' } catch { return 'talk' } }
 function NewChooser({ onClose }) {
   const [worker, setWorker] = useState(false)
   const [err, setErr] = useState('')
+  const [kind, setKind] = useState(lastKind())
   const cur = (hub.value?.chats || []).find(c => c.name === chat.value)
   async function go(how) {
-    try { const r = await cpost('/api/chat/new', { how, from: chat.value }); onClose(); openChat(r.chat); refresh() } catch (e) { setErr(e.message) }
+    try {
+      const body = { how, from: chat.value }
+      if (how === 'fresh') { body.kind = kind; try { localStorage.setItem(KIND_KEY, kind) } catch { /* 저장 못 해도 된다 */ } }
+      const r = await cpost('/api/chat/new', body); onClose(); openChat(r.chat); refresh()
+    } catch (e) { setErr(e.message) }
   }
   if (worker) return <NewSession onClose={onClose} />
+  const kbtn = (k, desc) => <button key={k} aria-pressed={kind === k}
+    class={'flex-1 text-left border rounded-xl px-3 py-2 ' + (kind === k ? 'border-accent bg-soft' : 'border-line hover:bg-soft')}
+    onClick={() => setKind(k)}><div class="font-semibold">{KIND_LABEL[k]}</div><div class="text-xs text-mute">{desc}</div></button>
   return (
     <div class="fixed inset-0 z-50 bg-black/45 grid place-items-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div class="w-full max-w-md bg-panel rounded-2xl p-4 space-y-2 shadow-card">
         <div class="font-semibold text-base mb-1">새 대화</div>
+        <div class="flex gap-2 max-md:flex-col">
+          {kbtn('talk', '묻고, 찾아 읽고, 글이나 파일을 받는다. 프로젝트 폴더는 건드리지 않는다')}
+          {kbtn('code', '폴더 하나를 맡긴다. 읽고, 고치고, 명령을 돌린다')}
+        </div>
         <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => go('fresh')}>
-          <div class="font-semibold">새로 — 빈 문맥</div><div class="text-xs text-mute">같은 프로젝트·기억·현황판, 앞 대화는 모른다(서로 격리)</div></button>
+          <div class="font-semibold">새로 — {KIND_LABEL[kind]}, 빈 문맥</div><div class="text-xs text-mute">기억·현황판은 함께 쓰고, 앞 대화는 모른다(서로 격리). 종류는 도중에 바뀌지 않는다</div></button>
         <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft disabled:opacity-50" disabled={!!cur?.busy} onClick={() => go('fork')}>
-          <div class="font-semibold">이어서(갈래) — {cur?.title || '메인'} 을 복사</div><div class="text-xs text-mute">지금까지의 대화를 가지고 갈라진다. 이후로는 서로 독립{cur?.busy ? ' · 일하는 중이라 끝난 뒤' : ''}</div></button>
+          <div class="font-semibold">이어서(갈래) — {cur?.title || '메인'} 을 복사</div><div class="text-xs text-mute">지금까지의 대화를 가지고 갈라진다(같은 종류{cur?.kind ? ' · ' + KIND_LABEL[cur.kind] : ''}). 이후로는 서로 독립{cur?.busy ? ' · 일하는 중이라 끝난 뒤' : ''}</div></button>
         <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => setWorker(true)}>
           <div class="font-semibold">작업자 맡기기</div><div class="text-xs text-mute">따로 도는 작업자에게 일 하나를 맡긴다(메인에 보고, 대화 칸과 다르다)</div></button>
         {err && <div class="text-bad text-sm">안 됨: {err}</div>}
@@ -102,7 +119,7 @@ function SessionItem({ s }) {
   return (
     <button class={'mx-2 my-px px-2.5 py-2 rounded-[9px] flex flex-col gap-px text-left w-[calc(100%-16px)] hover:bg-soft ' + (on ? 'bg-soft' : '')}
       onClick={() => { if (conv) openChat(s.role === 'main' ? 'main' : s.name); else { view.value = s.name; drawer.value = false } }}>
-      <span class="font-[560] truncate w-full">{name}{asks ? <span class="chip ml-1.5 !text-warn">승인 {asks}</span> : null}</span>
+      <span class="font-[560] truncate w-full">{name}{conv && kindTag(cinfo) ? <span class="text-xs text-mute font-normal ml-1.5">{kindTag(cinfo)}</span> : null}{asks ? <span class="chip ml-1.5 !text-warn">승인 {asks}</span> : null}</span>
       <span class="text-xs text-mute flex gap-1.5 items-center w-full min-w-0">
         <span class={'dot ' + (mainBusy ? 'dot-run' : dot ? 'dot-' + dot : '')} />
         <span class="truncate">{conv ? (mainBusy ? '일하는 중' : '기다리는 중') + (s.role === 'chat' && cinfo?.origin === 'fork' ? ' · 갈래' : '') : label}{now ? ` · ${now.what.slice(0, 40)} · ${secs}초` : ''}</span>
@@ -200,7 +217,7 @@ function PastSearch() {
       onInput={e => setQ(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter') go() }} />
     {hits && <div class="mt-1 text-[12.5px]">{hits.length ? hits.map(h => <button key={h.run_dir} class="block w-full text-left px-2 py-1 rounded hover:bg-soft"
       title="새 대화 칸으로 연다" onClick={() => post('/api/chat/new', { how: 'reopen', run_dir: h.run_dir }).then(r => { openChat(r.chat); refresh() }, e => toast('안 됨: ' + e.message))}>
-      <div class="truncate font-semibold">{h.first || '(첫 말 없음)'}</div>
+      <div class="truncate font-semibold">{h.first || '(첫 말 없음)'}{h.kind ? <span class="text-mute font-normal"> · {KIND_LABEL[h.kind]}</span> : null}</div>
       <div class="text-mute truncate">{h.role === 'user' ? '사람: ' : '모델: '}{h.snippet}</div></button>) : <div class="text-mute px-2">없음</div>}</div>}
   </div>
 }

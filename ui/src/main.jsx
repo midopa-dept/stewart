@@ -8,7 +8,7 @@ import { get, post, fmtK, estTokens } from './lib.js'
 import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
 import { Thread, Md, TodoItems, UserImgs } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
-import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips } from './side.jsx'
+import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips, kindTag } from './side.jsx'
 import { Panel } from './panel.jsx'
 import { useWorker, WorkerThread, WorkerControls, WorkerInfo } from './worker.jsx'
 
@@ -126,6 +126,8 @@ function Center() {
         <button class="btn btn-ghost !px-2 max-md:hidden" onClick={toggleSide} title="사이드바 접기·펴기">☰</button>
         {st?.hub_label && <span class="chip font-semibold flex-none" style={st.hub_color ? `border-color:${safeColor(st.hub_color)}` : ''}>{st.hub_label}</span>}
         <span class="font-[650] truncate min-w-[2.5rem]">{title}</span>
+        {isMain && kindTag(conv || (st?.chats || []).find(c => c.name === 'main')) &&
+          <span class="chip flex-none text-xs" title="이 대화의 종류(만들 때 정해지고 바뀌지 않는다)">{kindTag(conv || (st?.chats || []).find(c => c.name === 'main'))}</span>}
         {!isMain && <WorkerControls name={v} />}
         {isMain ? <CtxBar /> : <span class="ml-auto" />}
         {isMain && <NewMain />}
