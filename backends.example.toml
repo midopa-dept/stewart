@@ -66,3 +66,18 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # adapter_style = "lora"
 # adapter_scale = 1.0
 # 확인: stewart adapter [-b cloud]  (서버 목록에 실렸는지 대조)
+
+# ── 작업자 등급(판 110) — 동시 작업자(workers spawn)가 쓸 모델·도구·문맥을 이름으로 묶는다 ──
+# 모델에게는 등급 이름과 use 한 줄만 보인다. 안 고르면 default_for 로(read = 도구를 안 적은 읽기 일, write = 도구를 적은 일).
+# [tiers.light]
+# backend = "local-small"      # 이 표의 백엔드 이름(다른 장비면 메인과 정말로 같이 돈다)
+# profile = "code-min"         # 얇은 도구 묶음
+# budget = 12000               # 문맥 예산(작게)
+# max = 1                      # 이 등급의 동시 상한(로컬 llama-serve --parallel 1 이면 1)
+# use = "읽기·찾기·요약"
+# default_for = ["read"]
+# [tiers.normal]
+# backend = "main"
+# max = 2
+# use = "고치기"
+# default_for = ["write"]

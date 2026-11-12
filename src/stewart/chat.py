@@ -21,6 +21,7 @@ import json
 import re
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -54,6 +55,7 @@ from . import allowrules as AR
 from . import components as CM
 from . import train as TRAIN
 from . import examples as EX
+from . import spawn as SP
 from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
@@ -221,6 +223,23 @@ NARRATE_NOTE = "[엔진] 사람은 말 없이 도구만 도는 것을 보고 있
 INTERJECT_NOTE = "[엔진] 사람이 일하는 중에 새로 말했다. 이 말이 지금 목표를 바꾸면 하던 걸음을 멈추고 이 말을 따른다."
 
 
+class _LockedProxy:
+    """여러 실(동시 작업자)이 같은 체크포인트를 쓸 때 부르는 메서드를 잠금 안에서(판 108)."""
+
+    def __init__(self, obj, lock):
+        self._o, self._l = obj, lock
+
+    def __getattr__(self, k):
+        v = getattr(self._o, k)
+        if not callable(v):
+            return v
+
+        def f(*a, **kw):
+            with self._l:
+                return v(*a, **kw)
+        return f
+
+
 class ChatSession:
     def __init__(self, profile: Profile, backend: Backend, rec: Recorder, ui: UI | None = None, confirm: bool | None = None,
                  history: list[dict] | None = None, resumed_from: str | None = None, stream: bool = False,
@@ -252,6 +271,9 @@ class ChatSession:
             defs.append(clarify.DEFINITION)   # 되묻기: 질문을 보이고 그 차례를 끝낸다(다음 사람 입력이 답)
         if profile.tools and DG.wanted(profile.tools, 0):
             defs.append(DG.CHAT_DEFINITION)   # 작업자에게 맡기기(확인 질문은 같은 화면에 "[작업자 N]"). 기본 읽기 전용
+            if SP.enabled():
+                self.tiers = SP.load_tiers()  # 작업자 등급(판 110): backends 표 [tiers.*]
+                defs.append(SP.definition(self.tiers))   # 동시 작업자(판 108, SW-43): 띄우고 바로 돌아옴, 걸음 사이 끝 알림, 끝에서 wait
         if not web:
             defs = [d for d in defs if d["function"]["name"] not in T.WEB_TOOLS]
         elif not web["url"]:   # 검색 주소가 없으면 읽기(web_fetch)만
@@ -708,6 +730,11 @@ class ChatSession:
             self.ui.dim(f"    {'✓' if ok else '✗'} 장부 {args.get('op')}")
             if not ok:
                 self.st["tool_errors"] += 1
+            tc.update(ok=ok, result=result, elapsed_s=0.0)
+            return tc
+        if name == SP.NAME:
+            ok, result = self._workers(args)
+            self.ui.dim(f"    {'✓' if ok else '✗'} {_one_line(result.splitlines()[0] if result else '', 160)}")
             tc.update(ok=ok, result=result, elapsed_s=0.0)
             return tc
         if name == DG.NAME:
@@ -1199,6 +1226,7 @@ class ChatSession:
         self._cut, self._continued = False, 0
         self._intent_nudged = False
         self._todo_since, self._todo_nudged_at, self._todo_final_done = 0, 0, False   # 할 일 갱신 장치(판 85) — 차례마다
+        self._spawn_guard = False
         budget, n = self.max_steps, 0
         try:
             while True:
@@ -1323,6 +1351,9 @@ class ChatSession:
                             RF.append_user(self.messages, NARRATE_NOTE)
                             self.rec.event("narrate_nudge", step=step, silent=self._silent)
                     self._todo_watch(step, srec["tool_calls"])   # 할 일 목록이 걸음을 따라오는지(판 85)
+                    if getattr(self, "pool", None) is not None and (fin := self.pool.fresh_done()):   # 판 108: 끝난 작업자 알림
+                        RF.append_user(self.messages, f"\n\n[엔진] 작업자 {', '.join(fin)} 가 끝났다 — workers(action='collect') 로 결과를 받는다.")
+                        self.rec.event("spawn_inject", ids=fin)
                     dn = self.dnudge.on_step(self._turn_calls)
                     if dn:   # 맡기기 넛지(판 97): 읽기를 많이 한 차례에 한 번
                         RF.append_user(self.messages, dn)
@@ -1433,6 +1464,14 @@ class ChatSession:
                     self.rec.event("intent_nudge", step=step)
                     self.ui.dim("  (할 일을 말로만 하고 끝내 도구로 하게 되돌린다)")
                     continue
+                if getattr(self, "pool", None) is not None and self.pool.running() and not self._spawn_guard:   # 판 108: 남은 작업자
+                    self._spawn_guard = True
+                    RF.append_user(self.messages, f"[엔진] 작업자 {', '.join(self.pool.running())} 가 아직 돈다 — workers(action='wait') 로 "
+                                                  "기다렸다 결과를 모아 답한다(필요 없으면 cancel). 앞 답은 이미 사람에게 갔으니 다시 쓰지 말고 이어 간다.")
+                    self.rec.event("spawn_guard", step=step, running=self.pool.running())
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    continue
                 if self._todo_final(content, step):   # 사람에게 답·물음 전에 할 일 목록을 지금 상태로(판 85, 차례당 한 번)
                     self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
                     self.rec.md_step(step, srec)
@@ -1464,6 +1503,8 @@ class ChatSession:
             self.rec.md("> 사용자가 중단함(Ctrl-C)\n")
             self.ui.warn("\n  중단했다. 이어서 말하거나 /exit.")
             reason = "interrupted"
+            if getattr(self, "pool", None) is not None:   # 판 108: [멈춤]·Ctrl-C 는 작업자도 멈춘다(도는 걸음은 끝까지 — 결과는 버림)
+                self.pool.cancel_all()
         if reason not in ("answered", "interrupted", "asked"):
             self.ui.warn(f"  차례 끝: {reason}")
         if reason == "max_steps":
@@ -1666,6 +1707,70 @@ class ChatSession:
         self.skills_loaded.append(name)
         self.rec.event("skill_load", step=self.st["steps"], name=name, file=None, ok=True, by="user")
         return f"스킬 {name} 을 다음 입력에 붙인다"
+    # ---- 동시 작업자(판 108, SW-43 ②) ----
+    def _pool(self):
+        if getattr(self, "pool", None) is None:
+            hr = getattr(self.ui, "halt_req", None)
+            self.pool = SP.Pool(self._spawn_run, SP.max_workers(self.backend), halted=lambda: hr is not None and hr.is_set(),
+                                tier_limits={k: v["max"] for k, v in (getattr(self, "tiers", None) or {}).items()})
+            self._cps_lock = threading.RLock()
+        return self.pool
+
+    def _spawn_run(self, args: dict, wid: str) -> tuple[bool, str]:
+        """실 안에서: 작업자 하나(delegate 와 같은 길, 사람에게 묻지 않음 — 승인이 필요한 행동은 하지 않음)."""
+        def on_call(n, name, a):
+            self.ui.tool(f"[작업자 {wid}] {name}", _arg_summary(name, a))
+        cps = _LockedProxy(self.cps, self._cps_lock)
+        backend = self.backend
+        tier = (getattr(self, "tiers", None) or {}).get(str(args.get("tier") or ""))
+        if tier:   # 판 110: 등급 → 백엔드·프로필·문맥 예산
+            import dataclasses
+            from .config import load_backends
+            if tier.get("backend"):
+                bs, _ = load_backends()
+                backend = bs.get(tier["backend"], backend)
+            if tier.get("profile") and not args.get("kind"):
+                args = {**args, "kind": tier["profile"]}
+            if tier.get("budget"):
+                backend = dataclasses.replace(backend, context_budget=int(tier["budget"]))
+        ctx = {"profile": self.profile, "backend": backend, "rec": self.rec, "cps": cps, "env": self.env,
+               "exec_mode": self.mode, "tool_names": [t for t in self.all_tool_names if t not in (DG.NAME, SP.NAME)], "ledger": None,
+               "budget": self._dg_budget, "log": self.delegations, "ask": None, "on_call": on_call, "ask_cfg": None,
+               "bounds": self.bd, "projcfg": self.pfl, "read_default": True,
+               "rule": lambda name, a, deny_only=False: self.shell_rule(a, True) if name == "run_shell" else (None, ""),
+               "ask_outside": None}
+        self.rec.event("spawn_start", id=wid, task=str(args.get("task") or "")[:500])
+        ok, text = DG.run_child(ctx, args)
+        self.rec.event("spawn_end", id=wid, ok=ok)
+        return ok, f"[작업자 {wid}" + (f" · 등급 {args.get('tier')}({getattr(backend, 'name', '')})" if tier else "") + "] " + text
+
+    def _workers(self, args: dict) -> tuple[bool, str]:
+        act = str(args.get("action") or "")
+        pool = self._pool()
+        if act == "spawn":
+            if not str(args.get("task") or "").strip():
+                return False, "spawn 은 task 에 맡길 일을 적는다"
+            if getattr(self, "tiers", None):
+                t = SP.pick_tier(self.tiers, args)
+                args = {**args, "tier": t} if t else {k: v for k, v in args.items() if k != "tier"}
+            r = pool.spawn(args)
+            self.ui.dim(f"  작업자 {r['id']} 띄움(동시 {pool.limit}): {_one_line(str(args.get('task')), 100)}")
+            return True, (f"작업자 {r['id']} 를 띄웠다({'바로 돈다' if len(pool.running()) <= pool.limit else '자리가 나면 돈다'}). "
+                          "네 몫을 계속 하고, 끝나면 workers(action='wait') 또는 'collect' 로 결과를 모은다.")
+        if act == "wait":
+            got, still = pool.wait(args.get("ids"), args.get("timeout_s") or 600)
+            self.rec.event("spawn_wait", got=[r["id"] for r in got], still=still)
+            return True, SP.results_text(got, still)
+        if act == "collect":
+            got = pool.collect()
+            return True, SP.results_text(got, pool.running())
+        if act == "cancel":
+            ok = pool.cancel(str(args.get("id") or ""))
+            return ok, ("취소했다(도는 걸음은 그 걸음 끝까지 간다 — 결과는 버린다)" if ok else "그 작업자는 없거나 이미 끝났다")
+        if act == "list":
+            return True, pool.listing()
+        return False, "action 은 spawn·wait·collect·cancel·list 가운데 하나"
+
     def _delegate(self, args: dict) -> tuple[bool, str]:
         """작업자 하나. 같은 화면에 작업자 도구 줄과 확인 질문을 "[작업자 N]" 머리말로 낸다."""
         def on_call(n, name, a):

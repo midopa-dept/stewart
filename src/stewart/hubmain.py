@@ -456,6 +456,7 @@ class HubMain:
             elif text.split()[0] in COMMANDS:
                 self.ui._add("warn", f"{text.split()[0]} 는 stewart chat 의 내장 명령이다. 허브 메인 칸에서는 쓰지 않는다.")
                 return "builtin_ignored"
+        self._auto_wakes = 0   # 사람이 말했으면 자동 이어 가기 셈을 새로
         if not self._busy.acquire(blocking=False):
             with self.ui._lock:
                 self.ui.pending.append(text)
@@ -894,8 +895,49 @@ class HubMain:
         root.hub.event("chat_close", chat=name, run_dir=run)
         return run
 
+    # ── 쉬는 메인 깨우기(판 109, SW-43 ③): 메인 차례가 끝난 뒤 작업자가 끝나면 사람 입력 없이 한 차례(연달아 AUTO_WAKE_MAX 번까지) ──
+    AUTO_WAKE_MAX = 3
+
+    def auto_wake(self) -> str | None:
+        if os.environ.get("STEWART_AUTO_WAKE", "1") == "0" or self.busy:
+            return None
+        pool = getattr(self.sess, "pool", None)
+        if pool is None:
+            return None
+        done = [k for k, r in list(pool.w.items()) if r["status"] == "done" and not r["collected"] and not r.get("woke")]
+        if not done:
+            return None
+        for k in done:
+            pool.w[k]["woke"] = True
+            pool.w[k]["noticed"] = True
+        if getattr(self, "_auto_wakes", 0) >= self.AUTO_WAKE_MAX:
+            self.ui._add("hub", f"작업자 {', '.join(done)} 끝 — 자동으로 이어 가기를 {self.AUTO_WAKE_MAX}번 해서 멈췄다. 이어 가려면 말을 건다")
+            return None
+        if not self._busy.acquire(blocking=False):
+            return None
+        self._auto_wakes = getattr(self, "_auto_wakes", 0) + 1
+        self.ui._add("hub", f"자동으로 이어 감 — 작업자 {', '.join(done)} 끝")
+        text = f"[허브] 작업자 {', '.join(done)} 가 끝났다 — workers(action='collect') 로 결과를 받아 이어 간다."
+        self.hub.event("auto_wake", ids=done)
+        self._turn = threading.Thread(target=self._run_turn, args=(text, None), daemon=True)
+        self._turn.start()
+        return "woke"
+
+    def workers_view(self) -> list[dict]:
+        pool = getattr(self.sess, "pool", None)
+        if pool is None:
+            return []
+        now = time.monotonic()
+        return [{"id": k, "status": r["status"], "task": r["task"][:80], "collected": r["collected"],
+                 "secs": round(((r["ended"] or now) - r["started"]) if r["started"] else 0)} for k, r in list(pool.w.items())][-12:]
+
     # ── 허브 고리 ──
     def tick(self) -> dict:
+        for cv in [self] + list(getattr(self, "chats", {}).values()):
+            try:
+                cv.auto_wake()
+            except Exception as e:   # noqa: BLE001 — 깨우기 실패가 고리를 멈추지 않게
+                self.hub.event("auto_wake_error", error=type(e).__name__)
         r = self.hub.tick()
         notes = self.hub.take_notices()
         if notes:
@@ -968,7 +1010,7 @@ class HubMain:
                 "web": getattr(self.sess, "web_status", None),
                 "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view(),
                 "chats": self._chat_list(), "mode": self.sess.mode, "mode_max": getattr(self._root(), "_mode", "edits"),
-                "think": self.sess.think, "budget": self.sess.backend.budget(), "budget_set": getattr(self.sess, "_backend0", None) is not None
+                "think": self.sess.think, "workers": self.workers_view(), "budget": self.sess.backend.budget(), "budget_set": getattr(self.sess, "_backend0", None) is not None
                 and self.sess.backend is not self.sess._backend0, **self._tool_ui()}
 
     def _tool_ui(self) -> dict:

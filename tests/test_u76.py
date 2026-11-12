@@ -33,7 +33,7 @@ class TUnit(unittest.TestCase):
     def test_texts(self):
         self.assertIn("넓게 읽어야", DG.CHAT_DEFINITION["function"]["description"])
         self.assertEqual(DG.DEFINITION["function"]["description"], DG.DESC_SHORT)       # 평가(엔진) 길은 그대로
-        self.assertIn("delegate 로 맡기고", load_profile("chat").system)
+        self.assertIn('workers(action="spawn")로 맡기고', load_profile("chat").system)
 
 
 class TChat(unittest.TestCase):

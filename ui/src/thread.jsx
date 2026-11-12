@@ -205,6 +205,18 @@ function AskOptions({ opts }) {
   </div>
 }
 
+// 판 109(SW-43 ③): 동시 작업자 띠 — 상태·걸린 시간, 누르면 그 작업자 결과를 안 거둔 것인지 보인다
+const WST = { queued: '⏳ 줄', running: '● 도는 중', done: '✓ 끝', cancelled: '✕ 취소' }
+function WorkerStrip() {
+  const ws = hub.value?.workers || []
+  const live = ws.filter(w => w.status === 'running' || w.status === 'queued' || (w.status === 'done' && !w.collected))
+  if (!live.length) return null
+  return <div class="sticky top-0 z-10 my-2 flex gap-1.5 flex-wrap text-[12.5px]">
+    {live.map(w => <span key={w.id} class={'chip ' + (w.status === 'running' ? '!text-ok' : '')} title={w.task}>
+      {w.id} {WST[w.status] || w.status} · {w.secs}초{w.status === 'done' && !w.collected ? ' · 결과 안 거둠' : ''}</span>)}
+  </div>
+}
+
 // 사람이 보낸 사진(판 98): 말 줄 아래 작은 그림 — 누르면 원본(새 탭)
 export function UserImgs({ names }) {
   return (
@@ -481,6 +493,7 @@ export function Thread({ log, prior }) {
     <>
       {prior}
       <FileViewer />
+      <WorkerStrip />
       {!groups.length && !busy.value && (
         <div class="text-center text-mute py-16">
           <div class="text-lg font-semibold text-fg mb-1">{(hub.value?.chat || 'main') === 'main' ? '메인에게 할 일을 말하십시오' : '새 대화 — 메인과 같은 채팅입니다'}</div>

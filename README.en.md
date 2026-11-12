@@ -117,6 +117,7 @@ uv run stewart hub --project ~/my-project
   - Changed-files card: when a turn ends, the files it created or changed show with Open and Download. Markdown is rendered; images and PDFs open in a new tab. Clicking a path in code inside a reply also opens it. Files outside the working folder or with secret-looking names are refused, and HTML and SVG are download-only.
   - Rewind: ↶ on one of your messages removes that turn and restores the files tools changed after it; your message comes back to the input box. ↶ on the files card restores the files only. Files changed by shell commands cannot be restored.
   - Uploads and choices: 📎 in the input box puts documents, spreadsheets or PDFs in `inbox/` in the working folder (up to 20 MB, never overwriting). When the model asks with options, pick one with the buttons under the question.
+  - Worker strip: concurrent workers' state, elapsed time and uncollected results show above the conversation. If a worker finishes after the main turn has ended, the hub opens one turn by itself to collect it (up to 3 in a row; `STEWART_AUTO_WAKE=0` turns this off).
   - Model server status dot: ready, starting, unreachable, auth refused.
 - New approvals raise a browser notification. Set `[hub] ntfy_url` to also send them to your phone with [ntfy](https://ntfy.sh).
 - By default the hub listens on loopback only (`127.0.0.1`, `::1`). To use it from another device, put something in front (an SSH tunnel, for example) or turn on account mode.
@@ -133,11 +134,15 @@ uv run stewart hub --project ~/my-project
 | Web | `web_search` (SearXNG) `web_fetch` |
 | Find | `doc_search`: BM25 search over documents and code in the working folder, plus web pages already fetched |
 | Memory | `memory_search` `memory_read` `note_add` |
-| Flow | `todo_write` `todo_read` `ask_user` `delegate` (a worker with its own context) `load_skill` |
+| Flow | `todo_write` `todo_read` `ask_user` `delegate` (a worker with its own context) `workers` (concurrent workers) `load_skill` |
 
 - `web_fetch` refuses private, loopback, link-local and CGNAT addresses and re-checks redirects. Fetched text reaches the model wrapped in outside-content markers.
 - In chat and the hub, `web_fetch` and `doc_search` are on even without a search address. `run` uses only what the profile and environment variables turn on.
 - Seventeen built-in skills are on in chat and the hub: step plans, error diagnosis, git work, code review, security review, simplify, fixing tests, run-and-check, web research, deep research, document files (PDF, Word, Excel, PowerPoint), project init, skill creator, stewart config, hand-off notes, reporting a blocker, memory consolidation. A user or project skill with the same name wins (`STEWART_BUILTIN_SKILLS=0` turns them off).
+- Concurrent workers (`workers`, chat and hub): the main conversation spawns workers and keeps going, then gathers their results (wait, collect, cancel, list).
+  - Workers run in a fresh context and never ask the person. They skip actions that need approval and note them in their result.
+  - The concurrency cap is `STEWART_SPAWN_MAX` (default: the backend's concurrency − 1); `STEWART_SPAWN=0` turns workers off.
+  - Worker tiers: `[tiers.<name>]` in the backends table bundles a backend, profile, context budget and concurrency cap. The model sees only each tier's name and a one-line use; if it does not pick one, the runner picks by the kind of work (read-only or not). See the end of `backends.example.toml`.
 
 ## Safety
 
