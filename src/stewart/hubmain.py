@@ -962,7 +962,7 @@ class HubMain:
         if pool is None:
             return []
         now = time.monotonic()
-        return [{"id": k, "status": r["status"], "task": r["task"][:80], "collected": r["collected"],
+        return [{"id": k, "tier": r.get("tier") or "", "status": r["status"], "task": r["task"][:80], "collected": r["collected"],
                  "secs": round(((r["ended"] or now) - r["started"]) if r["started"] else 0)} for k, r in list(pool.w.items())][-12:]
 
     # ── 허브 고리 ──

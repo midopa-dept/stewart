@@ -42,6 +42,7 @@ A small agent runner that lets a model you host work on a local folder.
 - [쓰는 길](#쓰는-길)
 - [웹 허브](#웹-허브)
 - [모델이 쓰는 도구](#모델이-쓰는-도구)
+  - [작업자 등급 이름](#작업자-등급-이름)
 - [안전 장치](#안전-장치)
 - [기억](#기억)
 - [지난 일에서 배우기](#지난-일에서-배우기)
@@ -149,7 +150,28 @@ uv run stewart hub --project ~/my-project
 - 동시 작업자(`workers`, chat·허브): 메인이 작업자를 띄우고(spawn) 자기 몫을 계속 하다가 결과를 모읍니다(wait·collect, cancel·list).
   - 작업자는 새 문맥에서 돌고 사람에게 묻지 않습니다. 승인이 필요한 행동은 하지 않고 결과에 적습니다.
   - 동시 상한은 `STEWART_SPAWN_MAX` 이고(없으면 백엔드 concurrency − 1), 끄기는 `STEWART_SPAWN=0` 입니다.
-  - 작업자 등급: backends 표의 `[tiers.<이름>]` 로 백엔드·프로필·문맥 예산·동시 상한을 묶습니다. 모델에게는 등급 이름과 한 줄 쓰임새만 보이고, 모델이 고르지 않으면 실행기가 일의 성격(읽기만인지)으로 고릅니다. 예시는 `backends.example.toml` 끝에 있습니다.
+  - 작업자 등급: backends 표의 `[tiers.<이름>]` 로 백엔드·프로필·문맥 예산·동시 상한을 묶습니다. 모델에게는 등급 이름과 한 줄 쓰임새만 보이고, 모델이 고르지 않으면 실행기가 일의 성격(읽기만인지)으로 고릅니다. 기본 예시는 `presto`·`moderato`·`largo` 입니다([작업자 등급 이름](#작업자-등급-이름)).
+
+### 작업자 등급 이름
+
+- 기본 예시는 넷입니다. 이름은 backends 표 `[tiers.<이름>]` 에서만 정하므로 바꿔도 코드는 그대로입니다. 예시 전문은 `backends.example.toml` 끝에 있습니다.
+- 꼬리표는 "자리 · 등급"으로 읽습니다(작업자 3 · `presto` / 메인 · `largo`).
+
+#### Presto, ma non troppo
+- `presto`: 곧. 찾기·읽기·요약, 검산할 것.
+- 9B 급 로컬. 여럿을 작업자로 동시에 띄웁니다. `slim = true` 라 메인으로 앉히면 얇은 허브입니다.
+
+#### Moderato cantabile
+- `moderato`: 보통으로. 코딩·대화의 기본.
+- 27B 급, 문맥 예산 32000. 도구를 적은(쓰는) 작업의 기본 등급입니다.
+
+#### Largo ma non tanto
+- `largo`: 넓게. 계획·분배·검토.
+- 27B 급에 서버 창 전부. 모든 기능을 켠 메인으로 앉힙니다(`stewart hub --tier largo`).
+
+#### Rubato, poi a tempo
+- `rubato`: 훔친 시간. 안 풀릴 때만, 유료.
+- 바깥 API 입니다. 등급 표에 두지 않고, 따로 띄운 인스턴스(`stewart instance`)로 사람이 열 때만 씁니다.
 
 ## 안전 장치
 

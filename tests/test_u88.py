@@ -57,7 +57,8 @@ class TTiers(unittest.TestCase):
         with mock.patch.object(C, "chat", side_effect=lambda *a, **k: seq.pop(0)), mock.patch.object(engine, "chat", side_effect=wchat):
             s.turn("작업자에게 맡겨")
         self.assertEqual(seen[0], ("small", 12000))                                    # 가벼운 등급 = 작은 백엔드·작은 예산
-        self.assertIn("등급 light(small)", json.dumps(s.messages, ensure_ascii=False))   # 결과 머리에 등급 표시
+        self.assertIn("작업자 w1 · light]", json.dumps(s.messages, ensure_ascii=False))   # 결과 머리 꼬리표 "자리 · 등급"(판 115)
+        self.assertEqual(s.pool.w["w1"]["tier"], "light")                               # 허브 작업자 띠 "작업자 w1 · light"
         self.assertEqual(s.pool.tier_sem["light"]._value, 1)
 
 

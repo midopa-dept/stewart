@@ -213,7 +213,7 @@ function WorkerStrip() {
   if (!live.length) return null
   return <div class="sticky top-0 z-10 my-2 flex gap-1.5 flex-wrap text-[12.5px]">
     {live.map(w => <span key={w.id} class={'chip ' + (w.status === 'running' ? '!text-ok' : '')} title={w.task}>
-      {w.id} {WST[w.status] || w.status} · {w.secs}초{w.status === 'done' && !w.collected ? ' · 결과 안 거둠' : ''}</span>)}
+      작업자 {w.id}{w.tier ? ' · ' + w.tier : ''} {WST[w.status] || w.status} · {w.secs}초{w.status === 'done' && !w.collected ? ' · 결과 안 거둠' : ''}</span>)}
   </div>
 }
 

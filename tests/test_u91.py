@@ -28,7 +28,7 @@ class TTier(unittest.TestCase):
         self.addCleanup(e.stop)
 
     def test_tiers_and_main_tier(self):
-        self.assertEqual(list(SP.load_tiers()), ["light"])                          # 메인용 등급은 작업자 목록에 없다
+        self.assertEqual(list(SP.load_tiers()), ["thin", "light"])                  # 판 115: slim 등급도 작업자 목록에 남는다
         self.assertEqual(list(SP.load_tiers(main=True)), ["thin", "light"])
         a = argparse.Namespace(tier="thin", profile="chat", backend=None)
         p, b = main_tier(a, str(self.tmp))

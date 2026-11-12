@@ -1751,7 +1751,7 @@ class ChatSession:
         self.rec.event("spawn_start", id=wid, task=str(args.get("task") or "")[:500])
         ok, text = DG.run_child(ctx, args)
         self.rec.event("spawn_end", id=wid, ok=ok)
-        return ok, f"[작업자 {wid}" + (f" · 등급 {args.get('tier')}({getattr(backend, 'name', '')})" if tier else "") + "] " + text
+        return ok, f"[작업자 {wid}" + (f" · {args.get('tier')}" if tier else "") + "] " + text   # 꼬리표 "자리 · 등급"(판 115)
 
     def _workers(self, args: dict) -> tuple[bool, str]:
         act = str(args.get("action") or "")
@@ -1763,7 +1763,7 @@ class ChatSession:
                 t = SP.pick_tier(self.tiers, args)
                 args = {**args, "tier": t} if t else {k: v for k, v in args.items() if k != "tier"}
             r = pool.spawn(args)
-            self.ui.dim(f"  작업자 {r['id']} 띄움(동시 {pool.limit}): {_one_line(str(args.get('task')), 100)}")
+            self.ui.dim(f"  작업자 {r['id']}{' · ' + args['tier'] if args.get('tier') else ''} 띄움(동시 {pool.limit}): {_one_line(str(args.get('task')), 100)}")
             return True, (f"작업자 {r['id']} 를 띄웠다({'바로 돈다' if len(pool.running()) <= pool.limit else '자리가 나면 돈다'}). "
                           "네 몫을 계속 하고, 끝나면 workers(action='wait') 또는 'collect' 로 결과를 모은다.")
         if act == "wait":
