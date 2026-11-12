@@ -89,7 +89,7 @@ class TOnce(unittest.TestCase):
         self.assertEqual(s["backend"], "small")
         self.assertTrue(seen[0][1])
         self.assertLessEqual(set(seen[0][1]), {"read_file", "list_dir", "search", "edit_file", "write_file", "run_shell", "ask_user",
-                                               "workers", "view_image", "load_skill"})   # 얇은 꼴: 핵심 도구만
+                                               "workers", "view_image", "load_skill", "web_search", "web_fetch"})   # 얇은 꼴: 핵심 도구만
 
     def test_interactive_success_not_always_true(self):
         from stewart.config import Backend, Profile

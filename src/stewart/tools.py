@@ -33,6 +33,8 @@ class ToolEnv:
     workdir: Path
     shell_timeout_s: float = 60
     web: dict | None = None              # {"url", "max_per_file", "max_results", "timeout_s"} — 없으면 web_search 꺼짐
+    host_gui: bool = False               # 판 117: 이 컴퓨터 화면 조작 명령(hostgui.py) 허용 — 켜져도 사람이 승인한 그 명령 한 번만
+    host_gui_once: str | None = None
     search_log: list = field(default_factory=list)   # [{query, for_file, urls, error}] — 기록·나중 web_fetch 허용 목록용
     search_counts: dict = field(default_factory=dict)
     shell: object = None                             # shell.Shell(처음 run_shell 때 만듦, 실행마다 하나)
@@ -775,6 +777,12 @@ def _shell(env: ToolEnv):
 def run_shell(env: ToolEnv, command: str, timeout_s: float | None = None, background: bool = False) -> tuple[bool, str]:
     """실행마다 하나인 셸에서 돈다(cd·export 가 다음 호출에 남는다). background=true 면 따로 띄우고 작업 id 를 돌려준다."""
     from .osdep import ShellNotFound
+    from . import hostgui as HG
+    w = HG.hit(command)
+    if w:   # 판 117: 이 컴퓨터의 앱·브라우저·창을 여는 명령은 기본 거절(사람이 그 명령을 승인했을 때만 한 번)
+        if not (env.host_gui and env.host_gui_once == command):
+            return False, HG.refuse(w)
+        env.host_gui_once = None
     try:
         sh = _shell(env)
     except ShellNotFound as e:

@@ -124,7 +124,7 @@ class TServe(MainBase):
 
 
 class TPickPublic(unittest.TestCase):
-    """공개판(판 59): 화면은 new·old 둘. 옛 Chromium 판(legacy)은 따로 가지(airgap/main)에만 — 브라우저 판으로 고르지 않는다."""
+    """공개판(판 59): 화면은 new·old 둘. 옛 브라우저 판(legacy)은 이 저장소에 없다 — 브라우저 판으로 고르지 않는다."""
     def test_pick(self):
         from stewart.web import UI_DIRS, ui_kind
         edge92 = "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/92.0.4515.131 Safari/537.36 Edg/92.0.902.67"

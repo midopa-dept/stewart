@@ -25,11 +25,22 @@ ASK_RX = re.compile(r"(\?|뭐|무엇|언제|몇|어떤|어느|알려|나왔|있�
 LOCAL_RX = re.compile(r"(폴더|파일|디렉터리|경로|커밋|브랜치|로그|기록|함수|코드|저장소|대화|세션|\b(repo|git|folder|file)\b)", re.I)
 
 
+LOOKUP_RX = re.compile(   # 판 117: "알아봐·찾아봐" + 처음 보는 이름(영문·숫자 섞인 제품·판 이름) — 작업 폴더에 있을 까닭이 없으면 웹부터
+    r"(알아\s*봐|알아봐\s*줘|알아\s*봐\s*줘|찾아\s*봐|조사해|뭔지\s*(알려|찾아)|\b(look\s+up|find\s+out)\b)", re.I)
+NAME_RX = re.compile(r"\b[A-Za-z][A-Za-z0-9.+-]*\s+\d+(?:\.\d+)+\b|\b[A-Z][a-z]+[A-Z]\w*\b|\b[a-z]+-?\d+(?:\.\d+)+\b")
+
+
 def recent_hit(text: str) -> str:
     """학습 뒤에 바뀌었을 사실을 묻는 말이면 걸린 낱말, 아니면 ""."""
     t = text or ""
     m = STRONG_RX.search(t)
     if m:
+        return m.group(0)
+    m = LOOKUP_RX.search(t)
+    if m and not LOCAL_RX.search(t):
+        return m.group(0)
+    m = NAME_RX.search(t)
+    if m and ASK_RX.search(t) and not LOCAL_RX.search(t):
         return m.group(0)
     m = WEAK_RX.search(t)
     if m and ASK_RX.search(t) and not LOCAL_RX.search(t):
@@ -45,8 +56,8 @@ UNKNOWN_RX = re.compile(
 NOTE_SEARCH = ("\n\n[엔진] {why} — 이제 웹으로 찾아볼 때다. 오류 문구(또는 이름·판)를 그대로 web_search 로 찾고, "
                "공식 문서·이슈의 원문을 web_fetch 로 열어 확인한 뒤 고쳐라. 찾은 주소를 근거로 붙인다.")
 NOTE_FETCH = ("\n\n[엔진] {why} — 짐작으로 되풀이하지 말고, 그 라이브러리·도구의 공식 문서 주소를 web_fetch 로 열어 확인한 뒤 고쳐라.")
-NOTE_RECENT = ("[엔진] 이 물음은 학습 뒤에 바뀌었을 수 있는 사실(최신·버전·가격·출시 등)을 묻는다. 기억으로 답하지 말고 "
-               "먼저 {tool} 로 확인한 뒤, 확인한 주소를 붙여 답하라.")
+NOTE_RECENT = ("[엔진] 이 물음은 학습 뒤에 바뀌었을 수 있는 사실(최신·버전·가격·출시·처음 보는 이름 등)을 묻는다. 기억으로 답하지 말고, "
+               "작업 폴더에 있을 까닭이 없으면 폴더를 뒤지기 전에 먼저 {tool} 로 확인한 뒤, 확인한 주소를 붙여 답하라.")
 
 
 WRAP_AT = 2

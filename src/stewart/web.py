@@ -62,7 +62,7 @@ def make_token(state_dir: Path, reuse: bool = False) -> str:
     return tok
 
 
-UI_DIRS = {"new": "web_ui"}   # 새 화면 빌드(최신 브라우저). 옛 Chromium(Edge 92) 판은 따로 가지(airgap/main)에만 있다
+UI_DIRS = {"new": "web_ui"}   # 새 화면 빌드(최신 브라우저). 옛 브라우저 판은 이 저장소에 없다
 
 
 def _page(kind: str = "new") -> str:

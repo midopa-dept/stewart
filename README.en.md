@@ -190,6 +190,10 @@ stewart runs shell commands the model chooses on your machine. The guards below 
 - **Shell environment:** the model's shell does not see stewart's virtual environment, `STEWART_*` variables, or variables holding stewart's install path. API keys are read from the environment variable named in the backend file.
 - **Hooks:** `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`. A hook gets JSON on stdin; exit code 2 blocks the action. Hooks are read from user profiles only.
 - **Loops:** when the same error shows up three times or the same call repeats, the model is told; if it keeps going, the run stops.
+- **This computer's screen and apps stay closed by default:** a shell command that opens or drives an app, browser or window on this computer (macOS `open`, `osascript`, `screencapture`; Linux `xdg-open`, `xdotool`; Windows `start`, `Start-Process`; Python `webbrowser` and similar) is not run; the reason is returned and the model tells the person.
+  - It is blocked where the shell runs, so neither auto mode nor "always allow" rules get past it.
+  - To turn it on, set `host_gui = true` in the profile (or `STEWART_HOST_GUI=1`). Even then, chat and the hub ask for each command and run only that approved command once.
+  - Workers and `stewart run`, which cannot ask a person, always refuse it.
 
 ## Memory
 

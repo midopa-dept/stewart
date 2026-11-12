@@ -240,6 +240,20 @@ class _LockedProxy:
         return f
 
 
+CHAT_DESC_ADD = {   # 판 117.1: 실사용(chat·허브)에서만 도구 설명 끝에 덧붙인다 — 평가(run)의 도구 정의는 그대로(delegate DESC_SHORT 선례)
+    "search": " 작업 폴더 안의 파일만 찾는다 — 바깥 사실·최신·처음 보는 이름은 web_search.",
+    "web_search": " 작업 폴더 밖의 사실·최신 소식·처음 보는 이름·제품을 찾을 때 쓴다 — 폴더 안 내용은 search.",
+}
+OFF_TOOLS_NOTE = "꺼져 있는 도구(사람이 허브 머리의 도구 칩으로 켠다): {names}. 필요하면 다른 도구로 우회하지 말고 사람에게 켜 달라고 말한다."
+
+
+def _chat_desc(d: dict) -> dict:
+    add = CHAT_DESC_ADD.get(d["function"]["name"])
+    if not add:
+        return d
+    return {**d, "function": {**d["function"], "description": d["function"]["description"] + add}}
+
+
 class ChatSession:
     def __init__(self, profile: Profile, backend: Backend, rec: Recorder, ui: UI | None = None, confirm: bool | None = None,
                  history: list[dict] | None = None, resumed_from: str | None = None, stream: bool = False,
@@ -321,6 +335,7 @@ class ChatSession:
             self.toggleable += [d["function"]["name"] for d in defs
                                 if d["function"]["name"] not in kp and d["function"]["name"] not in self.toggleable]
         self.disabled_tools = {n for n in self.toggleable if n not in ((profile.raw or {}).get("toggle_on") or [])}
+        defs = [_chat_desc(d) for d in defs]   # 판 117.1: 실사용 길만 search·web_search 설명에 "언제 어느 쪽" 한 구절(평가 길 앞부분은 그대로)
         self._all_defs = defs
         defs = [d for d in defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_defs = defs
@@ -329,6 +344,8 @@ class ChatSession:
         self.env = T.ToolEnv(workdir=profile.workdir, shell_timeout_s=profile.shell_timeout_s, web=web,
                               artifacts_dir=rec.dir, **T.secret_options(profile))
         self.env.vision = bool(backend.vision)
+        from . import hostgui as _HG
+        self.env.host_gui = _HG.enabled(profile)   # 판 117: 이 컴퓨터 조작(기본 끔)
         from . import webnudge as WN
         self.dnudge = DG.Nudge(on=DG.nudge_on() and DG.NAME in self.tool_names)   # 맡기기 넛지(판 97)
         self.nudge = WN.Nudger(search=self.web_status["search"] and "web_search" in self.tool_names,
@@ -355,6 +372,8 @@ class ChatSession:
                                       if os.environ.get("STEWART_ENV_BLOCK", "1") != "0" else None)   # 판 100: 끄는 손잡이
         if self.forge is not None and not (self.slim is not None and "forge_remote" in self.disabled_tools):
             system += "\n\n" + FG.note(self.forge)
+        if self.disabled_tools:   # 판 117.1: 꺼진 도구 이름을 모델이 알게(말없이 안 쓰는 대신 켜 달라고 말하게)
+            system += "\n\n" + OFF_TOOLS_NOTE.format(names=", ".join(sorted(self.disabled_tools)))
         if profile.language == "ko":
             system += "\n\n사람에게 하는 말은 한국어로 쓴다. 코드·파일 이름·명령은 원문 그대로 둔다."
         self.system = system
@@ -462,6 +481,26 @@ class ChatSession:
         d = M.decide(self.mode, name)
         if d == "deny":
             return M.PLAN_DENY
+        if name == "run_shell":   # 판 117: 이 컴퓨터 화면 조작 — 꺼져 있으면 거절(묻지도 않음), 켜져 있으면 모드·규칙과 관계없이 대상을 밝혀 묻는다
+            from . import hostgui as HG
+            cmd0 = str(args.get("command") or "")
+            w = HG.hit(cmd0)
+            if w:
+                if not self.env.host_gui:
+                    self.rec.event("host_gui_refused", step=self.st["steps"], word=w)
+                    return HG.refuse(w)
+                q = getattr(self.ui, "question", None) or self.ui.ask
+                try:
+                    ans = q(HG.ASK.format(w=w, cmd=cmd0[:300])).strip()
+                except EOFError:
+                    ans = ""
+                r = None if ans.lower() in ("y", "yes", "ㅇ", "네") else (
+                    "사람이 이 컴퓨터에서 그 명령을 실행하는 것을 거부했다. 셸로 우회하지 말고 다른 길을 찾거나 사람에게 물어라."
+                    + (f" 사람의 말: {ans}" if ans.lower() not in ("", "n", "no", "ㄴ", "아니") else ""))
+                if r is None:
+                    self.env.host_gui_once = cmd0
+                self.rec.event("host_gui_ask", step=self.st["steps"], word=w, ok=r is None)
+                return r
         cg = CG.hit(self.profile.workdir, name, args)
         if cg is not None:   # stewart 사용자 설정 폴더: 모드와 관계없이 매번 묻는다
             return self._ask_cfg(CG.ASK_PROMPT.format(path=cg))
@@ -1123,6 +1162,7 @@ class ChatSession:
         if name not in getattr(self, "toggleable", []):
             return False
         (self.disabled_tools.discard if on else self.disabled_tools.add)(name)
+        self._toggle_note = f"[엔진] 사람이 도구 칩을 바꿨다: {name} {'켬' if on else '끔'}. 지금 꺼진 도구: {', '.join(sorted(self.disabled_tools)) or '없음'}."
         self.tool_defs = [d for d in self._all_defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_names = [d["function"]["name"] for d in self.tool_defs]
         self.rec.event("tool_toggle", name=name, on=bool(on))
@@ -1207,6 +1247,18 @@ class ChatSession:
             text += rn
             self.rec.event("web_nudge", why_kind="recent", why=self.nudge.log[-1]["why"])
             self.comps.fire("web_nudge", self.st.get("steps", 0), "recent", "nudge")
+        if getattr(self, "_toggle_note", None):   # 판 117.1: 지시문의 꺼진 도구 줄은 세션 시작 때 것이라, 칩을 바꾸면 다음 사람 말에 알린다
+            text += "\n\n" + self._toggle_note
+            self._toggle_note = None
+        from . import toolmention as TM
+        if TM.enabled():   # 판 117: 사람이 도구를 지목했으면 — 있으면 그 도구부터, 꺼져 있으면 사람에게 말하게
+            tn, screen = TM.notes(self._raw_text, set(self.tool_names), set(getattr(self, "disabled_tools", ()) or ()),
+                                  {"web_search": self.web_status.get("why"), "web_fetch": self.web_status.get("why")})
+            if tn:
+                text += tn
+                self.rec.event("tool_mention", note=tn.strip()[:500])
+                for line in screen:
+                    self.ui.warn(line)
         if self.mem is not None and EX.enabled():   # 예시 은행(판 92): 비슷한 지난 일의 받아 둔 꼴 하나
             try:
                 hit = EX.pick(EX.load(self.mem.store.dir), self._raw_text)
