@@ -301,10 +301,10 @@ class ChatSession:
             defs += T.definitions(["doc_search"])
         self.code_off = ""
         if RC.NAME in (profile.tools or []):   # 판 118: 대화 자리 run_code — 울타리를 못 만드는 곳에서는 싣지 않고 까닭을 지시문에
-            if RC.available():
+            if RC.available((profile.raw or {}).get("code_python")):   # 판 120.2: 울타리 안에서 파이썬이 실제로 뜨는지 한 번 대조
                 defs.append(RC.DEFINITION)
             else:
-                self.code_off = RC.OFF_WHY
+                self.code_off = RC.off_why()
         if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(실사용 기본 도구 목록은 그대로)
             defs = [d for d in defs if d["function"]["name"] != "view_image"]
         self.pfl = PC.flags(profile, interactive=True)   # 대화형: Claude Code 꼴 호환 기본 켬(사용자 전역 ~/.claude 는 기본 끔)

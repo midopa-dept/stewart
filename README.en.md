@@ -115,6 +115,9 @@ parlando is a score marking meaning 'as if speaking'; this is the place where yo
   - Each run happens in `.code/<time-number>/` in the conversation folder and can write only there. Reading home or external volumes, the internet, opening apps on this computer and running other programs are blocked.
   - Limits: 30 seconds (`run_code_timeout`, up to 120), 20,000 characters of output, 50 MB and 50 files in total. Charts and CSVs it makes are handed back on the "files" card.
   - It uses `sandbox-exec` on macOS and `bwrap` on Linux only when available; if no fence can be built, the tool is not loaded.
+  - At session start it checks once that Python actually starts inside the sandbox; if not, the tool is not loaded and the model is told why.
+  - The Python inside the sandbox is the base interpreter of the Python running stewart, not the project's virtual environment, so dependencies and project code stay out of view.
+  - A 2 GB memory limit is attempted, but macOS may not honour it; in that case only the time limit applies.
   - For other packages (matplotlib and so on), set `code_python` in the profile to a Python that has them. Set `run_code_ask = true` to be asked every time.
 
 ## Web hub

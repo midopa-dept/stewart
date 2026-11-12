@@ -49,13 +49,52 @@ def code_gui_hit(code: str) -> str:
     return ""
 
 
-def available() -> str | None:
-    """울타리 종류(sandbox-exec | bwrap) 또는 None(도구를 싣지 않는다)."""
+def _kind() -> str | None:
     if sys.platform == "darwin" and os.path.exists(SANDBOX):
         return "sandbox-exec"
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
         return "bwrap"
     return None
+
+
+_PROBE: dict = {}
+LAST_WHY = ""
+
+
+def available(python: str | None = None, probe: bool = True) -> str | None:
+    """울타리 종류(sandbox-exec | bwrap) 또는 None(도구를 싣지 않는다).
+    판 120.2: 울타리 안에서 파이썬이 실제로 뜨는지 한 번 대조한다(인터프리터마다 한 번, 프로세스 동안 기억). 못 뜨면 None 과 까닭(off_why)."""
+    global LAST_WHY
+    kind = _kind()
+    if kind is None:
+        LAST_WHY = OFF_WHY
+        return None
+    if not probe:
+        return kind
+    py = interpreter(python)
+    if (kind, py) not in _PROBE:
+        import tempfile
+        from types import SimpleNamespace
+        ok, out = run(SimpleNamespace(workdir=tempfile.mkdtemp(prefix="rc-probe-")), "print('probe-ok')", kind=kind, python=py,
+                      timeout_s=20)
+        _PROBE[(kind, py)] = (ok and "probe-ok" in out, out.strip().splitlines()[-1][:160] if out.strip() else "")
+    ok, why = _PROBE[(kind, py)]
+    if not ok:
+        LAST_WHY = f"이 환경에서는 울타리 안에서 파이썬을 띄우지 못해 코드 실행이 꺼져 있다({why})"
+        return None
+    return kind
+
+
+def off_why() -> str:
+    return LAST_WHY or OFF_WHY
+
+
+def interpreter(python: str | None = None) -> str:
+    """울타리 안에서 돌릴 파이썬. 설정 code_python 이 있으면 그것. 없으면 stewart 를 돌리는 파이썬의 바탕 인터프리터
+    (venv 면 그 venv 를 만든 파이썬, 심볼릭 링크를 푼 실제 경로) — 프로젝트 .venv(의존성·프로젝트 코드 경로)를 울타리 안에 열지 않는다."""
+    if python:
+        return str(python)
+    return os.path.realpath(getattr(sys, "_base_executable", None) or sys.executable)
 
 
 def _q(p: str) -> str:
@@ -74,20 +113,29 @@ def python_dirs(py: str) -> tuple[list[str], list[str]]:
     return dirs, sorted(set(exe))
 
 
-def sbpl(run_dir: Path, read_dirs: list[str], exe: list[str], home: str) -> str:
-    """macOS sandbox-exec 규칙. 뒤 규칙이 앞 규칙을 이긴다."""
+VARIANTS = ("full", "no-exec-rule", "no-read-rule", "bare")   # 점검용(tools/run-code-check.py) — 실행기는 늘 full
+
+
+def sbpl(run_dir: Path, read_dirs: list[str], exe: list[str], home: str, variant: str = "full") -> str:
+    """macOS sandbox-exec 규칙. 뒤 규칙이 앞 규칙을 이긴다.
+    판 120.2: 실행 허용은 실행 파일 경로(literal)와 파이썬 자리(subpath) 둘 다로, 자식 프로세스는 process-fork 로도 막는다.
+    variant 는 점검용: no-exec-rule(실행 제한 뺌)·no-read-rule(홈·볼륨 읽기 막기 뺌)·bare(쓰기·망만)."""
     rd = str(Path(run_dir).resolve())
     lines = ["(version 1)", "(allow default)",
              "; 쓰기: 실행 칸만", '(deny file-write* (subpath "/"))',
-             f'(allow file-write* (subpath {_q(rd)}) (literal "/dev/null") (literal "/dev/tty"))',
-             "; 읽기: 홈·외장 볼륨 막고 실행 칸·파이썬 자리만 다시", f"(deny file-read* (subpath {_q(home)}) (subpath \"/Volumes\"))",
-             f"(allow file-read* (subpath {_q(rd)}) " + " ".join(f"(subpath {_q(d)})" for d in read_dirs) + ")",
-             "; 망·앱 열기·자식 프로세스", "(deny network*)",
-             '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") '
-             '(global-name "com.apple.coreservices.appleevents") (global-name "com.apple.SecurityServer") '
-             '(global-name "com.apple.securityd"))',
-             "(deny appleevent-send)",
-             "(deny process-exec*)", "(allow process-exec* " + " ".join(f"(literal {_q(e)})" for e in exe) + ")"]
+             f'(allow file-write* (subpath {_q(rd)}) (literal "/dev/null") (literal "/dev/tty"))', "; 망", "(deny network*)"]
+    if variant == "bare":
+        return "\n".join(lines) + "\n"
+    if variant != "no-read-rule":
+        lines += ["; 읽기: 홈·외장 볼륨 막고 실행 칸·파이썬 자리만 다시", f"(deny file-read* (subpath {_q(home)}) (subpath \"/Volumes\"))",
+                  f"(allow file-read* (subpath {_q(rd)}) " + " ".join(f"(subpath {_q(d)})" for d in read_dirs) + ")"]
+    lines += ["; 앱 열기", '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") '
+              '(global-name "com.apple.coreservices.appleevents") (global-name "com.apple.SecurityServer") '
+              '(global-name "com.apple.securityd"))', "(deny appleevent-send)",
+              "; 자식 프로세스", "(deny process-fork)"]
+    if variant != "no-exec-rule":
+        lines += ["(deny process-exec*)",
+                  "(allow process-exec* " + " ".join(f"(literal {_q(e)})" for e in exe) + " " + " ".join(f"(subpath {_q(d)})" for d in read_dirs) + ")"]
     return "\n".join(lines) + "\n"
 
 
@@ -127,12 +175,12 @@ def _prune(base: Path) -> None:
 
 
 def run(env, code: str, files=None, kind: str | None = None, python: str | None = None, timeout_s: float = 30,
-        _runner=subprocess.run) -> tuple[bool, str]:
+        _runner=subprocess.run, variant: str = "full") -> tuple[bool, str]:
     """울타리 안에서 code 를 돈다. (성공, 결과 글)."""
     from . import hostgui as HG
-    kind = kind or available()
+    kind = kind or available(python)
     if kind is None:
-        return False, OFF_WHY
+        return False, off_why()
     w = code_gui_hit(code)
     if w:
         return False, HG.refuse(w)
@@ -150,14 +198,14 @@ def run(env, code: str, files=None, kind: str | None = None, python: str | None 
         copied.add(src.name)
     (rd / "run.py").write_text(code, encoding="utf-8")
     before = {p.name for p in rd.iterdir()}
-    py = python or sys.executable
+    py = interpreter(python)
     t = max(1, min(int(timeout_s or 30), 120))
     child_env = {"PATH": "/usr/bin:/bin", "HOME": str(rd), "TMPDIR": str(rd), "MPLBACKEND": "Agg", "PYTHONDONTWRITEBYTECODE": "1",
                  "LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8"}
     if kind == "sandbox-exec":
         dirs, exe = python_dirs(py)
         sb = base / ".run.sb"
-        sb.write_text(sbpl(rd, dirs, exe, os.path.expanduser("~")), encoding="utf-8")
+        sb.write_text(sbpl(rd, dirs, exe, os.path.expanduser("~"), variant), encoding="utf-8")
         cmd = [SANDBOX, "-f", str(sb), py, "-I", "-B", "run.py"]
     else:   # bwrap
         dirs, _ = python_dirs(py)

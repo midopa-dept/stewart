@@ -109,7 +109,34 @@ class TRunCode(unittest.TestCase):
         self.assertIn("시간 초과", out)
         with mock.patch.object(RC, "available", return_value=None):
             ok, out = RC.run(self.env, "print(1)")
-        self.assertEqual((ok, out), (False, RC.OFF_WHY))
+        self.assertFalse(ok)
+        self.assertIn("코드 실행이 꺼져 있다", out)
+
+    def test_probe(self):   # 판 120.2: 울타리 안 파이썬이 못 뜨면 싣지 않고 까닭을
+        RC._PROBE.clear()
+        bad = (False, "sandbox-exec: execvp() of 'x' failed: Operation not permitted")
+        with mock.patch.object(RC, "_kind", return_value="sandbox-exec"), mock.patch.object(RC, "run", return_value=bad) as r:
+            self.assertIsNone(RC.available("/py/bin/python3"))
+            self.assertIsNone(RC.available("/py/bin/python3"))
+        self.assertEqual(r.call_count, 1)                                       # 인터프리터마다 한 번만 잰다
+        self.assertIn("파이썬을 띄우지 못해", RC.off_why())
+        self.assertIn("Operation not permitted", RC.off_why())
+        RC._PROBE.clear()
+        with mock.patch.object(RC, "_kind", return_value="sandbox-exec"), mock.patch.object(RC, "run", return_value=(True, "[exit 0]\nprobe-ok")):
+            self.assertEqual(RC.available("/py/bin/python3"), "sandbox-exec")
+        RC._PROBE.clear()
+
+    def test_interpreter_and_variants(self):
+        import sys
+        self.assertEqual(RC.interpreter("/x/py"), "/x/py")
+        self.assertEqual(RC.interpreter(), os.path.realpath(getattr(sys, "_base_executable", None) or sys.executable))
+        self.assertNotIn("/.venv/", RC.interpreter())                             # 프로젝트 .venv 가 아니라 바탕 파이썬
+        full = RC.sbpl(self.tmp / "r", ["/py"], ["/py/bin/python3"], "/home/u")
+        self.assertIn("(deny process-fork)", full)
+        self.assertIn('(allow process-exec* (literal "/py/bin/python3") (subpath "/py"))', full)
+        self.assertNotIn("process-exec", RC.sbpl(self.tmp / "r", ["/py"], ["/py/bin/python3"], "/home/u", "no-exec-rule"))
+        self.assertNotIn("/home/u", RC.sbpl(self.tmp / "r", ["/py"], ["/py/bin/python3"], "/home/u", "no-read-rule"))
+        self.assertNotIn("process-fork", RC.sbpl(self.tmp / "r", ["/py"], ["/py/bin/python3"], "/home/u", "bare"))
 
 
 class TBare(unittest.TestCase):
