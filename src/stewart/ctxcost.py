@@ -31,6 +31,9 @@ def measure(profile_name: str, hub: bool = False, clean: bool = False, slim: boo
             from . import slim as SL
             p = SL.apply(p, {})
             extra = (HT.DEFINITIONS, None)
+        elif slim:   # 판 114: chat 길의 얇은 꼴(stewart chat --tier <slim 등급>) — 허브 도구 없이
+            from . import slim as SL
+            p = SL.apply(p, {})
         elif hub:
             from . import hubtools as HT
             from .board import NOTE as BOARD_NOTE
@@ -60,7 +63,7 @@ def measure(profile_name: str, hub: bool = False, clean: bool = False, slim: boo
 def table(rows: list[dict]) -> str:
     out = ["| 프로필 | 꼴 | 시스템(그중 주입) | 도구 정의(개수) | 환경 블록 | 합 | 무거운 도구 |", "|---|---|---|---|---|---|---|"]
     for r in rows:
-        kind = ("얇은 허브 메인" if r.get("slim") else "허브 메인" if r["hub"] else "chat·run") + (" · 뼈대" if r["clean"] else "")
+        kind = ("얇은 허브 메인" if r.get("slim") and r["hub"] else "얇은 chat" if r.get("slim") else "허브 메인" if r["hub"] else "chat·run") + (" · 뼈대" if r["clean"] else "")
         out.append(f"| {r['profile']} | {kind} | {r['system']}({r['system_injected']}) | {r['tools']}({r['tool_count']}) | {r['env_block']} | "
                    f"**{r['total']}** | " + ", ".join(f"{n} {t}" for n, t in r["top_tools"][:4]) + " |")
     out.append("토큰은 어림(compact.est_tokens — 한글 1.2·숫자 1·영문 0.3·기호 0.5). 실제 토크나이저와 ±15% 쯤 다를 수 있다.")

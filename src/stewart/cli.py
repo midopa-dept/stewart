@@ -495,6 +495,11 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--tui", choices=["auto", "on", "off"], default="auto",
                    help="화면: auto(터미널·폭 60칸 이상이면 입력창 고정 화면, 파이프·좁은 화면·STEWART_TUI=0 이면 지금 화면) | on | off")
     c.add_argument("first", nargs="*", help="첫 입력(없으면 바로 대화)")
+    c.add_argument("--task-file", default=None, help="과제를 이 파일에서 받는다(첫 입력 하나로 — 여러 줄 그대로). 판 114")
+    c.add_argument("--once", action="store_true",
+                   help="사람 없이 한 차례만 돌리고 끝낸다: 끝에 프로필 verify_command 로 success 를 채우고 summary·output.md 를 run 과 같은 칸으로. "
+                        "--mode 가 없으면 auto(묻지 않음), 화면은 지금 화면(TUI 끔). 판 114")
+    c.add_argument("--tier", default=None, help="backends 표 [tiers.<이름>] 등급(백엔드·프로필·문맥 예산, slim = true 면 얇은 꼴) — 허브의 --tier 와 같은 뜻. 판 114")
     _resume_args(c)
     _common(c, task=False)
     rw = sub.add_parser("rewind", help="실행 기록의 체크포인트로 파일을 되돌린다(도구가 쓴 파일만)")
@@ -584,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--hub", action="store_true", help="--cost: 허브 메인 꼴(역할 지시 + 세션 도구)")
     pf.add_argument("--clean", action="store_true", help="--cost: 기억·사용자 스킬을 끈 뼈대")
     pf.add_argument("--slim", action="store_true", help="--cost: 얇은 허브 메인 꼴(등급 slim = true, 판 113 — --hub 를 뜻함)")
+    pf.add_argument("--chat-slim", action="store_true", help="--cost: chat 길의 얇은 꼴(stewart chat --tier <slim 등급>, 판 114 — 허브 도구 없음)")
     hb = sub.add_parser("hub", help="허브: 메인 세션 + 작업자 세션들을 웹 화면(127.0.0.1) 하나로 본다")
     hb.add_argument("action", nargs="?", choices=["url"], help="url: 떠 있는 허브의 접속 주소·로그인 토큰을 다시 보인다(허브는 띄우지 않음)")
     hb.add_argument("--project", default=None, help="프로젝트 폴더(메인의 작업 폴더, 기본: 지금 폴더)")
@@ -746,7 +752,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if a.cmd == "profiles" and a.cost:
             from . import ctxcost as CC
-            print(CC.table([CC.measure(n, hub=a.hub or a.slim, clean=a.clean, slim=a.slim) for n in (a.names or ["chat", "code"])]))
+            print(CC.table([CC.measure(n, hub=a.hub or (a.slim and not a.chat_slim), clean=a.clean, slim=a.slim or a.chat_slim) for n in (a.names or ["chat", "code"])]))
             return 0
         if a.cmd == "profiles":
             names = Counter(n for n, _, _ in list_profiles())
@@ -799,18 +805,38 @@ def main(argv: list[str] | None = None) -> int:
             if a.resume and not a.workdir:   # --resume 은 그 기록의 작업 폴더로 간다
                 a.workdir = run_meta(resolve_run(Path(a.runs_dir), a.resume)).get("workdir")
             wd = a.workdir or (None if prof_has_wd else os.getcwd())
-            profile, backend = resolve(a.profile, a.backend, wd)
+            if a.tier:   # 판 114: 허브와 같은 등급 풀이(얇은 꼴 포함)
+                from .hubmain import main_tier
+                profile, backend = main_tier(a, wd)
+            else:
+                profile, backend = resolve(a.profile, a.backend, wd)
+            first = " ".join(a.first) if a.first else None
+            if a.task_file:
+                tf = Path(a.task_file).read_text(encoding="utf-8")
+                first = tf if first is None else first + "\n\n" + tf
+            if a.once and not first:
+                print("stewart chat --once: 과제가 없다(--task-file 또는 첫 입력)", file=sys.stderr)
+                return 2
             history, resumed, _ = _history(a, profile.workdir, chat=True)
             if a.max_steps:
                 profile.max_steps = a.max_steps
             rec = Recorder(Path(a.runs_dir), "chat-" + profile.name)
+            if a.once:   # 판 114: 사람 없이 한 차례 — 화면은 지금 화면, 모드는 주지 않으면 auto
+                sess = ChatSession(profile, backend, rec, confirm=a.confirm, history=history, resumed_from=resumed, stream=a.stream,
+                                   mode=a.mode or ("auto" if a.confirm is None else None), default_mode="auto", think=a.think)
+                try:
+                    out = sess.run_once(first)
+                finally:
+                    s = sess.close()
+                print(json.dumps({"run_dir": s["run_dir"], "stop_reason": s["stop_reason"], "success": s["success"]}, ensure_ascii=False))
+                return 0 if out["stop_reason"] in ("completed", "asked") else 1
             from .tui import pick_ui
             ui = pick_ui(a.tui)   # None = 지금 화면(chat.UI)
             try:
                 sess = ChatSession(profile, backend, rec, ui=ui, confirm=a.confirm, history=history, resumed_from=resumed, stream=a.stream, mode=a.mode, default_mode="edits", think=a.think)
                 if ui:
                     ui.bind(sess)
-                repl(sess, " ".join(a.first) if a.first else None)
+                repl(sess, first)
             finally:
                 if ui:
                     ui.stop()

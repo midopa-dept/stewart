@@ -847,6 +847,9 @@ class ChatSession:
             self.ui.dim(f"    {'✓' if ok else '✗'} {len(result.splitlines())}줄  {_one_line(first, 90)}")
         if not ok:
             self.st["tool_errors"] += 1
+            from .engine import _error_kind   # 판 114: run 길과 같은 오류 갈래(edit_mismatch 등) — 평가기가 chat 길도 같은 칸으로 읽게
+            k = _error_kind(name, tc, result)
+            self.st.setdefault("tool_error_kinds", {})[k] = self.st.setdefault("tool_error_kinds", {}).get(k, 0) + 1
         self.ui.tool_result(tc)
         return tc
 
@@ -1879,7 +1882,7 @@ class ChatSession:
             "engine_version": __version__, "engine_git": self.meta["engine_git"], "profile": self.profile.name,
             "output_format": "free", "started": self.meta["started"], "mode": "chat", "exec_mode": self.mode,
             "backend": self.backend.name, "model": self.backend.model, "precision": self.backend.precision,
-            "stop_reason": "chat_end", "turns": st["turns"], "steps": st["steps"], "elapsed_s": time.monotonic() - self.t0,
+            "turns": st["turns"], "steps": st["steps"], "elapsed_s": time.monotonic() - self.t0,
             "model_time_s": st["model_time_s"], "tool_calls": st["tool_calls"], "tool_errors": st["tool_errors"],
             "parse_failures": st["parse_failures"], "format_failures": 0, "denied": st["denied"],
             "interrupts": st["interrupts"], "reflects": st.get("reflects", 0), "compactions": st["compactions"], "compact_log": self.comp.log,
@@ -1890,8 +1893,44 @@ class ChatSession:
             "gen_tok_per_s": (st["pred_n"] / (st["pred_ms"] / 1000)) if st["pred_ms"] else None,
             "prompt_tok_per_s": (st["prompt_n"] / (st["prompt_ms"] / 1000)) if st["prompt_ms"] else None,
             "e2e_tok_per_s": (st["completion_tokens"] / st["model_time_s"]) if st["model_time_s"] else None,
-            "verify": None, "success": True, "run_dir": str(self.rec.dir),
+            "tool_error_kinds": dict(st.get("tool_error_kinds") or {}), "features": self.meta.get("features"),
+            **self._outcome(),
+            "run_dir": str(self.rec.dir),
         }
+
+    # 판 114: 한 번 돌리기(--once)·끝 판정 — run 길과 같은 칸(stop_reason·verify·success)
+    RUN_REASON = {"answered": "completed"}
+
+    def _outcome(self) -> dict:
+        once = getattr(self, "_once", None)
+        if once is not None:
+            return {"stop_reason": once["stop_reason"], "verify": once["verify"],
+                    "asked": self._last_answer()[:2000] if once["stop_reason"] == "asked" else None,
+                    "success": once["verify"]["passed"] if once["verify"] else once["stop_reason"] == "completed"}
+        last = getattr(self, "_last_reason", None)   # 대화형: 마지막 차례가 답으로 끝났을 때만 참(전에는 늘 참)
+        return {"stop_reason": "chat_end", "verify": None, "success": bool(last == "answered"),
+                "last_turn_reason": last}
+
+    def run_once(self, task: str) -> dict:
+        """판 114: 과제 하나를 사람 없이 한 차례 돌리고(묻기·max_steps 면 그대로 끝), 프로필 verify_command 로 판정한다."""
+        reason = self.turn(task)
+        stop = self.RUN_REASON.get(reason, reason or "completed")
+        verify = None
+        if self.profile.verify_command:
+            from .osdep import ShellNotFound, run_command
+            from .shell import tool_env
+            try:
+                p = run_command(self.profile.verify_command, cwd=self.profile.workdir, capture_output=True,
+                                timeout=self.profile.shell_timeout_s * 5, env=tool_env())
+                verify = {"command": self.profile.verify_command, "exit": p.returncode, "passed": p.returncode == 0,
+                          "output": (p.stdout + p.stderr)[-6000:]}
+            except ShellNotFound as e:
+                verify = {"command": self.profile.verify_command, "exit": "no_shell", "passed": False, "output": f"판정 명령을 돌릴 셸이 없다: {e}"}
+            except Exception as e:  # noqa: BLE001 — 시간 초과 등
+                verify = {"command": self.profile.verify_command, "exit": "error", "passed": False, "output": f"{type(e).__name__}: {e}"[:2000]}
+            self.rec.event("verify", stage="final", **verify)
+        self._once = {"stop_reason": stop, "verify": verify}
+        return self._once
 
     def close(self) -> dict:
         shell_end = T.close_env(self.env)
@@ -1909,8 +1948,14 @@ class ChatSession:
             except OSError as e:
                 s["memory"] = {"error": str(e)[:300]}
         self.rec.event("run_end", summary=s)
-        self.rec.close(s, None)
+        self.rec.close(s, self._last_answer() if getattr(self, "_once", None) is not None else None)   # --once 는 run 처럼 output.md
         return s
+
+    def _last_answer(self) -> str:
+        for m in reversed(self.messages):
+            if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip():
+                return m["content"]
+        return ""
 
 
 MODE_HELP = ("모드 바꾸기: /mode auto|edits|ask|plan — auto=도구를 모두 바로 실행 · edits=파일 편집은 바로·셸은 묻기(chat 기본)"
