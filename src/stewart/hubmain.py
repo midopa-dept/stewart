@@ -328,17 +328,39 @@ def main_tier(a, workdir: str):
         return resolve(a.profile, a.backend, workdir)
     from . import spawn as SP
     from .config import ConfigError
-    t = SP.load_tiers(main=True).get(name)
-    if t is None:
-        raise ConfigError(f"등급이 없다: {name} (backends 표 [tiers.<이름>])")
+    tiers = SP.load_tiers(main=True)
+    t = tiers.get(name)
+    if t is None:   # 판 116: 없는 등급은 기본 모델로 대신하지 않는다(바깥 유료 등급이 몰래 물려받기로 떨어지지 않게)
+        raise ConfigError(f"등급이 없다: {name}. 등급은 backends 표 [tiers.<이름>] 에 적어야 켜진다(있는 등급: {', '.join(tiers) or '없음'}). "
+                          "바깥 유료 모델 등급은 기본 모델로 대신하지 않는다 — 따로 도는 허브(stewart instance)로 띄운다")
+    import dataclasses
     profile, backend = resolve(t.get("profile") or a.profile, t.get("backend") or a.backend, workdir)
     if t.get("budget"):
-        import dataclasses
         backend = dataclasses.replace(backend, context_budget=max(4096, min(int(t["budget"]), backend.max_context)))
+    profile = dataclasses.replace(profile, raw={**(profile.raw or {}), "tier": SP.tier_raw(t)})   # 판 116: 생각 칸 등
+    if t.get("backend"):
+        why = _reach(backend)
+        if why:
+            import sys
+            print(f"stewart: 등급 {name} 의 백엔드 {backend.name} 에 닿지 못했다({why}) — 켜도 첫 답에서 오류가 난다. "
+                  "기본 모델로 대신 돌리지 않는다. 서버를 켜거나, 등급의 backend 줄을 지우면 기본 모델로 돈다", file=sys.stderr)
     if t.get("slim"):
         from . import slim as SL
         profile = SL.apply(profile, t)
     return profile, backend
+
+
+def _reach(backend) -> str:
+    """판 116: 등급 백엔드에 연결만 해 본다(3초, 인증 오류는 닿은 것). 닿지 못하면 까닭, 닿으면 빈 글."""
+    import urllib.error
+    import urllib.request
+    try:
+        urllib.request.urlopen(backend.base_url.rstrip("/") + "/models", timeout=3).close()
+    except urllib.error.HTTPError:
+        return ""
+    except (OSError, ValueError) as e:
+        return type(e).__name__
+    return ""
 
 
 class HubMain:

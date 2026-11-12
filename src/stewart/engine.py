@@ -196,6 +196,13 @@ def _looks_like_toolcall(text: str, names: list[str]) -> bool:
     return bool(re.search(r"\b(" + "|".join(names) + r")\s*[({]", text))
 
 
+def compact_base(backend, profile) -> int:
+    """압축 창의 바탕(판 116): 등급으로 띄운 작업자(프로필 raw["tier"]["budget"])면 min(max_context, 그 예산), 아니면 max_context.
+    STEWART_CONTEXT_BUDGET 은 run 길에서 예전처럼 보지 않는다(평가 길 불변)."""
+    b = ((getattr(profile, "raw", None) or {}).get("tier") or {}).get("budget")
+    return min(backend.max_context, int(b)) if b else backend.max_context
+
+
 def compact_mode(env=None) -> dict | None:
     """평가 손잡이(판 66, 압축 방식 비교 SW-18). 주지 않으면 None — 평가 길 동작은 예전 그대로.
     STEWART_COMPACT_MODE = off | mask | mask+sum | sum | mask-roll, STEWART_COMPACT_WINDOW = 문턱을 잴 창(토큰, 서빙 창은 그대로)."""
@@ -381,6 +388,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     check = load_check(profile.action_check)
     max_steps = max_steps or profile.max_steps
     mt = {"max_tokens": profile.max_tokens} if profile.max_tokens else {}  # 프로필 단계당 생성 상한
+    tier = (profile.raw or {}).get("tier") or {}   # 판 116: 등급으로 띄운 작업자(chat._spawn_run → delegate) — 없으면 예전 그대로
+    if isinstance((tier.get("think") or {}).get("think"), bool):
+        mt["thinking"] = tier["think"]["think"]
     stop_cfg = HK.stop_command(profile) if not parent else {"command": None, "source": "worker", "ignored": None}
     hk = HK.Hooks(profile.hooks if not parent else {}, profile.workdir, rec.dir,
                   record=lambda r: rec.event("hook", **r))   # hooks 최소판(작업자는 없음)
@@ -458,7 +468,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                                        tool_defs, "run", {"selfcheck": {k: v for k, v in _SCK.flags(profile).items() if k in _SCK.ENVS},
                                                           "repair": _TRK.on("STEWART_TOOLCALL_REPAIR", False),
                                                           "edit_feedback": _TRK.on("STEWART_EDIT_FEEDBACK", False),
-                                                          "passback": _TRK.passback()})
+                                                          "passback": _TRK.passback(),
+                                                          **({"tier": {"name": tier.get("name"), "budget_source": "tier" if tier.get("budget") else None,
+                                                                       "think": tier.get("think") or {}}} if tier else {})})
     rec.event("run_start", meta=meta, messages=messages)
     if tool_defs:   # 학습 내보내기(판 90): 보낸 도구 정의 그대로(대화형은 chat 이 바뀔 때마다 남긴다)
         rec.event("tool_defs", step=0, defs=tool_defs)
@@ -485,7 +497,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             cset["ratio"] = cmode["ratio"]
 
     def new_comp():
-        return Compactor((cmode["window"] or backend.max_context) if cmode else backend.max_context, cset["ratio"], cset["keep_recent"], fold=cset["fold"],
+        base = compact_base(backend, profile)   # 판 116: 등급 예산(작업자) — 등급 없으면 max_context 그대로
+        return Compactor((cmode["window"] or base) if cmode else base, cset["ratio"], cset["keep_recent"], fold=cset["fold"],
                          plan_count=lambda: len(env.plan.items) if env.plan is not None else 0,
                          reserve=(tks["max_tokens"] if tks["max_tokens"] and TH.is_on(backend, None)
                                   else reply_reserve(profile, backend)), tail_tokens=bool(cmode))
@@ -587,7 +600,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     kw = {**mt, **extra}
                     est = (st["last_prompt_tokens"] + est_tokens(json.dumps(messages[prompt_mark:], ensure_ascii=False))
                            if st["last_prompt_tokens"] else est_tokens(json.dumps(messages, ensure_ascii=False)))
-                    kw.update(TH.call_kwargs(backend, tks, kw.get("thinking"), est))   # 생각 켬 차례만
+                    kw.update(TH.call_kwargs(backend, tks, kw.get("thinking"), est, first=step == 1))   # 생각 켬 차례만
                     if force_format:
                         mode = "형식 강제(response_format, 도구 없음)"
                         rf = {"type": "json_schema", "json_schema": {"name": "output", "schema": profile.output_schema}}
@@ -1179,7 +1192,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "reasoning_tokens": st["reasoning_tokens"],
         "same_call_same_result": st["same_call_same_result"], "same_call_diff_result": st["same_call_diff_result"],
         **({"think": {**tks, "dropped_params": list(backend.dropped_params)}}
-           if tks["max_tokens"] or tks["sampling"] or tks["ignored"] else {}),
+           if tks["max_tokens"] or tks["sampling"] or tks["ignored"] or tks.get("max_first") or tks.get("effort") else {}),
         **({"length_empty_retries": st["length_empty_retries"]} if st.get("length_empty_retries") else {}),
         **({"review": {**review, "steps_after": (st["steps"] - review["at_step"]) if review.get("ran") else None,
                        "files_changed_after": len(review_paths) if review.get("ran") else None}}

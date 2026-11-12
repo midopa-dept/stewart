@@ -16,6 +16,9 @@ from __future__ import annotations
 import os
 
 ENV_MAX, ENV_SAMPLING = "STEWART_THINK_MAX_TOKENS", "STEWART_THINK_SAMPLING"
+# 판 116(실험 손잡이, 기본 없음 = 지금과 같다): 차례 첫 걸음의 생각 상한, 노력 수준(reasoning_effort)과 싣는 자리
+ENV_MAX_FIRST, ENV_EFFORT, ENV_EFFORT_AT = "STEWART_THINK_MAX_TOKENS_FIRST", "STEWART_REASONING_EFFORT", "STEWART_REASONING_EFFORT_AT"
+EFFORT_RX = r"^[a-z]{2,12}$"
 PRESETS: dict[str, dict] = {
     # Qwen3 계열 모델 카드의 생각 모드 권장값 + 되풀이를 줄이는 presence_penalty
     "qwen": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.0},
@@ -27,10 +30,27 @@ FLOOR, MARGIN = 1024, 256
 
 
 def settings(profile, env=None) -> dict:
+    """우선순위: 환경 변수 > 등급(프로필 raw["tier"]["think"], 판 116) > 프로필. 아무것도 없으면 지금과 같다."""
+    import re
     env = os.environ if env is None else env
     mx, samp, src, bad = getattr(profile, "think_max_tokens", None), getattr(profile, "think_sampling", None), {}, []
     src["max_tokens"] = "profile" if mx else None
     src["sampling"] = "profile" if samp else None
+    tt = ((getattr(profile, "raw", None) or {}).get("tier") or {}).get("think") or {}
+    first, effort, at, params = None, None, "body", None
+    if isinstance(tt.get("think_max_tokens"), int) and tt["think_max_tokens"] >= 256:
+        mx, src["max_tokens"] = tt["think_max_tokens"], "tier"
+    if isinstance(tt.get("think_max_tokens_first"), int) and tt["think_max_tokens_first"] >= 256:
+        first, src["max_first"] = tt["think_max_tokens_first"], "tier"
+    if isinstance(tt.get("reasoning_effort"), str) and re.match(EFFORT_RX, tt["reasoning_effort"]):
+        effort, src["effort"] = tt["reasoning_effort"], "tier"
+    if tt.get("reasoning_effort_at") in ("body", "template"):
+        at = tt["reasoning_effort_at"]
+    ts = tt.get("think_sampling")
+    if isinstance(ts, str) and ts in PRESETS:
+        samp, src["sampling"] = ts, "tier"
+    elif isinstance(ts, dict):
+        params, src["sampling"] = {k: v for k, v in ts.items() if k in SAMPLING_KEYS}, "tier"
     v = env.get(ENV_MAX)
     if v is not None:
         if v.strip() == "0":
@@ -42,12 +62,40 @@ def settings(profile, env=None) -> dict:
     v = env.get(ENV_SAMPLING)
     if v is not None:
         if v.strip().lower() == "none":
-            samp, src["sampling"] = None, "env:off"
+            samp, params, src["sampling"] = None, None, "env:off"
         elif v.strip() in PRESETS:
-            samp, src["sampling"] = v.strip(), "env"
+            samp, params, src["sampling"] = v.strip(), None, "env"
         else:
             bad.append(ENV_SAMPLING)
-    return {"max_tokens": mx, "sampling": samp, "params": dict(PRESETS[samp]) if samp else {}, "source": src, "ignored": bad}
+    v = env.get(ENV_MAX_FIRST)
+    if v is not None:
+        if v.strip() == "0":
+            first, src["max_first"] = None, "env:off"
+        elif v.strip().isdigit() and int(v) >= 256:
+            first, src["max_first"] = int(v), "env"
+        else:
+            bad.append(ENV_MAX_FIRST)
+    v = env.get(ENV_EFFORT)
+    if v is not None:
+        if v.strip().lower() in ("", "none", "off"):
+            effort, src["effort"] = None, "env:off"
+        elif re.match(EFFORT_RX, v.strip().lower()):
+            effort, src["effort"] = v.strip().lower(), "env"
+        else:
+            bad.append(ENV_EFFORT)
+    v = env.get(ENV_EFFORT_AT)
+    if v is not None:
+        if v.strip() in ("body", "template"):
+            at = v.strip()
+        else:
+            bad.append(ENV_EFFORT_AT)
+    out = {"max_tokens": mx, "sampling": samp, "params": dict(params) if params is not None else (dict(PRESETS[samp]) if samp else {}),
+           "source": src, "ignored": bad}
+    if first:
+        out["max_first"] = first
+    if effort:
+        out["effort"], out["effort_at"] = effort, at
+    return out
 
 
 def is_on(backend, thinking) -> bool:
@@ -61,13 +109,25 @@ def fit(want: int, max_context: int, est_prompt: int) -> int:
     return max(min(want, room), min(want, FLOOR))
 
 
-def call_kwargs(backend, s: dict, thinking, est_prompt: int) -> dict:
-    """이 요청에 더할 인자({max_tokens, overrides}). 생각 끔이거나 손잡이가 없으면 {}."""
+def call_kwargs(backend, s: dict, thinking, est_prompt: int, first: bool = False) -> dict:
+    """이 요청에 더할 인자({max_tokens, overrides}). 손잡이가 없으면 {}.
+    상한·샘플링은 생각 켬 요청에만. first(차례 첫 걸음)면 max_first 가 있을 때 그것(판 116).
+    노력(effort)은 생각을 끄지 않은 요청에 싣는다 — body 면 본문 맨 위 reasoning_effort, template 이면 chat_template_kwargs 안(판 116)."""
+    out: dict = {}
+    if s.get("effort") and thinking is not False:
+        if s.get("effort_at") == "template":
+            ctk = dict(backend.params.get("chat_template_kwargs") or {})
+            if thinking is not None:
+                ctk["enable_thinking"] = bool(thinking)
+            ctk["reasoning_effort"] = s["effort"]
+            out["overrides"] = {"chat_template_kwargs": ctk}
+        else:
+            out["overrides"] = {"reasoning_effort": s["effort"]}
     if not is_on(backend, thinking):
-        return {}
-    out = {}
-    if s["max_tokens"]:
-        out["max_tokens"] = fit(s["max_tokens"], backend.max_context, est_prompt)
+        return out
+    mx = s.get("max_first") if (first and s.get("max_first")) else s["max_tokens"]
+    if mx:
+        out["max_tokens"] = fit(mx, backend.max_context, est_prompt)
     if s["params"]:
-        out["overrides"] = dict(s["params"])
+        out["overrides"] = {**out.get("overrides", {}), **dict(s["params"])}
     return out

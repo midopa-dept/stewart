@@ -152,24 +152,31 @@ uv run stewart hub --project ~/my-project
 
 ### Worker tier names
 
+- A tier is a way of giving work, not a model size. It bundles prompt weight, tools, thinking and context budget under one name.
 - The default example has four. Names are set only in `[tiers.<name>]` in the backends table, so renaming them changes no code. The full example is at the end of `backends.example.toml`.
+- Tiers work with a single model too; the same model is just used at different weights. A tier without `backend` uses the default model; add one `backend` line when you have another model.
+- How many workers run at once is set by the model server's concurrent-request setting (the backend's `concurrency`). A tier's `max` can lower it further.
+- If a tier's server cannot be reached, it does not fall back to the default model. A worker notes this and ends; with `--tier` the hub says so at startup. Unknown tiers are refused, listing the ones that exist.
+- Thinking fields: `think`, `think_max_tokens` and `think_max_tokens_first`, `reasoning_effort` and `reasoning_effort_at`, `think_sampling`. The same can be set with `STEWART_THINK_*` and `STEWART_REASONING_*` environment variables. Environment variables win over tiers, and tiers over profiles.
+- A tier's context budget is the compaction window for both a main seated with `--tier` and workers started on that tier. Runs without a tier behave as before.
 - Tags read "seat · tier" (worker 3 · `presto` / main · `largo`).
 
 #### Presto, ma non troppo
 - `presto`: quickly. Finding, reading, summarizing, things to double-check.
-- A local 9B-class model. Several run at once as workers. With `slim = true`, seating it as the main gives the slim hub.
+- A thin prompt, read tools and a short context. Light enough to run several as workers. With `slim = true`, seating it as the main gives the slim hub.
 
 #### Moderato cantabile
 - `moderato`: at a moderate pace. The default for coding and conversation.
-- 27B-class, context budget 32000. The default tier for work that lists tools (writes).
+- The default tier for work that lists tools (writes).
 
 #### Largo ma non tanto
 - `largo`: broadly. Planning, dispatching, review.
-- 27B-class with the server's whole window. Seated as the main with every feature on (`stewart hub --tier largo`).
+- Seated as the main with every tool and a wide context (`stewart hub --tier largo`).
 
 #### Rubato, poi a tempo
 - `rubato`: stolen time. Only when stuck; paid.
 - An external API. It is not in the tier table; it runs as a separately started instance (`stewart instance`), only when a person opens it.
+- The default model is never used in its place.
 
 ## Safety
 

@@ -34,11 +34,19 @@ def on(knob: str, interactive: bool, env=None) -> bool:
 def passback(env=None) -> str:
     env = os.environ if env is None else env
     v = (env.get("STEWART_REASONING_PASSBACK") or "off").strip().lower()
-    return v if v in ("off", "tool_turns", "all") else "off"
+    return v if v in ("off", "tool_turns", "current_turn", "all") else "off"
 
 
 def keep_reasoning(mode: str, think: str | None, has_calls: bool) -> bool:
-    return bool(think) and (mode == "all" or (mode == "tool_turns" and has_calls))
+    """current_turn(판 116): 툴콜이 있는 걸음의 생각을 남기되, 보낼 때 지난 차례 것은 뺀다(strip_old_turns)."""
+    return bool(think) and (mode == "all" or (mode in ("tool_turns", "current_turn") and has_calls))
+
+
+def strip_old_turns(messages: list[dict]) -> list[dict]:
+    """current_turn: 마지막 사람(user) 말 앞의 assistant 생각(reasoning_content)을 뺀 사본. 차례 안 도구 사이 생각만 남는다."""
+    last = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    return [({k: v for k, v in m.items() if k != "reasoning_content"} if i < last and "reasoning_content" in m else m)
+            for i, m in enumerate(messages)]
 
 
 # ── 가-2 인자 JSON 복구 ──────────────────────────────────────────────────

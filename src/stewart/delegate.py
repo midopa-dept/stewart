@@ -184,6 +184,9 @@ def run_child(ctx: dict, args: dict) -> tuple[bool, str]:
                                     read_default=bool(ctx.get("read_default")))
     except ConfigError as e:
         return False, f"작업자를 만들 수 없다: {e}"
+    if args.get("_tier"):   # 판 116: 등급으로 띄운 작업자 — 압축 예산·생각 칸을 프로필 raw["tier"] 로(엔진이 읽는다)
+        import dataclasses
+        prof = dataclasses.replace(prof, raw={**(prof.raw or {}), "tier": dict(args["_tier"])})
     budget.n += 1
     n = budget.n
     crec = Recorder(Path(ctx["rec"].dir) / "sub", f"{n}-{prof.name}")

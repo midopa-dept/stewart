@@ -42,8 +42,15 @@ DEFINITION = {"type": "function", "function": {
 
 
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
+TIER_KEYS = ("backend", "profile", "budget", "max", "use", "default_for", "slim", "slim_keep", "slim_system",
+             "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling")
+THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling")
+
+
 def load_tiers(path=None, main: bool = False) -> dict:
     """backends 표에서 등급. 없으면 {}(등급 없이 지금 백엔드). slim 은 메인(--tier)으로 앉힐 때만 뜻이 있다 — 작업자 목록에도 남는다(판 115).
+    판 116: 아는 칸이 하나라도 있으면 등급이다 — backend 를 안 적으면 기본 모델을 물려받는다. max 를 안 적으면 None(그 백엔드의 동시 수를 따른다).
+    생각 칸(think·think_max_tokens·think_max_tokens_first·reasoning_effort·reasoning_effort_at·think_sampling)은 안 적으면 지금과 같다.
     main 인자는 예전 호출과 맞추려고 남긴다."""
     import tomllib
     from .config import backends_path
@@ -53,12 +60,24 @@ def load_tiers(path=None, main: bool = False) -> dict:
         return {}
     out = {}
     for name, t in (data.get("tiers") or {}).items():
-        if isinstance(t, dict) and (t.get("backend") or t.get("profile")):
-            out[str(name)] = {"backend": t.get("backend"), "profile": t.get("profile"), "budget": t.get("budget"),
-                              "max": int(t.get("max") or 1), "use": " ".join(str(t.get("use") or "").split())[:80],
+        if isinstance(t, dict) and any(k in t for k in TIER_KEYS):
+            out[str(name)] = {"name": str(name), "backend": t.get("backend"), "profile": t.get("profile"), "budget": t.get("budget"),
+                              "max": int(t["max"]) if t.get("max") else None, "use": " ".join(str(t.get("use") or "").split())[:80],
                               "default_for": t.get("default_for") or [], "slim": bool(t.get("slim")),
-                              "slim_keep": t.get("slim_keep"), "slim_system": t.get("slim_system")}
+                              "slim_keep": t.get("slim_keep"), "slim_system": t.get("slim_system"),
+                              "think": {k: t[k] for k in THINK_KEYS if k in t}}
     return out
+
+
+def tier_raw(t: dict) -> dict:
+    """프로필 raw["tier"] 에 싣는 꼴(엔진·chat·생각 손잡이가 같이 읽는다)."""
+    return {"name": t.get("name"), "budget": t.get("budget"), **({"think": t["think"]} if t.get("think") else {})}
+
+
+def unknown_note(tiers: dict, asked) -> str:
+    """판 116: 모델이 없는 등급 이름을 냈으면 그 사실(조용히 바꿔 타지 않게)."""
+    a = str(asked or "")
+    return f"모르는 등급 '{a[:30]}' — 있는 등급: {', '.join(tiers) or '없음'}" if a and a not in tiers else ""
 
 
 def pick_tier(tiers: dict, args: dict) -> str | None:
@@ -111,7 +130,7 @@ class Pool:
                    "started": None, "ended": None, "collected": False, "noticed": False, "cancelled": False}
             self.w[wid] = rec
 
-        sem = self.tier_sem.get(str(args.get("tier") or ""), self.sem)   # 등급마다 따로 센다(예: 로컬 9B 는 1)
+        sem = self.tier_sem.get(str(args.get("tier") or ""), self.sem)   # 등급마다 따로 센다(서버 동시 수에 맞춰)
         rec["tier"] = str(args.get("tier") or "")
 
         def go():

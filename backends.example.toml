@@ -67,25 +67,26 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # adapter_scale = 1.0
 # 확인: stewart adapter [-b cloud]  (서버 목록에 실렸는지 대조)
 
-# ── 등급(판 110·113·115) — 모델·도구·문맥을 이름 하나로 묶는다. 이름은 이 표에서만 정한다(바꿔도 코드는 그대로) ──
+# ── 등급(판 110·113·115·116) — 모델의 크기가 아니라 일을 시키는 방식(지시문 두께·도구·생각·문맥 예산)을 이름 하나로 묶는다 ──
+# 이름은 이 표에서만 정한다(바꿔도 코드는 그대로). backend 를 안 적은 등급은 기본 모델을 쓴다 — 다른 모델이 있으면 backend 한 줄을 더한다.
 # 작업자(workers spawn)에게는 등급 이름과 use 한 줄만 보인다. 안 고르면 default_for 로(read = 도구를 안 적은 읽기 일, write = 도구를 적은 일).
 # 메인으로 앉히려면 stewart hub --tier <이름> (chat --tier 도 같다). slim = true 면 그때 얇은 꼴(짧은 지시·핵심 도구, 나머지는 허브 칩).
+# 동시에 몇을 돌릴지는 그 백엔드의 concurrency(서버의 동시 요청 수)가 정한다. max 로 더 줄일 수 있다.
+# 생각 칸(안 적으면 지금과 같다): think = true|false · think_max_tokens · think_max_tokens_first(차례 첫 걸음) ·
+#   reasoning_effort = "<낱말>" · reasoning_effort_at = "body"|"template" · think_sampling = "<묶음>" 또는 { temperature = … }
 # [tiers.presto]
-# backend = "local-small"      # 9B 급 로컬(이 표의 백엔드 이름)
+# # backend = "<다른 모델이 있으면 그 백엔드 이름>"
 # budget = 24000
-# max = 2                      # 동시 상한(로컬 서버 --parallel 수)
 # slim = true                  # 메인으로 앉힐 때 얇은 허브(작업자일 때는 뜻 없음)
 # use = "곧. 찾기·읽기·요약, 검산할 것."
 # default_for = ["read"]
 # [tiers.moderato]
-# backend = "main"             # 27B 급
 # budget = 32000               # 잠정값 — 개발 실측(압축 창·대화 몫) 결과로 다시 정한다. 등급을 안 고르면 지금 동작 그대로
-# max = 2
 # use = "보통으로. 코딩·대화의 기본."
 # default_for = ["write"]
 # [tiers.largo]
-# backend = "main"             # 27B 급, 서버 창 전부(budget 없음) — 모든 기능의 메인: stewart hub --tier largo
-# max = 1
+# max = 1                      # 서버 창 전부(budget 없음) — 모든 기능의 메인: stewart hub --tier largo
 # use = "넓게. 계획·분배·검토."
-# rubato(바깥의 큰 모델)는 이 표에 두지 않는다 — 글이 그 회사로 나가고 돈이 드니, 따로 도는 허브로 띄워 사람이 열 때만 쓴다:
+# rubato(바깥의 큰 모델)는 이 표에 두지 않는다 — 글이 그 회사로 나가고 돈이 드니, 따로 도는 허브로 띄워 사람이 열 때만 쓴다.
+#   표에 없는 등급을 --tier 로 부르면 거절한다(기본 모델로 대신하지 않는다):
 #   stewart instance <이름> start   (자기 backends·작업 폴더·기억, OS 샌드박스 — README "따로 도는 허브")

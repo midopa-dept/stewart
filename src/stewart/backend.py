@@ -564,7 +564,7 @@ def _send_once(backend: Backend, body: dict, overrides: dict | None):
     try:
         return _open(backend, "/chat/completions", body, backend.timeout_s)
     except BackendError as e:
-        bad = [k for k in (overrides or {}) if k in SAMPLING_KEYS and k in body and k in (e.body or "")]
+        bad = [k for k in (overrides or {}) if k in SAMPLING_KEYS + ("reasoning_effort",) and k in body and k in (e.body or "")]
         if e.status not in (400, 422) or not bad:
             raise
         for k in bad:

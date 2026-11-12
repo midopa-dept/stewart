@@ -60,7 +60,7 @@ from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
 CONFIRM_TOOLS = WRITE_TOOLS | {"run_shell"}
-COMPACT_RATIO = 0.5    # 마지막 프롬프트 토큰이 max_context 의 이 비율을 넘으면 오래된 도구 결과를 줄인다(판 65: 0.75→0.5 — 27B·150k 에서 긴 문맥은 느리다)
+COMPACT_RATIO = 0.5    # 마지막 프롬프트 토큰이 max_context 의 이 비율을 넘으면 오래된 도구 결과를 줄인다(판 65: 0.75→0.5 — 긴 창에서 긴 문맥은 느리다)
 SUMMARY_RATIO = 0.7    # 줄이고 나서도 이 비율을 넘으면 앞 대화를 요약 한 쪽으로 접는다(Claude Code 의 자동 compact 처럼, 판 65)
 SUMMARY_KEEP_TURNS = 2 # 접을 때 원문 그대로 남기는 최근 사람 차례 수
 SUMMARY_KEEP_STEPS = 10   # 차례가 셋이 안 되는 긴 대화(한 차례가 아주 긴 것)에서 원문 그대로 남기는 최근 단계 수
@@ -262,6 +262,9 @@ class ChatSession:
         self.stream = stream   # True 면 응답을 조각으로 받아 바로 보여 준다(cli chat 기본). Ctrl-C 가 생성을 바로 끊는다
         self.max_steps = profile.max_steps   # 차례당 단계 상한. 닿으면 묻는 모드는 "계속할까?"(한 번 더 같은 만큼), auto 는 끝내고 안내
         self.think = think     # None = 백엔드 params 그대로, True/False = chat_template_kwargs.enable_thinking 덮어쓰기(/think)
+        if think is None:   # 판 116: --tier 등급의 think 칸(켬·끔). auto·없음 = 지금 그대로
+            tv = (((profile.raw or {}).get("tier") or {}).get("think") or {}).get("think")
+            self.think = tv if isinstance(tv, bool) else None
         web = web_search_config(profile, interactive=True)
         self.web_status = {"search": bool(web and web["url"]), "fetch": bool(web and web["fetch"]),
                            "why": (web or {}).get("why") or ("" if web else "웹 도구 꺼짐(검색 주소 없음·읽기 끔)")}
@@ -958,7 +961,11 @@ class ChatSession:
         return info
 
     def _clean(self) -> list[dict]:
-        return [{k: v for k, v in m.items() if not k.startswith("_")} for m in self.messages]
+        out = [{k: v for k, v in m.items() if not k.startswith("_")} for m in self.messages]
+        if getattr(self, "passback", "off") == "current_turn":   # 판 116: 지난 차례의 생각은 보내지 않는다
+            from .toolrepair import strip_old_turns
+            out = strip_old_turns(out)
+        return out
 
     def _new_compactor(self) -> Compactor:
         p = self.profile
@@ -1004,7 +1011,7 @@ class ChatSession:
             last = self.st["last_prompt_tokens"]
             est = (last + est_tokens(json.dumps(self.messages[self._pmark:], ensure_ascii=False)) if last
                    else est_tokens(json.dumps(self.messages, ensure_ascii=False)))
-            kw = {**mt, **TH.call_kwargs(self.backend, self.tks, mt.get("thinking"), est)}   # 생각 켬 차례만
+            kw = {**mt, **TH.call_kwargs(self.backend, self.tks, mt.get("thinking"), est, first=getattr(self, "_turn_n", 0) == 1)}   # 생각 켬 차례만
             self._prefix_check(step)
             try:
                 if self.stream:
@@ -1245,6 +1252,7 @@ class ChatSession:
                     else:
                         break
                 n += 1
+                self._turn_n = n   # 판 116: 차례 안 걸음 번호(첫 걸음 생각 상한)
                 self.st["steps"] += 1
                 step = self.st["steps"]
                 self._interject(step)   # [tui-interject] 앞 단계의 도구 결과 뒤·이 요청 전
@@ -1721,9 +1729,18 @@ class ChatSession:
         if getattr(self, "pool", None) is None:
             hr = getattr(self.ui, "halt_req", None)
             self.pool = SP.Pool(self._spawn_run, SP.max_workers(self.backend), halted=lambda: hr is not None and hr.is_set(),
-                                tier_limits={k: v["max"] for k, v in (getattr(self, "tiers", None) or {}).items()})
+                                tier_limits={k: v["max"] or self._tier_conc(v) for k, v in (getattr(self, "tiers", None) or {}).items()})
             self._cps_lock = threading.RLock()
         return self.pool
+
+    def _tier_conc(self, t: dict) -> int:
+        """판 116: 등급에 max 가 없으면 그 백엔드 서버의 동시 수(메인과 같은 백엔드면 메인 몫 하나를 남긴 수)."""
+        name = t.get("backend")
+        if not name or name == self.backend.name:
+            return SP.max_workers(self.backend)
+        from .config import load_backends
+        b = load_backends()[0].get(name)
+        return max(1, int(getattr(b, "concurrency", 1) or 1)) if b is not None else 1
 
     def _spawn_run(self, args: dict, wid: str) -> tuple[bool, str]:
         """실 안에서: 작업자 하나(delegate 와 같은 길, 사람에게 묻지 않음 — 승인이 필요한 행동은 하지 않음)."""
@@ -1742,6 +1759,7 @@ class ChatSession:
                 args = {**args, "kind": tier["profile"]}
             if tier.get("budget"):
                 backend = dataclasses.replace(backend, context_budget=int(tier["budget"]))
+            args = {**args, "_tier": SP.tier_raw(tier)}   # 판 116: 작업자 프로필 raw["tier"] — 압축 예산·생각 칸
         ctx = {"profile": self.profile, "backend": backend, "rec": self.rec, "cps": cps, "env": self.env,
                "exec_mode": self.mode, "tool_names": [t for t in self.all_tool_names if t not in (DG.NAME, SP.NAME)], "ledger": None,
                "budget": self._dg_budget, "log": self.delegations, "ask": None, "on_call": on_call, "ask_cfg": None,
@@ -1751,6 +1769,9 @@ class ChatSession:
         self.rec.event("spawn_start", id=wid, task=str(args.get("task") or "")[:500])
         ok, text = DG.run_child(ctx, args)
         self.rec.event("spawn_end", id=wid, ok=ok)
+        if tier and tier.get("backend") and not ok and "backend_error" in text:   # 판 116: 등급 서버가 죽었으면 분명하게(기본 모델로 대신 돌리지 않는다)
+            text += (f"\n(등급 {args.get('tier')} 의 백엔드 {tier['backend']} 에 닿지 못했다 — 기본 모델로 대신 돌리지 않았다. "
+                     "서버를 켜거나, 등급의 backend 줄을 지우면 기본 모델로 돈다)")
         return ok, f"[작업자 {wid}" + (f" · {args.get('tier')}" if tier else "") + "] " + text   # 꼬리표 "자리 · 등급"(판 115)
 
     def _workers(self, args: dict) -> tuple[bool, str]:
@@ -1759,12 +1780,16 @@ class ChatSession:
         if act == "spawn":
             if not str(args.get("task") or "").strip():
                 return False, "spawn 은 task 에 맡길 일을 적는다"
+            note = ""
             if getattr(self, "tiers", None):
+                note = SP.unknown_note(self.tiers, args.get("tier"))   # 판 116: 없는 등급 이름은 조용히 바꿔 타지 않고 알린다
                 t = SP.pick_tier(self.tiers, args)
                 args = {**args, "tier": t} if t else {k: v for k, v in args.items() if k != "tier"}
+                if note:
+                    note = f" ({note} — {t or '등급 없이'} 로 돌린다)"
             r = pool.spawn(args)
             self.ui.dim(f"  작업자 {r['id']}{' · ' + args['tier'] if args.get('tier') else ''} 띄움(동시 {pool.limit}): {_one_line(str(args.get('task')), 100)}")
-            return True, (f"작업자 {r['id']} 를 띄웠다({'바로 돈다' if len(pool.running()) <= pool.limit else '자리가 나면 돈다'}). "
+            return True, (f"작업자 {r['id']} 를 띄웠다({'바로 돈다' if len(pool.running()) <= pool.limit else '자리가 나면 돈다'}){note}. "
                           "네 몫을 계속 하고, 끝나면 workers(action='wait') 또는 'collect' 로 결과를 모은다.")
         if act == "wait":
             got, still = pool.wait(args.get("ids"), args.get("timeout_s") or 600)
