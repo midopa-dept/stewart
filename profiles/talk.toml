@@ -9,6 +9,7 @@ read_outside = "deny"
 max_steps = 60
 max_consecutive_errors = 4
 language = "ko"
+surface = "talk"             # 자리: 스킬 색인을 대화 자리에 맞는 것만(판 119)
 hub_role = false             # 허브 메인 역할 지시(일 나눠 맡기기)를 붙이지 않는다
 env_block = "date"           # 첫 말 앞 환경 정보는 날짜만
 # 허브 세션 도구·현황판은 칩으로(기본 끔)

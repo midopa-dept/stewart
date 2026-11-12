@@ -328,7 +328,7 @@ TOP_KEYS = {"name", "description", "system", "tools", "workdir", "max_steps", "m
             "check_on_stop", "check_on_stop_max", "check_on_stop_skip_exit", "hooks", "memory",
             "think_max_tokens", "think_sampling", "extra_write_dirs", "read_outside",
             "review_on_stop", "ask_check", "baseline_diff", "todo_check", "todo_remind_every",
-            "reflect_on_fail", "reflect_max", "reflect_max_tokens", "host_gui", "hub_role", "env_block",
+            "reflect_on_fail", "reflect_max", "reflect_max_tokens", "host_gui", "hub_role", "env_block", "surface",
             "run_code_ask", "run_code_timeout", "code_python"}
 SECRET_KEYS = {"globs", "extra", "allow"}
 

@@ -30,7 +30,8 @@ MAX_DESC = 200
 MAX_LIST_CHARS = 4000
 MAX_FILE_BYTES = 200_000     # 본문·딸린 파일 하나의 크기 상한
 MAX_FILES_LISTED = 50
-KNOWN_KEYS = {"name", "description"}
+KNOWN_KEYS = {"name", "description", "tools", "surfaces"}
+SURFACES = ("talk", "code")   # 판 119: 자리(대화·코드). 앞머리 surfaces 가 없으면 양쪽
 
 DEFINITION = {"type": "function", "function": {
     "name": NAME,
@@ -56,6 +57,14 @@ class Skill:
     body: str
     ignored_keys: list[str] = field(default_factory=list)
     origin: str = "stewart"    # stewart | agents | claude
+    tools: list[str] = field(default_factory=list)      # 판 119: 불러오면 (칩으로 꺼져 있으면) 켤 도구 — 자리에 주어진 것만
+    surfaces: list[str] = field(default_factory=list)   # 판 119: talk·code(비면 양쪽)
+
+
+def _names(v) -> list[str]:
+    """앞머리 목록 값: "[a, b]" · "a, b" · "a b" → ["a", "b"]."""
+    import re
+    return [x for x in re.split(r"[\s,\[\]'\"]+", str(v or "")) if x]
 
 
 def parse(text: str) -> tuple[dict, str]:
@@ -91,7 +100,8 @@ def _read_skill(d: Path, scope: str, origin: str = "stewart") -> Skill | None:
     desc = " ".join(str(meta.get("description") or "").split())
     if not name or not desc:
         return None     # 설명이 없으면 고를 수 없다
-    return Skill(name, desc, d, scope, body, sorted(k for k in meta if k not in KNOWN_KEYS), origin)
+    return Skill(name, desc, d, scope, body, sorted(k for k in meta if k not in KNOWN_KEYS), origin,
+                 _names(meta.get("tools")), [x for x in _names(meta.get("surfaces")) if x in SURFACES])
 
 
 def project_dirs(workdir: Path) -> list[Path]:
@@ -108,8 +118,13 @@ def builtin_on(interactive: bool) -> bool:
     return v == "1" if v in ("0", "1") else interactive
 
 
-def discover(workdir: Path, fl=None, builtin: bool = False) -> list[Skill]:
-    """builtin=True 면 저장소 내장 스킬을 맨 앞(가장 약하게)에 — 사용자 폴더·프로젝트의 같은 이름이 이긴다."""
+def discover(workdir: Path, fl=None, builtin: bool = False, surface: str | None = None) -> list[Skill]:
+    """builtin=True 면 저장소 내장 스킬을 맨 앞(가장 약하게)에 — 사용자 폴더·프로젝트의 같은 이름이 이긴다.
+    surface(판 119): 주면 앞머리 surfaces 가 그 자리를 안 가진 스킬은 뺀다(surfaces 가 없으면 양쪽)."""
+    return [x for x in _discover(workdir, fl, builtin) if not surface or not x.surfaces or surface in x.surfaces]
+
+
+def _discover(workdir: Path, fl=None, builtin: bool = False) -> list[Skill]:
     from . import projcfg as PC
     found: dict[str, Skill] = {}
     roots = PC.roots("skills", Path(workdir), fl or PC.Flags())   # 호환 → 정본(뒤가 같은 이름을 덮는다)
@@ -161,6 +176,18 @@ def _attached(s: Skill) -> list[str]:
         if p.is_file() and p.name != "SKILL.md" and not p.is_symlink() and not fswalk.is_secret(p.name):
             out.append(p.relative_to(s.dir).as_posix())
     return out
+
+
+RISKY_TOOLS = frozenset({"run_shell", "write_file", "edit_file", "multi_edit", "notebook_edit"})
+
+
+def tools_on(env=None) -> bool:
+    """판 119: 스킬 앞머리 tools 로 칩 켜기. 실사용(chat·허브)만 — 평가 길(run)은 이 장치를 쓰지 않는다. STEWART_SKILL_TOOLS=0 이면 끔."""
+    return (os.environ if env is None else env).get("STEWART_SKILL_TOOLS", "1") != "0"
+
+
+def find(skills: list[Skill], name: str) -> Skill | None:
+    return next((x for x in skills if x.name == name), None)
 
 
 def load(skills: list[Skill], name: str, file: str | None = None, secret_globs=fswalk.SECRET_GLOBS,

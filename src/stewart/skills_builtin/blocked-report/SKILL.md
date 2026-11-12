@@ -1,6 +1,7 @@
 ---
 name: blocked-report
 description: 비밀번호·키체인·sudo·로그인처럼 사람만 풀 수 있는 데서 막혔거나, 바깥 도우미에게 물어야 할 때 쓴다. 사람 손 카드(명령만 복사)와 외부 질문 카드(통째 복사) 꼴.
+surfaces: [code]
 ---
 
 # 막힘 보고

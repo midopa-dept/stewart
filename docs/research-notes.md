@@ -52,7 +52,7 @@ stewart 의 몇몇 기능은 공개된 연구·글을 보고 설계했습니다.
 
 | 자료 | 핵심 생각 | stewart 의 자리 | 상태 |
 |---|---|---|---|
-| Anthropic, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 문서의 스킬(SKILL.md) 꼴 | 지시문에는 스킬의 이름과 설명만 싣고, 본문은 필요할 때 읽는다 | `load_skill`, 내장 스킬 17개(`src/stewart/skills_builtin/`). 사용자·프로젝트 스킬이 같은 이름이면 그쪽이 이깁니다 | 들어감 |
+| Anthropic, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 문서의 스킬(SKILL.md) 꼴 | 지시문에는 스킬의 이름과 설명만 싣고, 본문은 필요할 때 읽는다 | `load_skill`, 내장 스킬 18개(`src/stewart/skills_builtin/`). 사용자·프로젝트 스킬이 같은 이름이면 그쪽이 이깁니다 | 들어감 |
 | BM25 낱말 순위 | 색인 서버나 임베딩 없이 낱말로 찾는다 | `doc_search`: 작업 폴더의 문서·코드와 한 번 읽은 웹 글(`docsearch.py`) | 들어감 |
 | 임베딩 다시 순위 | 뜻으로 찾는다 | 없습니다 | 계획 |
 

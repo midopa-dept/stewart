@@ -308,7 +308,8 @@ class ChatSession:
         if not backend.vision:   # 이미지 보기는 이미지를 받는 백엔드에서만(실사용 기본 도구 목록은 그대로)
             defs = [d for d in defs if d["function"]["name"] != "view_image"]
         self.pfl = PC.flags(profile, interactive=True)   # 대화형: Claude Code 꼴 호환 기본 켬(사용자 전역 ~/.claude 는 기본 끔)
-        self.skills = SK.discover(profile.workdir, self.pfl, builtin=SK.builtin_on(True)) if (profile.skills is not False and profile.tools) else []   # 세션 시작 때 한 번
+        self.surface = str((profile.raw or {}).get("surface") or "code")   # 판 119: 자리(대화 talk·코드 code) — 스킬 색인을 가른다
+        self.skills = SK.discover(profile.workdir, self.pfl, builtin=SK.builtin_on(True), surface=self.surface) if (profile.skills is not False and profile.tools) else []   # 세션 시작 때 한 번
         # 프로젝트 구성: .stewart/commands·agents(호환 .claude/…), 세션 시작 때 한 번
         self.commands = PC.discover_commands(profile.workdir, self.pfl, set(COMMANDS))
         self.agents = PC.discover_agents(profile.workdir, self.pfl) if profile.tools else []
@@ -781,6 +782,8 @@ class ChatSession:
             self.rec.event("skill_load", step=step, name=args.get("name"), file=args.get("file"), ok=ok)
             if ok:
                 self.skills_loaded.append(str(args.get("name")) + (f":{args['file']}" if args.get("file") else ""))
+                if not args.get("file"):
+                    result += self._skill_tools(str(args.get("name") or ""))
             self.ui.dim(f"    {'✓' if ok else '✗'} {_one_line(result, 90)}")
             if not ok:
                 self.st["tool_errors"] += 1
@@ -1179,15 +1182,18 @@ class ChatSession:
                 except OSError:
                     pass
 
-    def set_tool(self, name: str, on: bool) -> bool:
-        """허브 켬·끔(판 99): toggle_tools 의 도구를 다음 걸음부터 모델에게 보이게·안 보이게."""
+    def set_tool(self, name: str, on: bool, by: str = "human") -> bool:
+        """허브 켬·끔(판 99): toggle_tools 의 도구를 다음 걸음부터 모델에게 보이게·안 보이게. by = human | skill:<이름>(판 119)."""
         if name not in getattr(self, "toggleable", []):
             return False
         (self.disabled_tools.discard if on else self.disabled_tools.add)(name)
+        if by == "human":   # 사람이 끈 도구는 스킬이 다시 켜지 않는다
+            self._human_off = getattr(self, "_human_off", set())
+            (self._human_off.discard if on else self._human_off.add)(name)
         self._toggle_note = f"[엔진] 사람이 도구 칩을 바꿨다: {name} {'켬' if on else '끔'}. 지금 꺼진 도구: {', '.join(sorted(self.disabled_tools)) or '없음'}."
         self.tool_defs = [d for d in self._all_defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_names = [d["function"]["name"] for d in self.tool_defs]
-        self.rec.event("tool_toggle", name=name, on=bool(on))
+        self.rec.event("tool_toggle", name=name, on=bool(on), **({"by": by} if by != "human" else {}))
         return True
 
     def label(self, turn: int, kind: str, by: str = "human", note: str = "") -> bool:
@@ -1788,6 +1794,41 @@ class ChatSession:
         f = FX.collect(getattr(self, "_last_reason", "진행 중"), getattr(self, "_turn_calls", []),
                        (self.cps.cur or {}).get("files", []), self.profile.workdir, getattr(self, "delegations", None))
         return FX.to_md(f).replace("# 실제로 한 일(엔진 기록)", f"# 차례 {self.st['turns']} 에 실제로 한 일(엔진 기록)", 1)
+
+    def _skill_tools(self, name: str) -> str:
+        """판 119: 불러온 스킬의 앞머리 tools — 이 자리에 주어졌는데 칩으로 꺼져 있으면 켠다(사람이 끈 것은 안 켬, 위험 도구는 묻기).
+        자리에 아예 없는 도구는 켜지 못한다(권한은 프로필이 정한다). 결과 끝에 붙일 글."""
+        sk = SK.find(self.skills, name)
+        if sk is None or not sk.tools or not SK.tools_on():
+            return ""
+        have = {d["function"]["name"] for d in self._all_defs}
+        on, kept, absent = [], [], []
+        for t in sk.tools:
+            if t not in have:
+                absent.append(t)
+            elif t in self.disabled_tools:
+                if t in getattr(self, "_human_off", set()):
+                    kept.append(t)
+                    continue
+                if t in SK.RISKY_TOOLS:
+                    q = getattr(self.ui, "question", None) or self.ui.ask
+                    try:
+                        ans = q(f"스킬 {name} 이(가) 도구 {t} 를 켜려 한다. 켤까요? (y/n)").strip().lower()
+                    except EOFError:
+                        ans = ""
+                    if ans not in ("y", "yes", "ㅇ", "네"):
+                        kept.append(t)
+                        continue
+                self.set_tool(t, True, by=f"skill:{name}")
+                on.append(t)
+        out = []
+        if on:
+            out.append(f"켠 도구: {', '.join(on)}")
+        if kept:
+            out.append(f"꺼진 채로 둔 도구(사람이 껐거나 승인하지 않음): {', '.join(kept)} — 필요하면 사람에게 켜 달라고 말한다")
+        if absent:
+            out.append(f"이 자리에 없는 도구: {', '.join(absent)} — 그 단계는 다른 길로 하거나 사람에게 말한다")
+        return ("\n\n[엔진] " + " · ".join(out)) if out else ""
 
     def pick_skill(self, name: str) -> str:
         """/skill 이름: 본문을 다음 사람 입력 앞에 붙인다. 화면에 낼 말을 돌려준다(없는 이름이면 ValueError)."""

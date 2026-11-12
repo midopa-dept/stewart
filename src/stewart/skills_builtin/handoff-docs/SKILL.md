@@ -1,6 +1,7 @@
 ---
 name: handoff-docs
 description: 일을 멈추거나 다른 사람·세션에 넘길 때, 또는 "인계 문서 써 줘"·"HANDOFF 갱신"이라고 할 때 쓴다. 다음 사람이 바로 이어 가게 상태·남은 일·함정을 적는다.
+surfaces: [code]
 ---
 
 # 인계 문서 쓰기

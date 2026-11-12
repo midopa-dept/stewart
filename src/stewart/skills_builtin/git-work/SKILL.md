@@ -1,6 +1,7 @@
 ---
 name: git-work
 description: 커밋·push·가지·되돌리기 같은 git 일을 하거나, git 인증·키체인에서 막혔을 때 쓴다. 안전하게 하는 차례와 사람 손 카드로 넘기는 법.
+surfaces: [code]
 ---
 
 # git 작업

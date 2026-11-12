@@ -1,6 +1,7 @@
 ---
 name: web-research
 description: 최신·요즘·현재의 판·가격·출시 같은 바깥 사실을 묻거나, 같은 오류가 되풀이되거나 처음 보는 라이브러리·오류 문구를 만났을 때 쓴다. 한두 번 검색하고 원문을 열어 확인해 출처를 단다(종합 조사는 deep-research).
+tools: [web_search, web_fetch]
 ---
 
 # 웹 조사

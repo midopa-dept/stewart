@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 class TBuiltin(unittest.TestCase):
     def test_set(self):
         names = sorted(p.name for p in SK.BUILTIN_DIR.iterdir() if p.is_dir())
-        self.assertEqual(names, ["blocked-report", "code-review", "deep-research", "documents", "error-diagnosis", "git-work",
+        self.assertEqual(names, ["blocked-report", "code-review", "deep-research", "documents", "error-diagnosis", "git-work", "hand-over-files",
                                  "handoff-docs", "memory-consolidate", "plan-checkpoints", "project-init", "run-and-check", "security-review", "simplify",
                                  "skill-creator", "stewart-config", "test-fix-loop", "web-research"])
         for n in names:
@@ -39,7 +39,7 @@ class TBuiltin(unittest.TestCase):
                 self.assertTrue(SK.builtin_on(True))
                 self.assertFalse(SK.builtin_on(False))                  # 평가 길(run)은 끔
                 got = {s.name: s for s in SK.discover(wd, builtin=True)}
-                self.assertEqual(len(got), 17)   # 판 88: memory-consolidate 더함
+                self.assertEqual(len(got), 18)   # 판 88: memory-consolidate, 판 119: hand-over-files 더함
                 self.assertEqual(got["git-work"].description, "내 git 방식")   # 사용자 것이 이김
                 self.assertEqual(got["code-review"].scope, "builtin")
                 self.assertNotIn("code-review", {s.name for s in SK.discover(wd, builtin=False)})

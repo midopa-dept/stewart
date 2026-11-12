@@ -1,6 +1,7 @@
 ---
 name: code-review
 description: 사람이 "리뷰해 줘"·"이 변경 괜찮아?"라고 하거나 큰 변경을 끝냈을 때 쓴다. 바뀐 코드에서 정확성 버그·빠진 경우·시험 빈칸을 찾아 근거와 함께 보고한다(보안은 security-review).
+surfaces: [code]
 ---
 
 # 코드 리뷰

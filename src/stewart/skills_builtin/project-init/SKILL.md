@@ -1,6 +1,7 @@
 ---
 name: project-init
 description: 새 저장소나 안내 파일이 없는 프로젝트에서 "init"·"프로젝트 안내 파일 만들어"라고 하면 쓴다. 저장소를 읽고 STEWART.md(또는 AGENTS.md) 초안을 만든다.
+surfaces: [code]
 ---
 
 # 프로젝트 안내 파일 만들기(init)

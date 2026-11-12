@@ -1,6 +1,7 @@
 ---
 name: error-diagnosis
 description: 명령·시험이 오류 메시지나 0 아닌 종료 코드를 냈는데 까닭이 분명하지 않을 때 쓴다. 짐작하지 않고 뜻부터 찾고, 가설마다 싼 확인으로 원인을 좁힌다.
+surfaces: [code]
 ---
 
 # 오류 진단
