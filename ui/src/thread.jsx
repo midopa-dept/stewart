@@ -9,6 +9,7 @@ import { hub, tick, clockSkew, busy, refresh, toast, cpost, chat, composerFill }
 import { narrow } from './mobile.js'
 import { IconUp, IconDown, IconChev, IconMore, IconUpS, IconDown2 } from './icons.jsx'
 import { place, PlaceName } from './places.jsx'
+import { lastShot } from './stepshot.js'
 
 // main_log 줄을 덩어리로: user · assistant · diff · steps(도구·안내 줄 묶음)
 const NEWCHAT_RX = /^\s*새 대화를 시작했다/   // 판 124 폰: 기록 경로가 든 긴 안내 대신 "새 대화" 구분선 한 줄
@@ -271,14 +272,18 @@ function StepsCard({ g, last }) {
   const show = open ? steps : steps.filter((x, i) => i >= steps.length - 3 || x.kind === 'reflect')   // 되짚기 줄은 접어도 보인다
   const hidden = steps.length - show.length
   if (!steps.length && !g.notes.length && !g.files) return null
-  if (steps.length && !open) return (   // 판 124: 테두리 없는 한 줄 — 누르면 펼침(폰·데스크톱)
+  const shot = lastShot(steps)
+  if (steps.length && !open) return (<>   {/* 판 124: 테두리 없는 한 줄 — 누르면 펼침(폰·데스크톱) */}
     <button class="w-full flex items-center gap-2 py-1.5 my-1 text-[14px] text-mute text-left min-h-[40px]" onClick={toggle}>
       {isLive ? <span class="spin" /> : fails ? <span class="text-bad text-[12px]">✕</span> : <span class="text-[12px]">✓</span>}
       <span class="truncate">{isLive && waiting() ? `승인을 기다리는 중 · ${waitSecs()}` :
         <>{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{isLive ? ' 중' : ''}</>}</span>
       <span class="w-4 h-4 flex-none"><IconChev /></span>
     </button>
-  )
+    {/* 판 124.3: 접혀도 도구가 본 마지막 그림(view_image 등)은 줄 아래에 바로 — 걸음이 이어지면 최신으로, 앞 그림은 펼치면 차례로 */}
+    {shot && <div class="tool-shot -mt-1 mb-2">
+      <StepImgs names={shot} /></div>}
+  </>)
   if (!steps.length) return (   // 도구 없이 안내 줄만: 카드 말고 흐린 글
     <div class="my-2 space-y-0.5">{g.notes.map(n => (
       <div key={n.ts + n.text} class={'text-[13px] whitespace-pre-wrap ' + (n.kind === 'warn' ? 'text-warn' : 'text-mute')}>{n.kind === 'warn' ? '⚠ ' : ''}{n.text}</div>
