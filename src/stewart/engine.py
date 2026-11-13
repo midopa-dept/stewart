@@ -128,6 +128,18 @@ def empty_length(resp: dict) -> bool:
     return ch.get("finish_reason") == "length" and not (m.get("content") or "").strip() and not m.get("tool_calls")
 
 
+EMPTY_NOTE = ("[엔진] 생각만 하고 본문도 도구 호출도 없이 멈췄다. 더 생각하지 말고 지금 아는 것으로 "
+              "바로 도구를 부르거나 최종 답을 써라.")
+
+
+def empty_stop(resp: dict) -> bool:
+    """상한 전에 끝났는데(finish_reason 이 length 가 아님) 본문·툴콜이 없다 — 생각만 내고 멈춤(판 130).
+    빈 글을 답으로 받으면 끝 이유는 completed 인데 답이 없다."""
+    ch = (resp.get("choices") or [{}])[0]
+    m = ch.get("message") or {}
+    return ch.get("finish_reason") != "length" and not (m.get("content") or "").strip() and not m.get("tool_calls")
+
+
 def _outside_check(bd, env, name: str, args: dict, parent: dict) -> tuple[str | None, str | None]:
     """(거부 사유 | None, 'write'|'read'|None). parent 에 ask_outside 가 있으면(chat 의 작업자) 사람에게 묻는다."""
     paths = [p for p in [bd.tool_write(name, args)] if p]
@@ -595,7 +607,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                        "last_role": messages[-1]["role"]}
         mode = None
         try:
-            overflow_done = length_done = False
+            overflow_done = length_done = empty_done = False
             extra: dict = {}
             est = think_tokens = None
             u0 = {}
@@ -628,8 +640,23 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     rec.md(f"> 문맥 넘침({e.status}) → 접고 같은 단계 다시: 메시지 {c['from']}~{c['to'] - 1} 중 {c['clipped']}개 줄임"
                            f"({c['chars_before']}자 → {c['chars_after']}자)\n")
                     continue
-                if length_done or not empty_length(resp):
+                if length_done or not (empty_length(resp) or empty_stop(resp)):
                     break
+                if empty_stop(resp):   # 판 130: 생각만 내고 본문·툴콜 없이 멈춤 — 빈 글을 답으로 받지 않고 생각 끄고 한 번 다시
+                    length_done = empty_done = True
+                    st["empty_stop_retries"] = st.get("empty_stop_retries", 0) + 1
+                    st["model_time_s"] += dt
+                    u0 = resp.get("usage") or {}
+                    st["completion_tokens"] += u0.get("completion_tokens") or 0
+                    st["prompt_tokens_total"] += u0.get("prompt_tokens") or 0
+                    m0 = ((resp.get("choices") or [{}])[0].get("message") or {})
+                    rec.event("empty_retry", step=step, elapsed_s=dt, usage=u0,
+                              finish_reason=(resp.get("choices") or [{}])[0].get("finish_reason"),
+                              reasoning_content=m0.get("reasoning_content") or m0.get("reasoning") or "")
+                    rec.md("> 생각만 하고 본문·도구 호출 없이 멈춤 → 생각 끔 + 알림으로 같은 단계 다시\n")
+                    messages.append({"role": "user", "content": EMPTY_NOTE})
+                    extra = {"thinking": False}
+                    continue
                 length_done = True   # 첫 응답은 기록만 하고 버린다(본문·툴콜 없음)
                 st["length_empty_retries"] = st.get("length_empty_retries", 0) + 1
                 st["model_time_s"] += dt
@@ -645,7 +672,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                 rec.md(f"> 생각만 하다 상한(max_tokens)에 닿아 빈 답 → 생각 끔 + 알림으로 같은 단계 다시\n")
                 messages.append({"role": "user", "content": LENGTH_NOTE})
                 extra = {"thinking": False}   # backend.chat 이 chat_template_kwargs.enable_thinking 만 바꿔 끼운다
-            if length_done:
+            if length_done and not empty_done:
                 comps.fire("length_retry", step, "length_empty", "retry", think_tokens=think_tokens,
                            completion_tokens=u0.get("completion_tokens"), recovered=not empty_length(resp))
         except BackendError as e:
@@ -976,6 +1003,10 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             # 생각 끔으로 다시 보냈는데도 빈 잘림 — 빈 글을 최종 답으로 받지 않는다
             stop_reason = "length_empty"
             srec["note"] = "생각 끔으로 다시 보냈어도 상한에 닿아 빈 답 → length_empty 로 끝"
+        elif empty_stop(resp):
+            # 판 130: 생각 끄고 다시 보냈어도 본문·툴콜이 비었다 — 빈 글을 최종 답으로 받지 않는다(completed 아님)
+            stop_reason = "empty_answer"
+            srec["note"] = "생각 끄고 다시 보냈어도 본문·도구 호출 없이 멈춤 → empty_answer 로 끝"
         else:
             # 최종 답
             messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
@@ -1078,7 +1109,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         rec.event("step", step=step, request=req_summary, new_messages=messages[n_before:], response=srec,
                   consecutive_errors=consecutive)
         rec.md_step(step, srec)
-        if stop_reason in ("completed", "asked", "length_empty"):
+        if stop_reason in ("completed", "asked", "length_empty", "empty_answer"):
             break
         trig = ("consecutive_errors" if consecutive >= profile.max_consecutive_errors
                 else "repeated_failure" if repeat_stop else None)
@@ -1198,6 +1229,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         **({"think": {**tks, "dropped_params": list(backend.dropped_params)}}
            if tks["max_tokens"] or tks["sampling"] or tks["ignored"] or tks.get("max_first") or tks.get("effort") else {}),
         **({"length_empty_retries": st["length_empty_retries"]} if st.get("length_empty_retries") else {}),
+        **({"empty_stop_retries": st["empty_stop_retries"]} if st.get("empty_stop_retries") else {}),
         **({"review": {**review, "steps_after": (st["steps"] - review["at_step"]) if review.get("ran") else None,
                        "files_changed_after": len(review_paths) if review.get("ran") else None}}
            if sc["review_on_stop"] else {}),

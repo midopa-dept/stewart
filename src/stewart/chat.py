@@ -32,7 +32,7 @@ from .backend import BackendError, chat, chat_stream, is_context_overflow, sync_
 from .compact import Compactor, est_tokens
 from .check import CheckContext, ToolCall, load_check
 from .config import Backend, Profile
-from .engine import LENGTH_NOTE, REPEAT_NUDGE, REPEAT_STOP, _git_rev, empty_length, memory_for, web_search_config
+from .engine import EMPTY_NOTE, LENGTH_NOTE, REPEAT_NUDGE, REPEAT_STOP, _git_rev, empty_length, empty_stop, memory_for, web_search_config
 from .record import Recorder
 from .resume import prepare, save_messages
 from . import bounds as BND, hooks as HK, memory as MEM, modes as M, think as TH
@@ -197,7 +197,7 @@ DUP_NOTE = "[엔진] 이 응답 안 앞 호출과 글자까지 같아 다시 돌
 
 LENGTH_STREAK_ENV = "STEWART_LENGTH_STREAK"
 FINAL_WHY = {"repeated_call": "같은 호출 되풀이로 멈추기 전에", "length_streak": "생각이 연달아 잘려 멈추기 전에",
-             "time_budget": "시간 예산에 닿아"}   # 마지막 답 줄의 까닭(판 128)
+             "time_budget": "시간 예산에 닿아", "empty_answer": "본문 없이 멈춰"}   # 마지막 답 줄의 까닭(판 128·130)
 
 
 def length_streak_at(env=None) -> int:
@@ -1178,7 +1178,7 @@ class ChatSession:
                 self.rec.event("compact", overflow_retry=True, **c)
                 self.ui.dim(f"  (문맥 넘침 → 오래된 도구 결과 {c['clipped']}개를 줄이고 다시 보낸다)")
                 continue
-            if length_done or not empty_length(resp):
+            if length_done or not (empty_length(resp) or empty_stop(resp)):
                 if not length_done:
                     self._len_streak = 0   # 다시 보내지 않고 받은 걸음 — 연속이 끊긴다
                 self._pmark = len(self.messages)
@@ -1189,6 +1189,18 @@ class ChatSession:
                 self.st["completion_tokens"] += u0.get("completion_tokens") or 0
                 self._pmark = len(self.messages)
                 return resp, dt, streamed
+            if empty_stop(resp):   # 판 130: 생각만 내고 본문·툴콜 없이 멈춤 — 빈 글을 답으로 받지 않고 생각 끄고 한 번 다시
+                length_done = True
+                self.st["empty_stop_retries"] = self.st.get("empty_stop_retries", 0) + 1
+                u0 = resp.get("usage") or {}
+                self.st["model_time_s"] += dt
+                self.st["completion_tokens"] += u0.get("completion_tokens") or 0
+                self.rec.event("empty_retry", step=step, elapsed_s=dt, usage=u0,
+                               finish_reason=(resp.get("choices") or [{}])[0].get("finish_reason"))
+                self.ui.dim("  (생각만 하고 본문·도구 호출 없이 멈췄다 → 생각 끄고 같은 단계 다시)")
+                self.messages.append({"role": "user", "content": EMPTY_NOTE})
+                mt["thinking"] = False
+                continue
             self._len_streak += 1
             if self.len_streak_at and self._len_streak >= self.len_streak_at:   # 연속 잘림 끊기(손잡이): 다시 보내지 않고 올린다
                 u0 = resp.get("usage") or {}
@@ -1671,6 +1683,22 @@ class ChatSession:
                     else:
                         self.ui.warn("  생각 끄고 다시 보냈어도 생성 상한에 닿아 답이 비었다. 다시 묻거나 /think off 로 바꿔 본다.")
                     reason = "length_empty"
+                    break
+                if not content.strip():   # 판 130: 생각 끄고 다시 보냈어도 본문·툴콜이 비었다 — 빈 답으로 끝내지 않는다(completed 아님)
+                    self.st["empty_answers"] = self.st.get("empty_answers", 0) + 1
+                    srec["note"] = "다시 보냈어도 본문·도구 호출 없이 멈춤 → 빈 답으로 받지 않음"
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    self.rec.event("empty_answer", step=step, finish_reason=choice.get("finish_reason"))
+                    if self._tb_over():   # 시간 예산을 넘긴 뒤라면 그 길(끝 이유 time_budget)
+                        self._tb_final(step)
+                        reason = "time_budget"
+                        break
+                    if self.mode == "auto":   # 물을 사람이 없다: 도구 없이 마지막 답 한 차례
+                        self._final_answer("empty_answer", step, G.CHAT_FINAL_PROMPT.format(why="본문 없이 멈춰"))
+                    else:
+                        self.ui.warn("  모델이 본문도 도구 호출도 없이 멈췄다(생각 끄고 다시 보냈어도). 다시 묻거나 '계속' 이라고 친다.")
+                    reason = "empty_answer"
                     break
                 self.messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
                                       **({"reasoning_content": think} if TR_keep(self.passback, think, False) else {})})
@@ -2257,6 +2285,7 @@ class ChatSession:
             "prompt_tok_per_s": (st["prompt_n"] / (st["prompt_ms"] / 1000)) if st["prompt_ms"] else None,
             "e2e_tok_per_s": (st["completion_tokens"] / st["model_time_s"]) if st["model_time_s"] else None,
             "tool_error_kinds": dict(st.get("tool_error_kinds") or {}), "features": self.meta.get("features"),
+            **{k: st[k] for k in ("length_empty_retries", "empty_stop_retries", "empty_answers") if st.get(k)},   # 판 130: 빈 걸음 셈
             **self._outcome(),
             "run_dir": str(self.rec.dir),
         }
