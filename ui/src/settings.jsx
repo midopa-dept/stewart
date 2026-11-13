@@ -6,6 +6,7 @@ import { get, post } from './lib.js'
 import { toast } from './state.js'
 import { narrow } from './mobile.js'
 import { tiersSig } from './newchat.jsx'
+import { detail, setDetail } from './detail.js'
 
 export const settingsOpen = signal(false)
 const ST = { ok: '준비됨', down: '닿지 않음', auth: '인증 거부', nokey: '키 없음', none: '연결 없음', unset: '설정 없음', unchecked: '' }
@@ -116,7 +117,10 @@ export function SettingsSheet() {
       {!v ? <div class="text-mute py-6 text-center">읽는 중…</div> : r ? <Edit v={v} r={r} back={() => setSel(null)} reload={reload} /> : <>
         <div class="flex items-baseline gap-2"><span class="text-[13px] text-mute">설정</span>
           <span class="text-[12.5px] text-mute ml-auto">{v.instance ? '이 허브는 rubato 만 연결된 stewart' : ''}</span></div>
-        <div class="text-[17px] font-semibold mt-1 mb-1">모델 등급</div>
+        <label class="row-btn cursor-pointer"><span>자세히 보기</span><span class="sub flex items-center gap-2">{detail.value ? '켬' : '끔'}
+          <input type="checkbox" checked={detail.value} onChange={e => setDetail(e.currentTarget.checked)} /></span></label>
+        <div class="text-[12.5px] text-mute pb-2 border-b border-line">켜면 생각·작업 걸음·도구 원문·차례 숫자·토큰 줄·스킬 줄이 대화 흐름 속에 다 펼쳐진다(이 브라우저에 기억)</div>
+        <div class="text-[17px] font-semibold mt-3 mb-1">모델 등급</div>
         {v.rows.map(x => <button key={x.tier} class="row-btn w-full" onClick={() => setSel(x.tier)}>
           <span>{x.tier}</span><span class={'sub truncate max-w-[70%] ' + (x.external && x.connected ? 'text-warn' : !x.connected || x.key === '없음' ? 'opacity-60' : '')}>{rowSub(x)}</span></button>)}
         <div class="text-[12.5px] text-mute pt-3 leading-relaxed">

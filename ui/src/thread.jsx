@@ -11,10 +11,11 @@ import { IconUp, IconDown, IconChev, IconMore, IconUpS, IconDown2 } from './icon
 import { place, PlaceName } from './places.jsx'
 import { DraftPick } from './newchat.jsx'
 import { lastShot } from './stepshot.js'
+import { detail, openTurns, toggleTurn, shown as turnShown } from './detail.js'
 
 // main_log 줄을 덩어리로: user · assistant · diff · steps(도구·안내 줄 묶음)
 const NEWCHAT_RX = /^\s*새 대화를 시작했다/   // 판 124 폰: 기록 경로가 든 긴 안내 대신 "새 대화" 구분선 한 줄
-const SKILLS_RX = /^\s*스킬 \d+개:/   // 세션 시작 안내의 스킬 목록 줄(판 124 폰에서는 숨긴다 — "/" 나 "+" 에서)
+export const SKILLS_RX = /^\s*스킬 \d+개:/   // 세션 시작 안내의 스킬 목록 줄 — 대화에서는 접고 "이 대화" 판의 스킬 줄·자세히 보기·단계 탭에서 본다(판 126)
 export function groupLog(log) {
   const out = []
   let g = null
@@ -41,8 +42,11 @@ export function groupLog(log) {
     }
     if (think) { out.push({ type: 'think', key: 'th' + think.ts + (think.chars || 0), m: think }); think = null }
     if (m.kind === 'meta') {                         // 차례 요약 줄: 대화에선 숨기고, 그 차례의 마지막 답에 붙여 "⋯"로 본다(판 124)
-      const last = [...out].reverse().find(x => x.type === 'assistant')
-      if (last) last.meta = m.text
+      flush()
+      let last = null                                // 판 126: 지난 사람 말 뒤의 답에만(답 없이 끝난 차례가 앞 차례 것을 덮어쓰지 않게)
+      for (let j = out.length - 1; j >= 0; j--) { if (out[j].type === 'user') break; if (out[j].type === 'assistant') { last = out[j]; break } }
+      if (last) last.meta = last.meta ? last.meta + '\n' + m.text : m.text
+      else out.push({ type: 'meta', key: 'mt' + m.ts + m.text.slice(0, 20), m })
       continue
     }
     flush()
@@ -56,6 +60,8 @@ export function groupLog(log) {
     else out.push({ type: m.kind === 'user' ? 'user' : m.kind === 'assistant' ? 'assistant' : 'note', key: m.kind + m.ts + m.text.slice(0, 20), m })
   }
   flush()
+  let tix = 0                                        // 판 126: 덩어리마다 몇째 차례인가(사람 말로 센다) — ⋯ 로 그 차례를 펼친다
+  for (const g of out) { if (g.type === 'user') tix++; g.tix = tix }
   return out
 }
 
@@ -96,7 +102,7 @@ function ReflectStep({ s }) {
   )
 }
 
-function Step({ s, running }) {
+function Step({ s, running, force }) {
   if (s.kind === 'reflect') return <ReflectStep s={s} />
   const [open, toggle] = useOpen('o' + s.ts + s.text, s.ok === false)
   const name = s.text.split(' ')[0], rest = s.text.slice(name.length + 1)
@@ -119,7 +125,7 @@ function Step({ s, running }) {
           {(full || s.out).length > 0 && <button class="hover:underline" title="결과 전문 복사(잘리지 않은 것)" onClick={e => { const b = e.currentTarget; copyText(s.result || s.out.join('\n')).then(ok => flash(b, ok)) }}>결과 복사</button>}
           {running && <span>도는 중</span>}
         </div>
-        {s.think && <ThinkBlock text={s.think.text} secs={s.think.secs} chars={s.think.chars} cut={s.think.cut} />}
+        {s.think && <ThinkBlock text={s.think.text} secs={s.think.secs} chars={s.think.chars} cut={s.think.cut} force={force} />}
         {s.imgs?.length > 0 && <StepImgs names={s.imgs} />}
         {shown.length > 0 && <pre class="mt-1 bg-code rounded-lg px-2.5 py-1.5 font-mono text-xs text-mute whitespace-pre-wrap break-all max-h-60 overflow-auto"
           onClick={s.ok !== false ? toggle : undefined}>{shown.map(l => l.replace(/^ {4}/, '')).join('\n')}</pre>}
@@ -264,12 +270,13 @@ function waitSecs() {
   return secs < 60 ? Math.max(1, Math.round(secs)) + '초' : Math.floor(secs / 60) + '분'
 }
 
-function StepsCard({ g, last }) {
+function StepsCard({ g, last, force }) {
   const steps = g.steps
   const fails = steps.filter(s => s.ok === false).length
   const reflects = steps.filter(s => s.kind === 'reflect').length
   const isLive = last && busy.value
-  const [open, toggle] = useOpen('g' + g.key, false)
+  const [open0, toggle] = useOpen('g' + g.key, false)
+  const open = open0 || !!force   // 판 126: 자세히 보기·⋯ 로 그 차례를 펼쳤으면 펼친 꼴(판 122 처럼 걸음·생각·출력이 흐름 속에)
   const show = open ? steps : steps.filter((x, i) => i >= steps.length - 3 || x.kind === 'reflect')   // 되짚기 줄은 접어도 보인다
   const hidden = steps.length - show.length
   if (!steps.length && !g.notes.length && !g.files) return null
@@ -297,7 +304,7 @@ function StepsCard({ g, last }) {
         <span class="truncate">{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{g.files ? ' · ' + g.files.replace(/^이번 차례에 바뀐 /, '바꾼 ').split(':')[0] : ''}</span>
         <span class="ml-auto w-4 h-4 flex-none" aria-label={open ? '접기' : '펼치기'}>{open ? <IconUpS /> : <IconDown2 />}</span>
       </button>
-      {show.map((s, i) => <Step key={s.ts + s.text} s={s} running={isLive && i === show.length - 1 && s.ok == null} />)}
+      {show.map((s, i) => <Step key={s.ts + s.text} s={s} force={force} running={isLive && i === show.length - 1 && s.ok == null} />)}
       {(open || !steps.length) && g.notes.map(n => (
         <div key={n.ts + n.text} class={'px-3 py-1.5 text-[13px] border-t border-soft whitespace-pre-wrap ' + (n.kind === 'warn' ? 'text-warn' : 'text-mute')}>{n.text}</div>
       ))}
@@ -360,7 +367,7 @@ function Live() {
     <div>
       {lv.think_text && !lv.text ? <ThinkBlock streaming text={lv.think_text} chars={lv.think} since={lv.think_since ? lv.think_since + clockSkew.value : null} /> : null}
       {lv.text ? <div class="my-4"><Md text={lv.text + ' ▍'} /></div> : null}
-      {true ? (   // 판 124: 사람 말로 짧게 — "승인을 기다리는 중 · 8분"(숫자는 "이 대화"에)
+      {!detail.value ? (   // 판 124: 사람 말로 짧게 — "승인을 기다리는 중 · 8분"(숫자는 "이 대화"에). 판 126: 자세히 보기면 원문·받은 토큰·tok/s
         <div class="flex items-center gap-2.5 text-[14px] text-mute my-3.5">
           <span class="spin" />
           <span>{st.stopping ? '멈추는 중…' : plainWhat(now?.what)}{now ? ` · ${secs < 60 ? Math.max(1, Math.round(secs)) + '초' : Math.floor(secs / 60) + '분'}` : ''}</span>
@@ -513,27 +520,42 @@ function TodoCard({ todos, latest, ts }) {
 // 학습 표시(판 89): 차례의 마지막 답 줄 아래 👍👎 — 터치 기기는 늘 보이고 마우스는 줄 위에 올릴 때(app.css .tbar).
 // "교정됨"은 사람이 다음 말로 고쳤을 때 엔진이 붙인 꼬리표 — 누르면 뗀다. 표시는 기록에만 남고 대화·모델 문맥은 그대로다.
 // 차례 요약 줄 "[answered · 단계 5 · 프롬프트 1200/32768 tok · 생성 합 400 tok · 모델 1초]" → 사람 말 한 줄
-function metaLine(t) {
-  const g = re => (re.exec(t || '') || [])[1]
-  const steps = g(/단계 (\d+)/), pr = g(/프롬프트 (\d+)/), gen = g(/생성 합 (\d+)/), sec = g(/모델 (\d+)초/)
-  return [steps && `단계 ${steps}`, pr && `입력 ${fmtK(+pr)}`, gen && `생성 누계 ${fmtK(+gen)}`, sec && `모델 ${sec}초`].filter(Boolean).join(' · ')
+const REASON = { answered: '답으로 끝', max_steps: '걸음 상한', stopped: '멈춤', asked: '되물음', backend_error: '모델 오류', repeated_call: '같은 호출 되풀이로 멈춤',
+  consecutive_errors: '연속 오류로 멈춤', repeated_failure: '같은 실패 되풀이로 멈춤', context_overflow: '문맥 넘침' }
+function metaLine(t) {   // 판 126: 끝 이유·창 크기도(판 124 에서 버리던 것)
+  const last = String(t || '').trim().split('\n').slice(-1)[0]
+  const g = re => (re.exec(last) || [])[1]
+  const why = g(/^\s*\[([\w-]+) · /), steps = g(/단계 (\d+)/), pr = g(/프롬프트 (\d+)/), win = g(/프롬프트 \d+\/(\d+)/), gen = g(/생성 합 (\d+)/), sec = g(/모델 (\d+)초/)
+  return [why && (REASON[why] || why), steps && `단계 ${steps}`, pr && `입력 ${fmtK(+pr)}${win ? ' / 창 ' + fmtK(+win) : ''}`, gen && `생성 누계 ${fmtK(+gen)}`, sec && `모델 ${sec}초`].filter(Boolean).join(' · ')
 }
-function TrainBar({ m, meta }) {
+// 판 126: 차례 숫자 + 그 차례 과정 펼치기 — 답 아래(⋯) 와 답 없이 끝난 차례(요약만 있는 줄)가 같이 쓴다
+function MetaMore({ meta, tix, children }) {
+  const on = turnShown(tix)
+  return <>
+    <div class="flex gap-1.5 items-center mt-1 text-[13px]">{children}
+      <button class={'tb tb-keep' + (on ? ' tb-sel' : '')} aria-expanded={on} title="이 차례의 과정(생각·걸음·도구 원문)과 숫자"
+        onClick={e => { e.stopPropagation(); toggleTurn(tix) }}><span class="block w-[18px] h-[18px] text-mute"><IconMore /></span></button></div>
+    {on && meta && <div class="text-[12.5px] text-mute mt-0.5">{metaLine(meta)}
+      <div class="font-mono text-[11.5px] opacity-80 whitespace-pre-wrap break-all mt-0.5">{String(meta).trim()}</div></div>}
+  </>
+}
+function TrainBar({ m, meta, tix }) {
   const send = label => cpost('/api/train/label', { turn: m.turn, label }).then(refresh, e => toast('표시하지 못했다: ' + e.message))
   const lb = m.label
-  const [open, setOpen] = useState(false)
+  const open = turnShown(tix)   // 판 126: ⋯ = 이 차례의 숫자 + 과정(작업 카드·생각) 펼치기, 자세히 보기면 늘
   return (
     <>
-    <div class={'tbar flex gap-1.5 items-center mt-1 text-[13px]' + (lb || m.corrected || open ? ' tbar-on' : '')}>
+    <div class={'tbar flex gap-1.5 items-center mt-1 text-[13px]' + (lb || m.corrected || open || detail.value ? ' tbar-on' : '')}>
+      <button class={'tb tb-keep' + (open ? ' tb-sel' : '')} aria-expanded={open} title="이 차례의 과정(생각·걸음·도구 원문)과 숫자" onClick={() => toggleTurn(tix)}><span class="block w-[18px] h-[18px] text-mute"><IconMore /></span></button>
       <button class={'tb' + (lb === 'good' ? ' tb-sel' : '')} title={lb === 'good' ? '좋음 표시 떼기' : '좋은 예로 표시(학습 자료 고르기)'}
         aria-pressed={lb === 'good'} onClick={() => send(lb === 'good' ? 'clear' : 'good')}><span class="block w-[18px] h-[18px] text-mute"><IconUp /></span></button>
       <button class={'tb' + (lb === 'bad' ? ' tb-sel' : '')} title={lb === 'bad' ? '나쁨 표시 떼기' : '나쁜 예로 표시'}
         aria-pressed={lb === 'bad'} onClick={() => send(lb === 'bad' ? 'clear' : 'bad')}><span class="block w-[18px] h-[18px] text-mute"><IconDown /></span></button>
       {m.corrected && <button class="text-[11px] px-2 py-px rounded-full font-semibold whitespace-nowrap text-warn bg-warn/15"
         title="다음 말이 고치는 꼴이라 붙은 꼬리표 — 누르면 뗀다" onClick={() => send('uncorrect')}>교정됨 ✕</button>}
-      {meta && <button class={'tb' + (open ? ' tb-sel' : '')} aria-expanded={open} title="이 차례의 숫자" onClick={() => setOpen(!open)}><span class="block w-[18px] h-[18px] text-mute"><IconMore /></span></button>}
     </div>
-    {open && meta && <div class="text-[12.5px] text-mute mt-0.5">{metaLine(meta)}</div>}
+    {open && meta && <div class="text-[12.5px] text-mute mt-0.5">{metaLine(meta)}
+      <div class="font-mono text-[11.5px] opacity-80 whitespace-pre-wrap break-all mt-0.5">{String(meta).trim()}</div></div>}
     </>
   )
 }
@@ -573,8 +595,9 @@ function emptySub() {   // 첫 화면 보조 글: 자리에 맞는 한 줄(READM
 
 export function Thread({ log, prior }) {
   const nar = true   // 판 124: 스킬 목록 줄 숨김·새 대화 구분선은 폰·데스크톱 같게
-  const groups = useMemo(() => groupLog(nar ? log.filter(m => m.kind === 'user' || m.kind === 'assistant' || !SKILLS_RX.test(m.text || ''))
-    .map(m => m.kind !== 'user' && m.kind !== 'assistant' && NEWCHAT_RX.test(m.text || '') ? { ...m, kind: 'divider', text: '새 대화' } : m) : log), [log, nar])
+  const det = detail.value   // 판 126: 자세히 보기면 스킬 줄·새 대화 안내 원문도 흐름에
+  const groups = useMemo(() => groupLog(nar && !det ? log.filter(m => m.kind === 'user' || m.kind === 'assistant' || !SKILLS_RX.test(m.text || ''))
+    .map(m => m.kind !== 'user' && m.kind !== 'assistant' && NEWCHAT_RX.test(m.text || '') ? { ...m, kind: 'divider', text: '새 대화' } : m) : log), [log, nar, det])
   let lastSteps = -1, lastTodo = -1
   groups.forEach((g, i) => { if (g.type === 'steps') lastSteps = i; if (g.type === 'todo') lastTodo = i })
   const lastOfTurn = new Set()   // 차례마다 마지막 답 줄(그 아래에만 👍👎)
@@ -615,10 +638,12 @@ export function Thread({ log, prior }) {
           {g.m.imgs?.length > 0 && <UserImgs names={g.m.imgs} />}</div>
         if (g.type === 'assistant') return <div key={g.key} class="my-4 tline" onClick={onAnswerClick}><Md text={g.m.text} />
           {g.m.options?.length > 0 && i === tail && !busy.value && <AskOptions opts={g.m.options} />}
-          {lastOfTurn.has(i) && g.m.turn !== curTurn && <TrainBar m={g.m} meta={g.meta} />}</div>
+          {lastOfTurn.has(i) && g.m.turn !== curTurn ? <TrainBar m={g.m} meta={g.meta} tix={g.tix} />
+            : g.meta && !busy.value ? <MetaMore meta={g.meta} tix={g.tix} /> : null}</div>
         if (g.type === 'diff') return <DiffCard key={g.key} text={g.m.text} stat={g.m.stat} />
-        if (g.type === 'think') return <ThinkBlock key={g.key} text={g.m.text} secs={g.m.secs} chars={g.m.chars} cut={g.m.cut} />
-        if (g.type === 'steps') return <div key={g.key}><StepsCard g={g} last={i === lastSteps && i >= tail - 1} />
+        if (g.type === 'think') return <ThinkBlock key={g.key} text={g.m.text} secs={g.m.secs} chars={g.m.chars} cut={g.m.cut} force={turnShown(g.tix)} />
+        if (g.type === 'meta') return det || i < tail || !busy.value ? <div key={g.key} class="text-[12.5px] text-mute">{det ? <span class="font-mono text-[11.5px] whitespace-pre-wrap break-all">{g.m.text.trim()}</span> : <MetaMore meta={g.m.text} tix={g.tix} />}</div> : null
+        if (g.type === 'steps') return <div key={g.key}><StepsCard g={g} force={turnShown(g.tix)} last={i === lastSteps && i >= tail - 1} />
           {g.paths?.length > 0 && <FilesCard paths={g.paths} turn={g.turn} />}</div>
         if (g.type === 'todo') return <TodoCard key={g.key} ts={g.m.ts + g.m.text.length} latest={i === lastTodo}
           todos={i === lastTodo ? liveTodos : (g.m.todos || [])} />   // 가장 최근 카드는 지금 목록으로 그 자리에서 고쳐진다
@@ -632,7 +657,7 @@ export function Thread({ log, prior }) {
         return <div key={g.key} class="text-[13px] text-mute my-2 whitespace-pre-wrap">{g.m.text}</div>
       })}
       <Live />
-
+      {det && <TokenLine />}
     </>
   )
 }

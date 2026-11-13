@@ -122,6 +122,7 @@ button:disabled { cursor: default; opacity: .55; }
 @media (hover: hover) and (pointer: fine) {
   .tbar:not(.tbar-on) { visibility: hidden; }
   .tline:hover .tbar, .tbar:focus-within { visibility: visible; }
+  .tbar .tb-keep { visibility: visible; }   /* 판 126: 차례 과정 ⋯ 은 마우스를 올리지 않아도 */
 }
 
 /* ── 판 124: "조용한 종이" — 글 위계·코드·표(폰·데스크톱 같게) ── */

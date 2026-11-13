@@ -357,6 +357,8 @@ export function Composer({ target }) {
           ))}</div>}
           <div class="flex items-end gap-1">
             {isMain && <button class="ibtn !w-10 !h-10 text-mute" onClick={() => { plusSheet.value = true }} aria-label="붙이기·방식"><IconPlus /></button>}
+            {!isMain && <label class="ibtn !w-10 !h-10 text-mute cursor-pointer" aria-label="그림 붙이기" title="그림 붙이기(작업자에게)"><IconImage />
+              <input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; addFiles(fs) }} /></label>}
             <span class="relative flex-1 min-w-0 flex">
             {!text && <span class="absolute left-1.5 top-[9px] pointer-events-none text-[16px] leading-[1.45] text-mute whitespace-nowrap overflow-hidden" aria-hidden="true">
               {isMain ? '메시지' : `${target} 에게`}{isMain && !narrow.value && !touch && <span class="opacity-55"> &nbsp;/ 명령{talkHere() ? '' : ' · @ 파일'}</span>}</span>}

@@ -5,14 +5,14 @@ import { get, post, fmtK, fmtSecs } from './lib.js'
 import { hub, panel, setPanel, sessions, toast, refresh, busy, cpost, chat } from './state.js'
 import { STATUS } from './side.jsx'
 
-const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰'], ['status', '상태']]
+export const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰'], ['status', '상태']]
 
 // 판 124: 본문 글 규칙 — 시각은 보조 글, 빈 줄·"-----" 줄은 접고, 한 명령의 출력(뒤따르는 info 줄)은 옅은 바탕 코드 덩어리 하나로
 const NOISE = t => !String(t || '').trim() || /^[-=\s]{6,}$/.test(t)
 function stepItems(log) {
   const out = []
   for (const m of log) {
-    if (m.kind === 'meta' || m.kind === 'turn_end') continue
+    if (m.kind === 'turn_end') { out.push({ ...m, kind: 'meta', text: m.text || `[차례 끝: ${m.reason}]`, out: [] }); continue }   // 판 126: 걸러 버리지 않고 흐린 줄로
     if (m.kind === 'info' && out.length && out[out.length - 1].kind === 'tool') { if (!NOISE(m.text)) out[out.length - 1].out.push(m.text); continue }
     if (m.kind === 'info' && NOISE(m.text)) continue
     out.push({ ...m, out: [] })
@@ -30,8 +30,8 @@ function Steps() {
           <div class="text-[12px] text-mute mb-0.5">{m.ts}{m.kind === 'user' ? ' · 사람' : m.kind === 'assistant' ? ' · 모델' : m.kind === 'tool' ? ' · 도구' : ''}
             {m.kind === 'tool' && m.ok != null && <span class={m.ok ? 'text-ok' : 'text-bad'}> {m.ok ? '✓' : '✕'}</span>}
             {m.rep > 1 && <span class="text-bad"> · 같은 오류 {m.rep}번째</span>}</div>
-          <div class={'min-w-0 break-words ' + (m.kind === 'tool' ? 'font-mono text-[13px]' : m.kind === 'warn' ? 'text-warn' : m.kind === 'info' ? 'text-mute text-[13px]' : '')}>
-            {m.kind === 'diff' ? `± ${m.stat?.path || ''} +${m.stat?.plus ?? ''} −${m.stat?.minus ?? ''}` : m.text.slice(0, 300)}
+          <div class={'min-w-0 break-words ' + (m.kind === 'tool' ? 'font-mono text-[13px]' : m.kind === 'warn' ? 'text-warn' : m.kind === 'info' ? 'text-mute text-[13px]' : m.kind === 'meta' ? 'text-mute font-mono text-[12px] whitespace-pre-wrap' : '')}>
+            {m.kind === 'diff' ? `± ${m.stat?.path || ''} +${m.stat?.plus ?? ''} −${m.stat?.minus ?? ''}` : m.kind === 'meta' ? m.text : m.text.slice(0, 300)}
           </div>
           {m.out.length > 0 && <pre class="mt-1 bg-code rounded-lg px-2.5 py-1.5 font-mono text-[12px] text-mute whitespace-pre-wrap break-all max-h-40 overflow-auto">{m.out.join('\n').slice(0, 2000)}</pre>}
         </div>
@@ -263,6 +263,11 @@ function StatusTab() {
     {row('고정 앞부분', `${(d.prefix_tokens || 0).toLocaleString()} 토큰(지시문 + 도구 정의 어림) · ${d.prefix_sha}`)}
     {row('도구', `${d.tools.length}개: ${d.tools.join(', ')}`)}
     {d.toggled_off?.length > 0 && row('꺼 둔 도구', d.toggled_off.join(', '))}
+    {row('지금 문맥', `메시지 ${d.messages ?? '?'}개`)}
+    <details class="mt-2"><summary class="cursor-pointer text-mute">지시문 본문 — 이 대화에서 모델로 실제 가는 것({(d.system || '').length.toLocaleString()}자)</summary>
+      <pre class="mt-1 text-[12px] bg-soft rounded-lg px-3 py-2 whitespace-pre-wrap break-words max-h-[50vh] overflow-auto">{d.system || '(없음)'}</pre></details>
+    <details class="mt-1"><summary class="cursor-pointer text-mute">도구 정의 {d.tool_defs?.length || 0}개 — 이름·설명 첫 줄</summary>
+      <div class="mt-1">{(d.tool_defs || []).map(t => <div key={t.name} class="py-0.5"><span class="font-mono">{t.name}</span> <span class="text-mute">— {t.desc}</span></div>)}</div></details>
     <div class="font-semibold mt-3 mb-1">켜고 끈 손잡이(환경 변수로 값을 준 것)</div>
     {on.length ? on.map(([k, v]) => row(k, v)) : <div class="text-mute">없음 — 모두 기본값</div>}
     <div class="text-xs text-mute mt-3">살펴볼 수 있는 손잡이: {d.all_knobs.join(' · ')}. 바꾸려면 허브를 켜는 줄 앞에 붙인다.</div>

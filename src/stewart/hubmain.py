@@ -1186,7 +1186,11 @@ class HubMain:
         return {"knobs": f["knobs"], "tools": f["tools"], "prefix_tokens": f["prefix_tokens"], "prefix_sha": f["prefix_sha"],
                 "mode": sess.mode, "think": sess.think, "budget": sess.backend.budget(), "window": sess.backend.max_context,
                 "backend": sess.backend.name, "model": sess.backend.model, "toggled_off": sorted(getattr(sess, "disabled_tools", ())),
-                "all_knobs": list(FT.KNOBS)}
+                "all_knobs": list(FT.KNOBS),
+                # 판 126: 이 대화에서 모델로 실제 가는 것 — 지시문 본문·도구 정의(이름·설명 첫 줄)·지금 문맥의 메시지 수(과정은 다 닿게)
+                "system": str(sysm or ""), "messages": len(sess.messages),
+                "tool_defs": [{"name": (d.get("function") or {}).get("name", ""),
+                               "desc": str((d.get("function") or {}).get("description") or "").split("\n")[0][:200]} for d in (sess.tool_defs or [])]}
 
     def workers_view(self) -> list[dict]:
         pool = getattr(self.sess, "pool", None)

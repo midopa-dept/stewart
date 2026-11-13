@@ -306,7 +306,7 @@ export function Sidebar() {
       </div>
       <div class="px-4 py-3 border-t border-line text-[12.5px] text-mute space-y-1">
         {/* 판 124: 상태 알약 대신 보조 글 한 줄 — 정상인 연결·모델 상태는 적지 않는다 */}
-        <div class="truncate" title="서버가 실제로 올린 모델">모델 {modelName(st?.model) || st?.backend?.model}
+        <div class="truncate" title={'서버가 실제로 올린 모델' + (st?.web?.why ? '\n웹: ' + st.web.why : '')}>모델 {modelName(st?.model) || st?.backend?.model}
           {st?.model && !['ok', 'unknown'].includes(st.model.state) ? <span class="text-warn"> · {st.model.label}</span> : null}
           {st?.web ? ' · ' + (st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐') : ''}</div>
         {conn.value.state !== 'ok' && <div class="text-warn"><ConnDot /></div>}

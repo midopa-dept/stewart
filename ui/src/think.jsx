@@ -21,8 +21,10 @@ export function reasoningHeading(text) {
   return cands.reduce((a, b) => (b.index >= a.index ? b : a)).value.slice(0, 80)
 }
 
-export function ThinkBlock({ text, streaming, secs, chars, cut, since }) {
-  const [open, setOpen] = useState(false)
+export function ThinkBlock({ text, streaming, secs, chars, cut, since, force }) {
+  const [open0, setOpen0] = useState(null)   // 판 126: force(자세히 보기·⋯ 로 그 차례 펼침)면 펼친 채로, 사람이 누르면 그 뜻을 따른다
+  const open = open0 == null ? !!force : open0
+  const setOpen = setOpen0
   const el = useRef(null), up = useRef(false)
   useEffect(() => {   // 받는 동안 따라가기
     const s = el.current

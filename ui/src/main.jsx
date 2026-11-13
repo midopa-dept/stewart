@@ -4,7 +4,7 @@ import './copy.js'
 import { render, Component } from 'preact'
 import { useEffect, useRef, useState, useLayoutEffect } from 'preact/hooks'
 import './app.css'
-import { get, post, fmtK, estTokens } from './lib.js'
+import { get, post, fmtK, fmtSecs, estTokens } from './lib.js'
 import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
 import { Thread, Md, TodoItems, UserImgs } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
@@ -12,8 +12,10 @@ import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips, kindTag
 import { Panel } from './panel.jsx'
 import { useWorker, WorkerThread, WorkerControls, WorkerInfo } from './worker.jsx'
 import { narrow, convSheet } from './mobile.js'
-import { IconMenu, IconNew, IconChev, IconPanel } from './icons.jsx'
-import { TokenLine } from './thread.jsx'
+import { IconMenu, IconNew, IconChev, IconPanel, IconUpS, IconDown2 } from './icons.jsx'
+import { TokenLine, SKILLS_RX } from './thread.jsx'
+import { detail, setDetail } from './detail.js'
+import { TABS as PANEL_TABS } from './panel.jsx'
 import { conn } from './state.js'
 import { place, PlaceName } from './places.jsx'
 import { newChat, workerOpen } from './newchat.jsx'
@@ -62,10 +64,32 @@ function NewMain() {
 }
 
 function Prior() {
-  // 판 124.2: 이어 받은 앞 대화는 허브가 대화 줄로 다시 그린다(접힌 상자 대신) — 여기는 이어 받기 안내만
+  // 판 124.2: 이어 받은 앞 대화는 허브가 대화 줄(사람 말·답·도구 한 줄)로 다시 그린다.
+  // 판 126: 원문(도구 결과·사진·환경 정보, 처음부터 끝까지)도 접힌 줄 하나로 남긴다 — 과정은 다 닿게. 펼치면 뒤에서부터 80줄씩
+  const run = hub.value?.main_run
+  const [p, setP] = useState(null), [open, setOpen] = useState(false)
+  useEffect(() => {
+    setP(null); setOpen(false)
+    if (run) get('/api/session/conversation?name=' + encodeURIComponent(chat.value) + '&prior=1&limit=80').then(r => setP(r.total ? r : null)).catch(() => {})
+  }, [run])
   const note = hub.value?.resume_note
-  if (!note) return null
-  return <div class="border border-dashed border-line rounded-[10px] px-3 py-2 mb-4 text-[13px] text-mute">ⓘ {note}</div>
+  if (!p && !note) return null
+  async function more() {
+    const r = await get(`/api/session/conversation?name=${encodeURIComponent(chat.value)}&prior=1&before=${p.start}&limit=80`)
+    setP({ ...p, start: r.start, items: [...r.items, ...p.items] })
+  }
+  return (
+    <div class="mb-3 text-[13px] text-mute">
+      {p && <button class="text-left hover:text-fg" onClick={() => setOpen(!open)}>{open ? '▾' : '▸'} 이어 받은 앞 대화 원문 {p.total}줄(도구 결과 포함) — {open ? '접기' : '펼쳐 보기'}</button>}
+      {note && <div class="mt-0.5">ⓘ {note}</div>}
+      {open && p && <div class="mt-2 text-fg text-[14px] border-l-2 border-line pl-3 max-h-[60vh] overflow-auto">
+        {p.start > 0 && <button class="text-mute hover:text-fg text-[13px] mb-2" onClick={more}>앞 {p.start}줄 더 보기</button>}
+        {p.items.map((it, i) => it.kind === 'assistant' ? <div key={i} class="my-2"><Md text={it.text} /></div>
+          : <div key={i} class={'my-1 whitespace-pre-wrap break-words ' + (it.kind === 'user' ? 'font-semibold' : 'text-mute text-[13px]')}>{it.kind === 'user' ? '사람: ' : it.kind === 'tool' ? '⏺ ' : ''}{it.text.slice(0, 2000)}
+            {it.imgs?.length > 0 && <UserImgs names={it.imgs} />}</div>)}
+      </div>}
+    </div>
+  )
 }
 
 // 맨 아래에 있었으면 새 글이 와도 맨 아래를 따라간다
@@ -217,6 +241,7 @@ function anchorStyle() {
 
 // "이 대화" 시트: 머리에서 뺀 것 — 프로젝트·종류·방식·생각·문맥·도구·누계·작업 내역·갈래·닫기
 function ConvSheet() {
+  const [tabsOpen, setTabsOpen] = useState(false), [modelOpen, setModelOpen] = useState(false), [skillsOpen, setSkillsOpen] = useState(false)
   if (!convSheet.value) return null
   const st = hub.value, v = view.value
   const conv = (st?.chats || []).find(c => c.name === v)
@@ -225,6 +250,10 @@ function ConvSheet() {
   const t = st?.tokens
   const close = () => { convSheet.value = false }
   const kind = isMain && kindTag(conv || (st?.chats || []).find(c => c.name === 'main'))
+  // 판 126: 과정은 다 닿게 — 스킬 줄(대화에선 접음)·모델 상태 자세히·작업 내역 탭 목록·parlando 자리 폴더를 이 판에서 한 번에
+  const skills = (st?.main_log || []).find(m => SKILLS_RX.test(m.text || ''))?.text || ''
+  const m = st?.model
+  const talkWd = conv && chatKind(conv) === 'talk' ? sessions.value.find(x => x.name === conv.name)?.workdir : ''
   return (
     <>
       <div class="sheet-back" onClick={close} />
@@ -232,19 +261,33 @@ function ConvSheet() {
         <div class="text-[13px] text-mute mb-1">이 대화</div>
         {isMain && main?.workdir && chatKind(conv) !== 'talk' && <div class="row-btn"><span>프로젝트</span><span class="sub truncate max-w-[60%]" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span></div>}
         {kind && <div class="row-btn"><span>자리</span><span class="sub"><PlaceName k={chatKind(conv)} />{conv?.tier ? ' · ' + conv.tier : ''}</span></div>}
+        {talkWd && <div class="row-btn"><span>자리 폴더</span><span class="sub truncate max-w-[60%]" title={talkWd}>{talkWd.split('/').slice(-1)[0]}</span></div>}
         {isMain && st?.mode && <ModeRows st={st} talk={chatKind(conv) === 'talk'} />}
-        {isMain && t?.window && <div class="row-btn"><span>문맥 사용</span><span class="sub">{t.estimated ? '약 ' : ''}{fmtK(t.last_prompt || 0)} / {fmtK(t.window)} · {Math.min(100, Math.round((t.last_prompt || 0) / t.window * 100))}%</span></div>}
+        {isMain && t?.window && <div class="row-btn"><span>문맥 사용</span><span class="sub">{t.estimated ? '약 ' : ''}{fmtK(t.last_prompt || 0)} / {fmtK(t.window)} · {Math.min(100, Math.round((t.last_prompt || 0) / t.window * 100))}%{t.model_window && t.model_window !== t.window ? ` · 모델 창 ${fmtK(t.model_window)}` : ''}</span></div>}
         {(st?.tool_toggles || []).length > 0 && <div class="py-2.5 border-b border-line"><div class="mb-1.5">도구</div><div class="flex gap-1.5 flex-wrap"><ToolChips /></div></div>}
         {st?.backend?.external && <div class="row-btn"><span>바깥 API</span><span class="sub text-warn text-right max-w-[72%]"><ExternalChip plain /></span></div>}
         {t && <div class="py-2.5 border-b border-line text-[12.5px] text-mute leading-relaxed">
-          {t.turn && <div>이번 차례 · 입력 {fmtK(t.turn.prompt)} · 출력 {fmtK(t.turn.completion)}</div>}
+          {t.turn && <div>이번 차례 · 입력 {fmtK(t.turn.prompt)} · 출력 {fmtK(t.turn.completion)} · 모델 {fmtSecs(t.turn.model_s || 0)}</div>}
           <div>이 대화 · 입력 {fmtK(t.prompt_total)} · 출력 {fmtK(t.completion_total)} · 단계 {t.steps}{t.compactions ? ` · 줄이기 ${t.compactions}번` : ''}</div>
         </div>}
-        <button class="row-btn" onClick={() => { close(); setPanel(isMain ? 'steps' : 'session') }}><span>작업 내역</span><span class="sub w-4 h-4"><IconChev /></span></button>
+        {skills && <button class="row-btn" aria-expanded={skillsOpen} onClick={() => setSkillsOpen(!skillsOpen)}><span>스킬</span><span class="sub truncate max-w-[65%]">{(skills.match(/스킬 (\d+)개/) || [])[1] || ''}개 {skillsOpen ? '▴' : '▾'}</span></button>}
+        {skillsOpen && <div class="py-2 border-b border-line text-[12.5px] text-mute whitespace-pre-wrap break-words">{skills.trim()}</div>}
+        <label class="row-btn cursor-pointer"><span>자세히 보기</span><span class="sub flex items-center gap-2">{detail.value ? '켬 — 과정을 다 펼침' : '끔'}
+          <input type="checkbox" checked={detail.value} onChange={e => setDetail(e.currentTarget.checked)} /></span></label>
+        <button class="row-btn" aria-expanded={tabsOpen} onClick={() => setTabsOpen(!tabsOpen)}><span>작업 내역</span><span class="sub w-4 h-4">{tabsOpen ? <IconUpS /> : <IconDown2 />}</span></button>
+        {tabsOpen && <div class="pb-1 border-b border-line">{[...(isMain ? [] : [['session', '작업자']]), ...PANEL_TABS].map(([k, label]) =>
+          <button key={k} class="row-btn !border-0 !min-h-[40px] pl-4" onClick={() => { close(); setPanel(k) }}><span class="text-[14.5px]">{label}</span><span class="sub w-4 h-4"><IconChev /></span></button>)}</div>}
         {isMain && <button class="row-btn" disabled={st?.busy} onClick={() => { close(); forkChat() }}><span>갈래 — 지금 대화를 복사해 새 대화로</span></button>}
         {conv && v !== 'main' && <button class="row-btn text-bad" onClick={() => { close(); closeChat(v) }}><span>이 대화 닫기</span></button>}
-        <div class="pt-2.5 text-[12.5px] text-mute truncate">모델 {st?.model ? (st.model.served || [])[0] || st.model.configured : st?.backend?.model}
-          {st?.web ? ' · ' + (st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐') : ''}</div>
+        <button class="pt-2.5 text-[12.5px] text-mute text-left w-full truncate" aria-expanded={modelOpen} onClick={() => setModelOpen(!modelOpen)}
+          title={st?.web?.why || ''}>모델 {m ? (m.served || [])[0] || m.configured : st?.backend?.model}
+          {st?.web ? ' · ' + (st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐') : ''} {modelOpen ? '▴' : '▾'}</button>
+        {modelOpen && <div class="text-[12.5px] text-mute leading-relaxed pt-1">
+          {m && <div>상태 {m.label}{m.detail ? ' — ' + m.detail : ''}{m.checked ? ` · 확인 ${new Date(m.checked * 1000).toLocaleTimeString()}` : ''}</div>}
+          {m && <div>서버가 올린 모델: {(m.served || []).join(', ') || '(없음)'} · 설정 이름 {m.configured} · 백엔드 {m.backend}</div>}
+          {m?.pod && <div>장비 별칭·어댑터: {[m.pod.model, m.pod.adapter].filter(Boolean).join(' / ')}</div>}
+          {st?.web?.why && <div>웹: {st.web.why}</div>}
+        </div>}
       </div>
     </>
   )
