@@ -41,6 +41,8 @@ from .config import (DEFAULT_RUNS_DIR, REPO_ROOT, Backend, ConfigError, Profile,
 from .record import Recorder
 from .resume import ResumeError
 
+_T_START = time.monotonic()   # 판 128: --once 시간 예산의 기준점(바깥 벽시계와 가깝게)
+
 SUMMARY_KEYS = ("stop_reason", "success", "steps", "elapsed_s", "tool_calls", "tool_errors", "parse_failures",
                 "format_failures", "repeat_nudges", "language_retries", "gen_tok_per_s", "prompt_tok_per_s", "e2e_tok_per_s")
 
@@ -512,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--once", action="store_true",
                    help="사람 없이 한 차례만 돌리고 끝낸다: 끝에 프로필 verify_command 로 success 를 채우고 summary·output.md 를 run 과 같은 칸으로. "
                         "--mode 가 없으면 auto(묻지 않음), 화면은 지금 화면(TUI 끔). 판 114")
+    c.add_argument("--time-budget", type=float, default=None, metavar="초",
+                   help="엔진 안 시간 예산(판 128, 기본 끔 — 환경 변수 STEWART_TIME_BUDGET_S 로도). 그 비율(STEWART_TIME_BUDGET_FRAC, 기본 0.85)에 닿으면 "
+                        "새 도구 걸음을 멈추고 지금까지 본 것으로 마지막 답을 받는다(끝 이유 time_budget). --once 는 프로세스 시작부터, 대화는 차례마다 잰다")
     c.add_argument("--tier", default=None, help="backends 표 [tiers.<이름>] 등급(백엔드·프로필·문맥 예산, slim = true 면 얇은 꼴) — 허브의 --tier 와 같은 뜻. 판 114")
     _resume_args(c)
     _common(c, task=False)
@@ -883,6 +888,9 @@ def main(argv: list[str] | None = None) -> int:
             if a.once:   # 판 114: 사람 없이 한 차례 — 화면은 지금 화면, 모드는 주지 않으면 auto
                 sess = ChatSession(profile, backend, rec, confirm=a.confirm, history=history, resumed_from=resumed, stream=a.stream,
                                    mode=a.mode or ("auto" if a.confirm is None else None), default_mode="auto", think=a.think)
+                from . import timebudget as TB
+                sess.time_budget = TB.make(a.time_budget, t0=_T_START)   # 판 128: 바깥 벽시계와 같이 프로세스 시작부터
+                sess._tb_each_turn = False
                 try:
                     out = sess.run_once(first)
                 finally:
@@ -893,6 +901,9 @@ def main(argv: list[str] | None = None) -> int:
             ui = pick_ui(a.tui)   # None = 지금 화면(chat.UI)
             try:
                 sess = ChatSession(profile, backend, rec, ui=ui, confirm=a.confirm, history=history, resumed_from=resumed, stream=a.stream, mode=a.mode, default_mode="edits", think=a.think)
+                if a.time_budget is not None:   # 판 128: 대화는 차례마다
+                    from . import timebudget as TB
+                    sess.time_budget = TB.make(a.time_budget)
                 if ui:
                     ui.bind(sess)
                 repl(sess, first)

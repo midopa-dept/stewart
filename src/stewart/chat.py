@@ -57,6 +57,7 @@ from . import components as CM
 from . import train as TRAIN
 from . import examples as EX
 from . import spawn as SP
+from . import timebudget as TB
 from .checkpoint import Checkpoints
 
 WRITE_TOOLS = {"write_file", "edit_file", "multi_edit", "notebook_edit"}
@@ -195,6 +196,8 @@ DUP_NOTE = "[엔진] 이 응답 안 앞 호출과 글자까지 같아 다시 돌
 
 
 LENGTH_STREAK_ENV = "STEWART_LENGTH_STREAK"
+FINAL_WHY = {"repeated_call": "같은 호출 되풀이로 멈추기 전에", "length_streak": "생각이 연달아 잘려 멈추기 전에",
+             "time_budget": "시간 예산에 닿아"}   # 마지막 답 줄의 까닭(판 128)
 
 
 def length_streak_at(env=None) -> int:
@@ -472,6 +475,8 @@ class ChatSession:
         self._missing_noted: set[str] = set()   # 셸에 없다고 알린 명령(세션에 한 번씩, 판 122)
         self.len_streak_at = length_streak_at()   # 연속 잘림 끊기 문턱(판 122, 기본 끔 = 0)
         self._len_streak, self._len_streak_hit = 0, False
+        self.time_budget = TB.from_env()   # 엔진 안 시간 예산(판 128, 기본 끔). 환경 변수로 켜면 차례마다 다시 잰다
+        self._tb_each_turn = True          # --once 는 프로세스 시작부터 한 번(cli 가 False 로)
         self._rstate = RF.State()
         self._fail_steps: list[list[dict]] = []
         self._recent_fail: list[dict] = []
@@ -1146,6 +1151,7 @@ class ChatSession:
             est = (last + est_tokens(json.dumps(self.messages[self._pmark:], ensure_ascii=False)) if last
                    else est_tokens(json.dumps(self.messages, ensure_ascii=False)))
             kw = {**mt, **TH.call_kwargs(self.backend, self.tks, mt.get("thinking"), est, first=getattr(self, "_turn_n", 0) == 1)}   # 생각 켬 차례만
+            kw = self._tb_fit(kw, step)   # 판 128: 시간 예산 — 이 걸음의 생성 상한을 남은 시간에 맞춘다
             self._prefix_check(step)
             try:
                 if self.stream:
@@ -1175,6 +1181,12 @@ class ChatSession:
             if length_done or not empty_length(resp):
                 if not length_done:
                     self._len_streak = 0   # 다시 보내지 않고 받은 걸음 — 연속이 끊긴다
+                self._pmark = len(self.messages)
+                return resp, dt, streamed
+            if self._tb_over():   # 판 128: 시간 예산을 넘었다 — 생각 끄고 다시 보내지 않고 마지막 답으로 넘긴다
+                u0 = resp.get("usage") or {}
+                self.st["model_time_s"] += dt
+                self.st["completion_tokens"] += u0.get("completion_tokens") or 0
                 self._pmark = len(self.messages)
                 return resp, dt, streamed
             self._len_streak += 1
@@ -1295,7 +1307,7 @@ class ChatSession:
         return True
 
     def _turn(self, text: str, images: list | None = None) -> str:
-        """사람 입력 하나를 처리한다. 종료 사유: answered | asked | length_empty | max_steps | repeated_call | repeated_failure | backend_error | context_overflow | interrupted | consecutive_errors"""
+        """사람 입력 하나를 처리한다. 종료 사유: answered | asked | length_empty | max_steps | repeated_call | repeated_failure | backend_error | context_overflow | interrupted | consecutive_errors | time_budget"""
         self.st["turns"] += 1
         self._raw_text = text   # 사람 말 그대로(말만 하고 멈춤 되돌리기 판정용, intent.py)
         if hasattr(self.ui, "turn_no"):   # 허브 화면: 답 줄에 차례 번호(👍👎 표시가 어느 차례인지)
@@ -1405,6 +1417,8 @@ class ChatSession:
         self._asked = None
         self._err_sigs, self._human_noted, self._samerr_hit = {}, set(), None   # 같은 오류·사람 경계(판 62), 차례마다
         self._len_streak, self._len_streak_hit = 0, False   # 연속 잘림(판 122), 차례마다
+        if self.time_budget is not None and self._tb_each_turn:   # 판 128: 대화의 시간 예산은 차례마다 새로
+            self.time_budget.t0 = self.time_budget.clock()
         self.compact(estimate=True)   # 차례 시작에도 문턱을 본다(판 65): 도구 없이 답만 하는 차례가 이어지면 단계 뒤 판정이 돌지 않았다
         self._rstate = RF.State()     # 되짚기 횟수는 차례마다(사람이 "계속" 하면 다시 한 번 쓸 수 있다)
         self._fail_steps, self._recent_fail = [], []
@@ -1415,6 +1429,10 @@ class ChatSession:
         budget, n = self.max_steps, 0
         try:
             while True:
+                if self._tb_over():   # 판 128: 시간 예산 — 새 도구 걸음을 시작하지 않고 지금까지로 마지막 답
+                    self._tb_final(self.st["steps"])
+                    reason = "time_budget"
+                    break
                 if n >= budget:
                     if self._ask_more(budget):
                         budget += self.max_steps
@@ -1634,6 +1652,10 @@ class ChatSession:
                 if empty_length(resp):   # 생각 끔으로 다시 보냈어도 빈 잘림 — 빈 답으로 받지 않는다
                     self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
                     self.rec.md_step(step, srec)
+                    if self._tb_over():   # 판 128: 시간 예산에서 잘린 걸음 — 빈 답 대신 마지막 답
+                        self._tb_final(step)
+                        reason = "time_budget"
+                        break
                     if self._len_streak_hit:   # 연속 잘림 끊기(손잡이): 되짚기 → 사람 없으면 마지막 답
                         self._len_streak_hit = False
                         k = self._len_streak
@@ -1726,6 +1748,9 @@ class ChatSession:
                          " 상한 바꾸기: /steps N")
         elif reason == "repeated_call":
             self.ui.warn("  같은 호출을 결과가 같은 채로 되풀이해 멈췄다. 방향을 알려 주거나 '계속' 이라고 친다.")
+        elif reason == "time_budget":
+            tb = self.time_budget
+            self.ui.warn(f"  시간 예산({tb.seconds:.0f}초의 {tb.frac:.0%})에 닿아 지금까지 본 것으로 답하고 멈췄다. 더 하려면 '계속' 이라고 친다.")
         if reason in ("max_steps", "consecutive_errors", "repeated_failure", "repeated_call", "backend_error", "context_overflow") \
                 and self.cps.cur and self.cps.cur["files"]:
             self.ui.warn(f"  이번 차례에 바꾼 파일 {len(self.cps.cur['files'])}개는 그대로다. 되돌리려면 /undo(셸이 바꾼 것은 못 되돌림).")
@@ -1813,6 +1838,9 @@ class ChatSession:
     def _reflect(self, trigger: str, step: int, consecutive: int, calls: list | None = None, facts: str | None = None,
                  label: str | None = None) -> bool:
         """막히기 직전(오류 누적·같은 실패·같은 호출 되풀이·말만 하고 멈춤) 도구 없는 되짚기 한 번(reflect.py). 했으면 True(이어 간다)."""
+        if self._tb_over():   # 판 128: 시간 예산을 넘었다 — 되짚기에 시간을 더 쓰지 않고, 이어 가면 차례 머리에서 마지막 답
+            self.rec.event("reflect_skip", trigger=trigger, step=step, why="time_budget")
+            return True
         if calls is None:
             calls = ([tc for s in self._fail_steps[-consecutive:] for tc in s] if trigger == "consecutive_errors"
                      else self._recent_fail[-1:])
@@ -1876,7 +1904,7 @@ class ChatSession:
         """멈추기 직전 도구 없이 한 번 답을 받는다(되짚기와 같은 생각·상한 꼴). 답을 받았으면 True."""
         RF.append_user(self.messages, prompt)
         kw, cap = self._notool_kw()
-        self.ui.dim("  (멈추기 전에 도구 없이 지금까지 본 것으로 답을 받는다)")
+        self.ui.dim("  (" + FINAL_WHY.get(trigger, "멈추기 전에") + " 도구 없이 지금까지 본 것으로 답을 받는다)")
         r = RF.call(chat, self.backend, self._clean(), kw, cap)
         u = r["usage"]
         self.st["model_time_s"] += r["elapsed_s"]
@@ -1891,8 +1919,35 @@ class ChatSession:
             return False
         self.messages.append({"role": "assistant", "content": r["content"]})
         self.ui.assistant(r["content"])
-        self.rec.md(f"> 같은 호출 되풀이로 멈추기 전 도구 없이 받은 마지막 답\n\n{r['content']}\n")
+        self.rec.md(f"> {FINAL_WHY.get(trigger, '멈추기 전에')} 도구 없이 받은 마지막 답\n\n{r['content']}\n")
         return True
+
+    def _tb_over(self) -> bool:
+        return self.time_budget is not None and self.time_budget.over()
+
+    def _tb_fit(self, kw: dict, step: int) -> dict:
+        """판 128: 시간 예산이 있으면 이 걸음의 생성 상한을 '남은 시간 × 잰 생성 속도'로 줄인다(속도를 아직 모르면 그대로)."""
+        tb = self.time_budget
+        if tb is None:
+            return kw
+        mt0 = kw.get("max_tokens") or int((getattr(self.backend, "params", None) or {}).get("max_tokens") or 0) or None
+        tps = self.st["completion_tokens"] / self.st["model_time_s"] if self.st["model_time_s"] >= 1 else None
+        cap = tb.cap_tokens(mt0, tps)
+        if cap is None:
+            return kw
+        self.st["time_budget_caps"] = self.st.get("time_budget_caps", 0) + 1
+        self.rec.event("time_budget_cap", step=step, max_tokens=cap, was=mt0, left_s=round(tb.left(), 1), tok_per_s=round(tps, 1))
+        return {**kw, "max_tokens": cap}
+
+    def _tb_final(self, step: int) -> bool:
+        """판 128: 시간 예산에 닿았다 — 도구 없이 마지막 답 한 차례(되풀이 호출·연속 잘림과 같은 길, 끝 이유는 따로 time_budget)."""
+        tb = self.time_budget
+        self._close_open_calls("시간 예산에 닿아 실행하지 않았다.")
+        self.st["time_budget_hit"] = tb.info()
+        self.rec.event("time_budget", step=step, **tb.info())
+        ok = self._final_answer("time_budget", step, G.CHAT_FINAL_PROMPT.format(why="주어진 시간이 거의 다 되어"))
+        self.st["time_budget_hit"]["final_ok"] = ok
+        return ok
 
     def _ask_more(self, n: int, why: str | None = None, kind: str = "steps_limit") -> bool:
         """단계 상한(또는 반복 감지)에 닿았을 때 더 할지. 묻는 모드(edits·ask·plan)는 사람에게 묻고, auto 는 묻지 않고 끝낸다."""
@@ -2207,7 +2262,7 @@ class ChatSession:
         }
 
     # 판 114: 한 번 돌리기(--once)·끝 판정 — run 길과 같은 칸(stop_reason·verify·success)
-    RUN_REASON = {"answered": "completed"}
+    RUN_REASON = {"answered": "completed"}   # time_budget 은 그대로 time_budget(되풀이 호출·잘림과 따로 센다)
 
     def _outcome(self) -> dict:
         once = getattr(self, "_once", None)
