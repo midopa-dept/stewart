@@ -48,6 +48,76 @@ class TApprovals(MainBase):
         self.assertTrue(all(a.get("replayed") for a in re))
 
 
+class TReplayImages(MainBase):
+    """판 127.2: 허브를 다시 켜거나 지난 대화를 다시 열 때 다시 그린 도구 줄에도 그 도구가 본 그림(view_image 등)과 성공 표시가 실린다."""
+
+    def test_replay_keeps_images_and_ok(self):
+        from stewart import images as IMG
+        from stewart.hubmain import _replay
+        run = self.tmp / "oldrun"
+        run.mkdir()
+        png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4c50000000049454e44ae426082")
+        part = IMG.store(run, png, "image/png")
+        msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "화면 봐"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "view_image", "arguments": "{\"path\": \"a.png\"}"}}]},
+                {"role": "tool", "tool_call_id": "c1", "name": "view_image", "content": "a.png 를 다음 메시지에 붙였다"},
+                {"role": "user", "content": IMG.content("[엔진] view_image 로 연 이미지 1장", [part])},
+                {"role": "assistant", "content": "봤다"}]
+        (run / "events.jsonl").write_text(json.dumps({"kind": "run_start", "meta": {}}) + "\n" + json.dumps(
+            {"kind": "step", "response": {"tool_calls": [{"name": "view_image", "ok": True, "elapsed_s": 0.2, "result": "붙였다"}]}}) + "\n", encoding="utf-8")
+        ui = self.main.ui
+        n0 = len(ui.log)
+        _replay(ui, msgs, run)
+        tools = [e for e in list(ui.log)[n0:] if e["kind"] == "tool"]
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0].get("ok"), True)                                 # "·" 가 아니라 ✓
+        self.assertTrue(tools[0].get("imgs"))                                      # 그림이 다시 실린다
+        self.assertIn(tools[0]["imgs"][0], ui.imgs)                                # /api/img 가 내줄 수 있다
+        self.assertNotIn("[엔진]", json.dumps([e["text"] for e in list(ui.log)[n0:]], ensure_ascii=False))
+
+
+class TImagesFourWays(MainBase):
+    """판 127.2: 도구가 본 그림이 ① 도는 중(살아 있는 화면 기록) ② 차례 끝난 뒤 ③ 페이지를 새로 연 뒤(상태 다시 받기) ④ 허브를 다시 켜거나 다시 연 뒤 모두 실린다."""
+
+    def _run(self):
+        from stewart import images as IMG
+        run = self.tmp / "imgrun"
+        run.mkdir(exist_ok=True)
+        png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4c50000000049454e44ae426082")
+        part = IMG.store(run, png, "image/png")
+        msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "그림 봐"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "view_image", "arguments": "{\"path\": \"b.png\"}"}}]},
+                {"role": "tool", "tool_call_id": "c1", "name": "view_image", "content": "b.png 를 다음 메시지에 붙였다"},
+                {"role": "user", "content": IMG.content("[엔진] view_image 로 연 이미지 1장", [part])},
+                {"role": "assistant", "content": "됐다"}]
+        (run / "events.jsonl").write_text(json.dumps({"kind": "run_start", "meta": {}}) + "\n" + json.dumps(
+            {"kind": "step", "response": {"tool_calls": [{"name": "view_image", "ok": True, "elapsed_s": 1.0, "result": "OK"}]}}) + "\n", encoding="utf-8")
+        return run, msgs, part
+
+    def test_live_and_state(self):
+        from stewart import images as IMG
+        run, msgs, part = self._run()
+        ui = self.main.ui
+        ui.tool("view_image", "b.png")                                               # ① 도는 중: 도구 줄 뒤 엔진이 그림을 붙인다
+        ui.tool_images([str(IMG.path_of(part))])
+        live = [e for e in ui.log if e["kind"] == "tool"][-1]
+        self.assertTrue(live.get("imgs"))
+        st = self.main.state()                                                     # ②·③ 상태를 새로 받아도 그대로
+        self.assertTrue(any(e.get("imgs") for e in st["main_log"] if e["kind"] == "tool"))
+
+    def test_hub_restart_resume(self):
+        from stewart.cli import resolve
+        from stewart.hubmain import HubMain
+        from stewart.record import Recorder
+        run, msgs, _ = self._run()
+        profile, backend = resolve(str(self.tmp / "main.toml"), "fake", str(self.wd))
+        m2 = HubMain(self.hub, profile, backend, Recorder(self.tmp / "runs", "hub-main"), mode="edits", history=msgs, resumed_from=str(run))
+        self.addCleanup(m2.close)
+        tools = [e for e in m2.ui.log if e["kind"] == "tool"]                      # ④ 허브를 다시 켜 이어 받은 대화
+        self.assertEqual((len(tools), tools[0].get("ok")), (1, True))
+        self.assertTrue(tools[0].get("imgs"))
+
+
 class TStepNumbers(unittest.TestCase):
     def _sess(self, backend):
         from stewart.chat import ChatSession

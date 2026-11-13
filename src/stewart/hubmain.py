@@ -411,6 +411,20 @@ def _reach(backend) -> str:
 
 def _approvals(run_dir) -> list[dict]:
     """판 127: 이어 받은 기록(과 그 앞 기록들)의 승인 사건 — 오래된 것부터."""
+    return _chain_events(run_dir, "approval")
+
+
+def _step_calls(run_dir) -> list[dict]:
+    """판 127.2: 이어 받은 기록(과 그 앞 기록들)의 도구 호출 결과(이름·성공·걸린 시간·결과 앞부분) — 오래된 것부터, 메시지의 도구 호출 차례와 같다."""
+    out = []
+    for e in _chain_events(run_dir, "step"):
+        for tc in ((e.get("response") or {}).get("tool_calls") or []):
+            if isinstance(tc, dict):
+                out.append({"name": tc.get("name"), "ok": tc.get("ok"), "elapsed_s": tc.get("elapsed_s"), "result": str(tc.get("result") or "")[:8000]})
+    return out
+
+
+def _chain_events(run_dir, kind: str) -> list[dict]:
     out, seen, cur = [], set(), str(run_dir or "")
     while cur and cur not in seen and len(seen) < 20:
         seen.add(cur)
@@ -424,7 +438,7 @@ def _approvals(run_dir) -> list[dict]:
                         continue
                     if i == 0:
                         nxt = str((e.get("meta") or {}).get("resumed_from") or "")
-                    if e.get("kind") == "approval":
+                    if e.get("kind") == kind:
                         evs.append(e)
         except OSError:
             break
@@ -440,10 +454,17 @@ def _replay(ui, messages: list | None, run_dir=None) -> None:
     from .chat import _arg_summary
     from .images import text_of
     aps = _approvals(run_dir) if run_dir else []
+    calls = _step_calls(run_dir) if run_dir else []   # 판 127.2: 다시 그린 도구 줄에도 성공 표시·결과·걸린 시간
     for m in messages or []:
         role = m.get("role")
         if role == "user":
             t = _strip_env(text_of(m.get("content"))).strip()
+            if isinstance(m.get("content"), list) and text_of(m.get("content")).lstrip().startswith("[엔진]"):   # 판 127.2: 도구가 본 그림(view_image 등)을 그 도구 줄에 다시
+                from .images import path_of
+                paths = [str(x) for x in (path_of(q) for q in m["content"] if isinstance(q, dict) and q.get("type") == "image_url") if x and Path(x).is_file()]
+                if paths and hasattr(ui, "tool_images"):
+                    ui.tool_images(paths)
+                continue
             if not t or t.startswith("[엔진]"):
                 continue
             ui._add("hub" if t.startswith("[허브]") else "user", t)
@@ -459,6 +480,9 @@ def _replay(ui, messages: list | None, run_dir=None) -> None:
                     args = {}
                 tl = f"{fn.get('name') or '?'} {_arg_summary(fn.get('name') or '', args if isinstance(args, dict) else {})}"
                 ui._add("tool", tl)
+                if calls and calls[0].get("name") == fn.get("name"):
+                    c = calls.pop(0)
+                    ui.log[-1].update(ok=bool(c.get("ok", True)), elapsed=round(float(c.get("elapsed_s") or 0), 2), result=c.get("result") or "")
                 if aps and str(aps[0].get("what") or "")[:80] == tl[:80]:
                     a = aps.pop(0)
                     sec = int(round(float(a.get("secs") or 0)))
