@@ -104,8 +104,9 @@ class TChat(Base):
         s = self.sess()
         seq = [resp(f"조각 {i}", finish="length") for i in range(3)]
         with mock.patch.object(C, "chat", side_effect=self.fake(seq)):
-            self.assertEqual(s.turn("설명해"), "answered")   # 두 번 이은 뒤 셋째는 그대로 받는다
+            self.assertEqual(s.turn("설명해"), "cut_answer")   # 두 번 이은 뒤 셋째도 끊기면 다 된 답으로 받지 않는다(판 131)
         self.assertEqual(len(self.sent), 3)
+        self.assertEqual(s.messages[-1]["content"], "조각 2")   # 끊긴 글은 남긴다
 
 
 class TRun(Base):

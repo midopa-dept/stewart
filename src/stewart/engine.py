@@ -1007,6 +1007,13 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
             # 판 130: 생각 끄고 다시 보냈어도 본문·툴콜이 비었다 — 빈 글을 최종 답으로 받지 않는다(completed 아님)
             stop_reason = "empty_answer"
             srec["note"] = "생각 끄고 다시 보냈어도 본문·도구 호출 없이 멈춤 → empty_answer 로 끝"
+        elif CO.garbled(content):
+            # 판 131: 깨진 글(U+FFFD 투성이)을 최종 답으로 받지 않는다(completed 아님)
+            stop_reason = "garbled_output"
+            st["garbled_outputs"] = st.get("garbled_outputs", 0) + 1
+            rec.event("garbled_output", step=step, finish_reason=choice.get("finish_reason"), chars=len(content),
+                      bad=content.count("\ufffd"))
+            srec["note"] = "모델 출력이 깨진 글 → 답으로 받지 않고 garbled_output 으로 끝"
         else:
             # 최종 답
             messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
@@ -1109,7 +1116,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         rec.event("step", step=step, request=req_summary, new_messages=messages[n_before:], response=srec,
                   consecutive_errors=consecutive)
         rec.md_step(step, srec)
-        if stop_reason in ("completed", "asked", "length_empty", "empty_answer"):
+        if stop_reason in ("completed", "asked", "length_empty", "empty_answer", "garbled_output"):
             break
         trig = ("consecutive_errors" if consecutive >= profile.max_consecutive_errors
                 else "repeated_failure" if repeat_stop else None)
@@ -1230,6 +1237,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
            if tks["max_tokens"] or tks["sampling"] or tks["ignored"] or tks.get("max_first") or tks.get("effort") else {}),
         **({"length_empty_retries": st["length_empty_retries"]} if st.get("length_empty_retries") else {}),
         **({"empty_stop_retries": st["empty_stop_retries"]} if st.get("empty_stop_retries") else {}),
+        **({"garbled_outputs": st["garbled_outputs"]} if st.get("garbled_outputs") else {}),
         **({"review": {**review, "steps_after": (st["steps"] - review["at_step"]) if review.get("ran") else None,
                        "files_changed_after": len(review_paths) if review.get("ran") else None}}
            if sc["review_on_stop"] else {}),

@@ -197,7 +197,8 @@ DUP_NOTE = "[엔진] 이 응답 안 앞 호출과 글자까지 같아 다시 돌
 
 LENGTH_STREAK_ENV = "STEWART_LENGTH_STREAK"
 FINAL_WHY = {"repeated_call": "같은 호출 되풀이로 멈추기 전에", "length_streak": "생각이 연달아 잘려 멈추기 전에",
-             "time_budget": "시간 예산에 닿아", "empty_answer": "본문 없이 멈춰"}   # 마지막 답 줄의 까닭(판 128·130)
+             "time_budget": "시간 예산에 닿아", "empty_answer": "본문 없이 멈춰",
+             "garbled_output": "모델 출력이 거듭 깨져"}   # 마지막 답 줄의 까닭(판 128·130·131)
 
 
 def length_streak_at(env=None) -> int:
@@ -1434,7 +1435,7 @@ class ChatSession:
         self.compact(estimate=True)   # 차례 시작에도 문턱을 본다(판 65): 도구 없이 답만 하는 차례가 이어지면 단계 뒤 판정이 돌지 않았다
         self._rstate = RF.State()     # 되짚기 횟수는 차례마다(사람이 "계속" 하면 다시 한 번 쓸 수 있다)
         self._fail_steps, self._recent_fail = [], []
-        self._cut, self._continued = False, 0
+        self._cut, self._continued, self._garbled = False, 0, 0   # 이어 쓰기·깨진 글은 연달아 센다(도구를 부른 걸음에서 0, 판 131)
         self._intent_nudged = False
         self._todo_since, self._todo_nudged_at, self._todo_final_done = 0, 0, False   # 할 일 갱신 장치(판 85) — 차례마다
         self._spawn_guard = False
@@ -1549,6 +1550,7 @@ class ChatSession:
                     self.ui.assistant(content.strip() if not calls or getattr(self.ui, "full_narration", False) else _one_line(content, 300))
                 self._cut = choice.get("finish_reason") == "length"
                 if calls:
+                    self._continued = self._garbled = 0   # 판 131: 도구를 불렀다 — 연달아 이은·깨진 수를 다시 센다
                     for rc in calls:
                         rc.setdefault("id", "call_" + uuid.uuid4().hex[:8])
                         rc.setdefault("type", "function")
@@ -1700,6 +1702,34 @@ class ChatSession:
                         self.ui.warn("  모델이 본문도 도구 호출도 없이 멈췄다(생각 끄고 다시 보냈어도). 다시 묻거나 '계속' 이라고 친다.")
                     reason = "empty_answer"
                     break
+                if CO.garbled(content):   # 판 131: 깨진 글(U+FFFD 투성이) — 문맥에도 답에도 넣지 않는다
+                    self._garbled += 1
+                    self.st["garbled_outputs"] = self.st.get("garbled_outputs", 0) + 1
+                    self.rec.event("garbled_output", step=step, finish_reason=choice.get("finish_reason"), chars=len(content),
+                                   bad=content.count("\ufffd"), n=self._garbled)
+                    if self._tb_over():   # 시간 예산을 넘긴 뒤라면 그 길(끝 이유 time_budget)
+                        srec["note"] = "깨진 글 → 버림, 시간 예산에 닿아 마지막 답"
+                        self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                        self.rec.md_step(step, srec)
+                        self._tb_final(step)
+                        reason = "time_budget"
+                        break
+                    if self._garbled <= CO.GARBLED_MAX:   # 버리고 다음 걸음으로(생각은 프로필대로)
+                        RF.append_user(self.messages, CO.GARBLED_NOTE)
+                        srec["note"] = "깨진 글 → 문맥에 넣지 않고 다음 걸음으로"
+                        self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                        self.rec.md_step(step, srec)
+                        self.ui.dim("  (모델 출력이 깨진 글자로 나왔다 → 버리고 다음 걸음)")
+                        continue
+                    srec["note"] = f"깨진 글이 {self._garbled}걸음 연달아 → 차례를 끝냄"
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    if self.mode == "auto":   # 물을 사람이 없다: 도구 없이 마지막 답 한 차례(이것도 깨지면 받지 못했다고 남는다)
+                        self._final_answer("garbled_output", step, G.CHAT_FINAL_PROMPT.format(why="모델 출력이 거듭 깨져"))
+                    else:
+                        self.ui.warn(f"  모델 출력이 {self._garbled}걸음 연달아 깨진 글자로 나왔다. 서버 상태를 보고 다시 묻는다.")
+                    reason = "garbled_output"
+                    break
                 self.messages.append({"role": "assistant", "content": content, **({"anthropic_content": msg["anthropic_content"]} if msg.get("anthropic_content") else {}),
                                       **({"reasoning_content": think} if TR_keep(self.passback, think, False) else {})})
                 if self._cut and content.strip() and self._continued < CO.CONTINUE_MAX:   # 끊긴 글 답: 최종 답으로 받지 않고 잇게 한다
@@ -1711,6 +1741,18 @@ class ChatSession:
                     self.rec.event("length_continue", step=step, n=self._continued)
                     self.ui.dim("  (답이 생성 상한에서 끊겨 이어 쓰게 한다)")
                     continue
+                if self._cut and content.strip():   # 판 131: 연달아 이어 써도 또 끊겼다 — 끊긴 글을 다 된 답(answered)으로 받지 않는다
+                    srec["note"] = f"답이 {self._continued + 1}번 연달아 생성 상한에서 끊김 → cut_answer 로 끝"
+                    self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
+                    self.rec.md_step(step, srec)
+                    self.rec.event("cut_answer", step=step, n=self._continued + 1)
+                    if self._tb_over():
+                        self._tb_final(step)
+                        reason = "time_budget"
+                        break
+                    self.ui.warn(f"  답이 생성 상한에서 {self._continued + 1}번 연달아 끊겨 멈췄다. 더 이으려면 '계속' 이라고 친다.")
+                    reason = "cut_answer"
+                    break
                 if (self._intent_nudged and IN.on() and self.tool_names
                         and IN.intent_only(self._raw_text, content, len(self._turn_calls))
                         and self._reflect("intent_only", step, 0, calls=[], label="말만 하고 멈춤 2번")):   # 두 번째: 되짚기
@@ -2285,7 +2327,7 @@ class ChatSession:
             "prompt_tok_per_s": (st["prompt_n"] / (st["prompt_ms"] / 1000)) if st["prompt_ms"] else None,
             "e2e_tok_per_s": (st["completion_tokens"] / st["model_time_s"]) if st["model_time_s"] else None,
             "tool_error_kinds": dict(st.get("tool_error_kinds") or {}), "features": self.meta.get("features"),
-            **{k: st[k] for k in ("length_empty_retries", "empty_stop_retries", "empty_answers") if st.get(k)},   # 판 130: 빈 걸음 셈
+            **{k: st[k] for k in ("length_empty_retries", "empty_stop_retries", "empty_answers", "garbled_outputs") if st.get(k)},   # 판 130: 빈 걸음 셈
             **self._outcome(),
             "run_dir": str(self.rec.dir),
         }

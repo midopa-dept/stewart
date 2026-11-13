@@ -105,7 +105,7 @@ class TDelegate(unittest.TestCase):
         self.assertIn("작업자를 만들 수 없다", msgs[1])
 
     def test_return_clipped(self):
-        s, m, _ = self.go([dcall(task="길게"), _resp("가" * 9000), _resp("끝")])
+        s, m, _ = self.go([dcall(task="길게"), _resp("가나다라" * 2250), _resp("끝")])   # 같은 글자 되풀이는 깨진 글로 본다(판 131)
         msg = [x["content"] for x in m.call_args_list[-1][0][1] if x["role"] == "tool"][0]
         self.assertIn(f"잘림: 전체 9000자 중 {DG.MAX_RETURN}자", msg)
 

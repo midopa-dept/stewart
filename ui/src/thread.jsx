@@ -542,7 +542,8 @@ function TodoCard({ todos, latest, ts }) {
 // 차례 요약 줄 "[answered · 단계 5 · 프롬프트 1200/32768 tok · 생성 합 400 tok · 모델 1초]" → 사람 말 한 줄
 const REASON = { answered: '답으로 끝', max_steps: '걸음 상한', stopped: '멈춤', asked: '되물음', backend_error: '모델 오류', repeated_call: '같은 호출 되풀이로 멈춤',
   consecutive_errors: '연속 오류로 멈춤', repeated_failure: '같은 실패 되풀이로 멈춤', context_overflow: '문맥 넘침',
-  time_budget: '시간 예산에 닿아 지금까지로 답함', empty_answer: '본문 없이 멈춰 마지막 답을 받음' }
+  time_budget: '시간 예산에 닿아 지금까지로 답함', empty_answer: '본문 없이 멈춰 마지막 답을 받음',
+  cut_answer: '답이 거듭 상한에서 끊겨 멈춤', garbled_output: '모델 출력이 거듭 깨져 멈춤' }
 function metaLine(t) {   // 판 126: 끝 이유·창 크기도(판 124 에서 버리던 것)
   const last = String(t || '').trim().split('\n').slice(-1)[0]
   const g = re => (re.exec(last) || [])[1]

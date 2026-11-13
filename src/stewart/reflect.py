@@ -15,6 +15,7 @@ import hashlib
 import os
 
 from .backend import BackendError
+from .cutoff import garbled
 
 ENV = "STEWART_REFLECT"
 ENV_MAX = "STEWART_REFLECT_MAX"
@@ -190,9 +191,11 @@ def call(chat_fn, backend, messages: list[dict], kw: dict, max_tokens: int) -> d
     choice = (resp.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     content = (msg.get("content") or "").strip()
-    return {"ok": bool(content), "content": content, "usage": resp.get("usage") or {}, "elapsed_s": dt,
+    bad = garbled(content)   # 판 131: 깨진 글은 답으로 받지 않는다(문맥·답 파일에 넣지 않게 내용은 비운다)
+    err = "깨진 글" if bad else None if content else "빈 답"
+    return {"ok": err is None, "content": "" if bad else content, "usage": resp.get("usage") or {}, "elapsed_s": dt,
             "finish_reason": choice.get("finish_reason"), "dropped_tool_calls": len(msg.get("tool_calls") or []),
-            "error": None if content else "빈 답"}
+            "error": err, **({"garbled_chars": len(content)} if bad else {})}
 
 
 class State:
