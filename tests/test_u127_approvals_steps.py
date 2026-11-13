@@ -160,3 +160,38 @@ class TStepNumbers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TModelStatusTrustsReplies(unittest.TestCase):
+    """판 127.3: 상태 찔러 보기(GET /models)만 실패하고 답은 오는 서버 — 답을 받으면 곧바로 "준비됨", 그 뒤 찔러 보기가 실패해도
+    REPLY_TRUST_S 안이면 "준비됨"(찔러 본 결과는 detail 에), 넘으면 다시 실패 상태."""
+
+    def test_reply_overrides_failed_probe(self):
+        from types import SimpleNamespace
+        from stewart.modelstat import ModelWatch
+        b = SimpleNamespace(name="cloud", model="m")
+        w = ModelWatch(b, probe_fn=lambda _b: {"state": "down", "label": "닿지 않음", "detail": "시간 초과", "checked": time.time()})
+        self.assertEqual(w.check()["state"], "down")
+        w.reply_ok("다른백엔드")
+        self.assertEqual(w.status["state"], "down")                                # 다른 백엔드의 답은 상관없다
+        w.reply_ok("cloud")
+        self.assertEqual(w.status["state"], "ok")                                  # 답을 받으면 곧바로
+        st = w.check()
+        self.assertEqual((st["state"], st["probe_state"]), ("ok", "down"))
+        self.assertIn("시간 초과", st["detail"])
+        w.reply_ok_at = time.time() - w.REPLY_TRUST_S - 1
+        self.assertEqual(w.check()["state"], "down")                               # 오래 답이 없으면 찔러 본 대로
+
+    def test_request_failure_ends_trust(self):
+        """판 127.4: 답 믿기 창 안에서 서버가 죽으면 — 그 사이 요청이 실패하는 순간 "닿지 않음", 다시 찔러 봐도 "준비됨"으로 돌아가지 않는다."""
+        from types import SimpleNamespace
+        from stewart.modelstat import ModelWatch
+        b = SimpleNamespace(name="cloud", model="m")
+        w = ModelWatch(b, probe_fn=lambda _b: {"state": "down", "label": "닿지 않음", "detail": "시간 초과", "checked": time.time()})
+        w.reply_ok("cloud")
+        self.assertEqual(w.check()["state"], "ok")                                 # 창 안: 찔러 보기 실패여도 준비됨
+        w.poke("down", "연결 거부")                                                  # 그 사이 보낸 요청이 실패
+        self.assertEqual(w.status["state"], "down")
+        self.assertEqual(w.check()["state"], "down")                               # 다시 찔러 봐도 준비됨으로 되돌리지 않는다
+        w.reply_ok("cloud")
+        self.assertEqual(w.status["state"], "ok")                                  # 다시 답을 받으면 준비됨

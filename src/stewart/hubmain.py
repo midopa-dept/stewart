@@ -63,6 +63,7 @@ class HubMainUI(HubUI):
         self.halt_req = threading.Event()     # 화면 [멈춤]: 단계 경계·생성 도중·승인 대기에서 지금 차례를 끊는다
         self.last_user = ""                   # 마지막 사람 말(오류 칸의 [다시 보내기])
         self.on_backend_error = None          # 허브가 모델 서버 감시를 깨우는 고리
+        self.on_backend_ok = None             # 판 127.3: 답을 받으면 모델 점을 바로 "준비됨"으로
         self.err_count: dict = {}
         self.turn_no = 0                      # 지금 차례 번호(답 줄의 👍👎 가 어느 차례인지, 판 89)
         self.imgs: dict = {}                  # 작업 카드 그림 이름 → 파일(판 91, 이 화면이 받은 것만 내준다)
@@ -289,6 +290,14 @@ class HubMainUI(HubUI):
                 self.run_rec.event("approval", what=what[:300], answer=word, secs=round(secs, 1), via=via or "",
                                    prompt=str(prompt or "").strip()[:300])
             except Exception:   # noqa: BLE001 — 기록 실패가 승인을 막지 않게
+                pass
+
+    def backend_ok(self, name: str) -> None:
+        """판 127.3: 모델 서버에서 답을 받았다(chat 이 부른다)."""
+        if self.on_backend_ok is not None:
+            try:
+                self.on_backend_ok(name)
+            except Exception:   # noqa: BLE001
                 pass
 
     def step_usage(self, d: dict) -> None:
@@ -602,6 +611,7 @@ class HubMain:
                                  " · 모델로 한 번 정리하려면 /memory")
             hub.event("memory_migrated", **c)
         self.ui.on_backend_error = lambda kind, text: self.watch.poke(kind if kind in ("down", "loading", "auth") else None, text)
+        self.ui.on_backend_ok = self.watch.reply_ok
         self.ui.sd.set_status(status="idle", run_dir=str(rec.dir))
         self._busy = threading.Lock()
         self._stop = threading.Event()
@@ -1513,6 +1523,7 @@ class HubChat(HubMain):
         self.sess.env.on_quota = main._quota_alert
         self.watch = main.watch
         self.ui.on_backend_error = main.ui.on_backend_error
+        self.ui.on_backend_ok = main.ui.on_backend_ok
         self.ui.sd.set_status(status="idle", run_dir=str(rec.dir))
         self._idle_since = time.monotonic()
         self._busy = threading.Lock()

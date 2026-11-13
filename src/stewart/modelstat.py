@@ -128,6 +128,9 @@ class ModelWatch:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
+        self.reply_ok_at: float | None = None   # 판 127.3: 이 백엔드에서 마지막으로 답을 받은 때(찔러 보기만 실패하는 서버에서 점이 어긋나지 않게)
+
+    REPLY_TRUST_S = 180   # 판 127.3: 찔러 보기가 실패해도 이만큼 안에 답을 받았으면 "준비됨"(찔러 본 결과는 detail 에 남긴다)
 
     def check(self) -> dict:
         try:
@@ -135,12 +138,31 @@ class ModelWatch:
         except Exception as e:   # 감시가 허브를 멈추게 하지 않는다
             st = dict(self.status, state="error", label=LABEL["error"], detail=f"{type(e).__name__}: {e}"[:200],
                       checked=time.time())
+        st = self._trust_reply(st)
         self.status = st
         return st
+
+    def _trust_reply(self, st: dict) -> dict:
+        ago = time.time() - self.reply_ok_at if self.reply_ok_at else None
+        if st.get("state") in ("down", "error", "loading") and ago is not None and ago < self.REPLY_TRUST_S:
+            why = st.get("detail") or st.get("label") or st.get("state")
+            return dict(st, state="ok", label=LABEL["ok"], probe_state=st.get("state"),
+                        detail=f"상태 찔러 보기(GET /models)는 실패({why}) — 그러나 {int(ago)}초 전 답은 받았다")
+        return st
+
+    def reply_ok(self, backend_name: str | None = None) -> None:
+        """판 127.3: 이 백엔드에서 답을 받았다 — 점이 "닿지 않음" 등이면 곧바로 "준비됨"으로(다음 찔러 보기도 이 사실을 안다)."""
+        if backend_name is not None and backend_name != self.backend.name:
+            return
+        self.reply_ok_at = time.time()
+        if self.status.get("state") not in ("ok", "unknown"):
+            self.status = self._trust_reply(dict(self.status, checked=time.time()))
 
     def poke(self, state: str | None = None, detail: str = "") -> None:
         """백엔드 오류 직후: 화면 점을 곧바로 바꾸고(찔러 보기 전에도), 감시를 깨운다."""
         if state:
+            if state in ("down", "loading", "auth", "error"):
+                self.reply_ok_at = None   # 판 127.4: 요청이 실패했다 — 앞서 받은 답을 더 믿지 않는다(다시 찔러 봐도 "준비됨"으로 되돌리지 않게)
             self.status = dict(self.status, state=state, label=LABEL.get(state, state), detail=detail or self.status.get("detail"),
                                checked=time.time())
         self._wake.set()

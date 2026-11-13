@@ -1460,6 +1460,9 @@ class ChatSession:
                         reason = "backend_error"
                     break
                 self.st["model_time_s"] += dt
+                bok = getattr(self.ui, "backend_ok", None)
+                if bok is not None:   # 판 127.3: 허브 모델 점 — 답을 받았으면 "닿지 않음" 이 남지 않게
+                    bok(self.backend.name)
                 choice = (resp.get("choices") or [{}])[0]
                 msg = choice.get("message") or {}
                 usage = resp.get("usage") or {}

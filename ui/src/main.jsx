@@ -16,7 +16,7 @@ import { IconMenu, IconNew, IconChev, IconPanel, IconUpS, IconDown2 } from './ic
 import { TokenLine, SKILLS_RX } from './thread.jsx'
 import { detail, setDetail } from './detail.js'
 import { TABS as PANEL_TABS } from './panel.jsx'
-import { conn } from './state.js'
+import { conn, tick, clockSkew } from './state.js'
 import { place, PlaceName } from './places.jsx'
 import { newChat, workerOpen } from './newchat.jsx'
 import { SettingsSheet, settingsOpen } from './settings.jsx'
@@ -196,7 +196,9 @@ function StatusNote({ inline }) {
   const c = conn.value, m = hub.value?.model, ext = hub.value?.backend?.external
   const bad = []
   if (c.state !== 'ok') bad.push(c.state === 'login' ? '허브 로그인 필요' : c.state === 'retry' ? `허브 다시 붙는 중(${c.tries})` : '허브 붙는 중')
-  if (m && m.state && !['ok', 'unknown'].includes(m.state)) bad.push(`모델 ${m.label}`)
+  tick.value
+  const ago = m?.checked ? Math.max(0, Math.round(Date.now() / 1000 - clockSkew.value - m.checked)) : null   // 판 127.3: 언제 본 상태인가
+  if (m && m.state && !['ok', 'unknown'].includes(m.state)) bad.push(`모델 ${m.label}${ago != null ? ` · ${ago < 60 ? ago + '초' : Math.floor(ago / 60) + '분'} 전 확인` : ''}`)
   if (!bad.length && !ext) return null
   return (
     <div class={(inline ? 'pr-2' : 'px-4 pb-1.5') + ' text-[13px] flex gap-3 items-center'}>

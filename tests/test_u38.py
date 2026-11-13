@@ -120,6 +120,7 @@ class THub(MainBase):
 
     def test_no_extract_when_model_down(self):
         self.main.watch.status = {**self.main.watch.status, "state": "down"}
+        self.main.watch.REPLY_TRUST_S = 0   # 판 127.3: 가짜 서버는 답하지만 이 시험은 "꺼진 서버" 꼴 — 답을 받으면 준비됨으로 올리는 규칙을 끈다
         self.r.scripts["MAIN"] = [msg("네.")]
         self.main.send("보고 끝에는 열린 일을 꼭 정리해 줬으면 해")
         self.assertTrue(self.main.wait_idle())
