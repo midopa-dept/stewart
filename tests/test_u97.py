@@ -69,14 +69,14 @@ class TPastKinds(HU.TWebSessions):
     def test_past_search_kinds(self):
         from stewart.trash import past_search
         runs = self.tmp / "pruns"
-        for i, (wd, word) in enumerate(((self.tmp / "a", "사과"), (self.tmp / "b", "사과나무"))):
+        for i, (wd, word, prof) in enumerate(((self.tmp / "a", "사과", "chat"), (self.tmp / "b", "사과나무", "talk"))):
             d = runs / f"2026111{i}-hub-main"
             d.mkdir(parents=True)
-            (d / "events.jsonl").write_text(json.dumps({"meta": {"workdir": str(wd), "started": "x"}}) + "\n", encoding="utf-8")
+            (d / "events.jsonl").write_text(json.dumps({"meta": {"workdir": str(wd), "started": "x", "profile": prof}}) + "\n", encoding="utf-8")
             (d / "messages.json").write_text(json.dumps([{"role": "user", "content": f"{word} 이야기"}]), encoding="utf-8")
         hits = past_search(runs, [(self.tmp / "a", "code"), (self.tmp / "b", "talk")], "사과")
-        self.assertEqual(sorted(h["kind"] for h in hits), ["code", "talk"])
-        self.assertEqual(len(past_search(runs, self.tmp / "a", "사과")), 1)           # 예전 꼴(폴더 하나)은 그대로
+        self.assertEqual(sorted(h["kind"] for h in hits), ["code", "talk"])           # 종류는 기록의 프로필에서
+        self.assertEqual(len(past_search(runs, self.tmp / "a", "사과")), 2)           # 판 124.2: 폴더로 거르지 않는다
 
 
 if __name__ == "__main__":

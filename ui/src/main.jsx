@@ -60,31 +60,10 @@ function NewMain() {
 }
 
 function Prior() {
-  // 이어 받은(다시 연) 메인의 앞 대화: 접힌 채로, 펼치면 뒤에서부터 80줄씩
-  const run = hub.value?.main_run
-  const [p, setP] = useState(null), [open, setOpen] = useState(false)
-  useEffect(() => {
-    setP(null); setOpen(false)
-    if (run) get('/api/session/conversation?name=' + encodeURIComponent(chat.value) + '&prior=1&limit=80').then(r => setP(r.total ? r : null)).catch(() => {})
-  }, [run])
+  // 판 124.2: 이어 받은 앞 대화는 허브가 대화 줄로 다시 그린다(접힌 상자 대신) — 여기는 이어 받기 안내만
   const note = hub.value?.resume_note
-  if (!p && !note) return null
-  async function more() {
-    const r = await get(`/api/session/conversation?name=${encodeURIComponent(chat.value)}&prior=1&before=${p.start}&limit=80`)
-    setP({ ...p, start: r.start, items: [...r.items, ...p.items] })
-  }
-  return (
-    <div class="border border-dashed border-line rounded-[10px] px-3 py-2 mb-4 text-[13px] text-mute">
-      {p && <button class="w-full text-left" onClick={() => setOpen(!open)}>{open ? '▾' : '▸'} 앞 대화 {p.total}줄(이어 받음) — {open ? '접기' : '펼쳐 보기'}</button>}
-      {note && <div class="mt-0.5">ⓘ {note}</div>}
-      {open && p && <div class="mt-2 text-fg text-[14px] border-t border-line pt-2 max-h-[60vh] overflow-auto">
-        {p.start > 0 && <button class="btn btn-ghost w-full mb-2" onClick={more}>앞 {p.start}줄 더 보기</button>}
-        {p.items.map((it, i) => it.kind === 'assistant' ? <div key={i} class="my-2"><Md text={it.text} /></div>
-          : <div key={i} class={'my-1 whitespace-pre-wrap ' + (it.kind === 'user' ? 'font-semibold' : 'text-mute text-[13px]')}>{it.kind === 'user' ? '사람: ' : it.kind === 'tool' ? '⏺ ' : ''}{it.text.slice(0, 2000)}
-            {it.imgs?.length > 0 && <UserImgs names={it.imgs} />}</div>)}
-      </div>}
-    </div>
-  )
+  if (!note) return null
+  return <div class="border border-dashed border-line rounded-[10px] px-3 py-2 mb-4 text-[13px] text-mute">ⓘ {note}</div>
 }
 
 // 맨 아래에 있었으면 새 글이 와도 맨 아래를 따라간다

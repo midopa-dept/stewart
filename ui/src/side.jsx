@@ -4,6 +4,7 @@ import { get, post, store, USER } from './lib.js'
 import { hub, sessions, queue, view, drawer, refresh, toast, tick, clockSkew, conn, setPanel, chat, cpost, openChat } from './state.js'
 import { NotifToggle } from './notify.jsx'
 import { PlaceName, placeText } from './places.jsx'
+import { ConvList } from './convlist.jsx'
 
 export const STATUS = {
   starting: ['시작하는 중', 'run'], idle: ['쉬는 중', 'ok'], working: ['일하는 중', 'run'], waiting_approval: ['승인 기다림', 'wait'],
@@ -104,7 +105,7 @@ function NewSession({ onClose }) {
   )
 }
 
-function SessionItem({ s }) {
+function SessionItem({ s, label: label0 }) {
   const [label, dot] = STATUS[s.status] || [s.status, '']
   const asks = queue.value.filter(x => x.session === s.name).length
   tick.value
@@ -115,7 +116,7 @@ function SessionItem({ s }) {
   if (now && now.what.startsWith('사람 승인') && !asks) now = null    // 승인 글은 대기열에 실제 건이 있을 때만(같은 출처로 맞춘다)
   const secs = now ? Math.max(0, Math.round(Date.now() / 1000 - clockSkew.value - now.since)) : 0
   const on = view.value === s.name || (s.role === 'main' && view.value === 'main')
-  const name = s.role === 'main' ? '메인' : s.role === 'chat' ? (cinfo?.title || s.title || s.name) : s.name
+  const name = label0 || (s.role === 'main' ? '메인' : s.role === 'chat' ? (cinfo?.title || s.title || s.name) : s.name)
   const mainBusy = conv && !!cinfo?.busy
   return (
     <button class={'mx-2 my-px px-2.5 py-2 rounded-[9px] flex flex-col gap-px text-left w-[calc(100%-16px)] hover:bg-soft ' + (on ? 'bg-soft' : '')}
@@ -176,7 +177,7 @@ function Past() {
   const [more, setMore] = useState(false), [trashOpen, setTrashOpen] = useState(false)
   const load = () => get('/api/past_sessions' + (arch ? '?archived=1' : '')).then(setP).catch(() => {})
   useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t) }, [arch])
-  const rows = [...p.workers, ...p.mains]
+  const rows = [...p.workers, ...(arch ? p.mains : [])]   // 판 124.2: 지난 대화는 위 목록에 — 여기는 작업자·보관함·휴지통
   const n = rows.length
   const picked = rows.filter(x => sel[x.kind + x.key]).map(x => ({ kind: x.kind, key: x.key }))
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) toast(okMsg, 'ok', 4000); setSel({}); setPicking(false); refresh(); load() } catch (e) { toast('안 됨: ' + e.message) } }
@@ -187,7 +188,7 @@ function Past() {
   return (
     <>
       <div class="px-4 pt-3 pb-1 flex items-center gap-1 text-xs text-mute font-semibold tracking-wide">
-        <button class="text-left flex-1" onClick={toggle}>{arch ? '보관함' : '지난 대화'} {n} {open ? '▴' : '▾'}</button>
+        <button class="text-left flex-1" onClick={toggle}>{arch ? '보관함' : n ? '지난 작업자' : '보관함·휴지통'}{n ? ' ' + n : ''} {open ? '▴' : '▾'}</button>
         {open && <button class="hover:text-fg font-normal" onClick={() => { setPicking(!picking); setSel({}) }}>{picking ? '고르기 끝' : '고르기'}</button>}
       </div>
       {open && picking && <div class="mx-3 mb-1.5 flex flex-wrap gap-1.5 text-xs">
@@ -196,13 +197,12 @@ function Past() {
         <button class="btn !py-0.5 !px-2 text-xs" disabled={!picked.length} onClick={() => act(() => manage({ op: arch ? 'unarchive' : 'archive', items: picked }))}>{arch ? '보관 풀기' : '보관'}</button>
         <button class="btn !py-0.5 !px-2 text-xs" onClick={() => { const d = prompt('며칠 넘게 손대지 않은 지난 대화를 모두 휴지통으로 옮길까요? (일 수)', '30'); if (d && +d > 0) act(() => manage({ op: 'delete', older_days: +d }), `${d}일 넘은 것을 휴지통으로`) }}>N일 넘은 것 모두…</button>
       </div>}
-      {open && !arch && <PastSearch />}
       {open && shown.map(x => <PastRow key={x.kind + x.key} x={x} picking={picking} sel={!!sel[x.kind + x.key]} reload={load}
         onSel={() => setSel(s => ({ ...s, [x.kind + x.key]: !s[x.kind + x.key] }))} />)}
       {open && !n && <div class="mx-4 text-xs text-mute py-1">{arch ? '보관한 것 없음' : '없음'}</div>}
       {open && rows.length > LIMIT && <button class="mx-4 text-xs text-mute hover:text-fg py-1" onClick={() => setMore(!more)}>{more ? '접기' : `${rows.length - LIMIT}개 더 보기`}</button>}
       {open && <div class="mx-4 mt-1 flex gap-3 text-xs text-mute">
-        {(p.archived_count > 0 || arch) && <button class="hover:text-fg" onClick={() => { setArch(!arch); setSel({}) }}>{arch ? '← 지난 대화' : `보관함 ${p.archived_count}`}</button>}
+        {(p.archived_count > 0 || arch) && <button class="hover:text-fg" onClick={() => { setArch(!arch); setSel({}) }}>{arch ? '← 지난 작업자' : `보관함 ${p.archived_count}`}</button>}
         {p.trash.length > 0 && <button class="hover:text-fg" onClick={() => setTrashOpen(!trashOpen)}>휴지통 {p.trash.length} {trashOpen ? '▴' : '▾'}</button>}
       </div>}
       {open && trashOpen && p.trash.length > 0 && <div class="mx-3 my-1.5 border border-line rounded-lg p-2 text-[13px]">
@@ -214,20 +214,6 @@ function Past() {
       </div>}
     </>
   )
-}
-
-// 판 112(SW-45 ⑦): 지난 대화 본문 찾기 — 사람 말·모델 답에서 낱말, 맞은 대화를 새 칸으로
-function PastSearch() {
-  const [q, setQ] = useState(''), [hits, setHits] = useState(null)
-  const go = () => { if (q.trim().length < 2) { setHits(null); return } get('/api/past_search?q=' + encodeURIComponent(q.trim())).then(r => setHits(r.hits)).catch(e => toast('안 됨: ' + e.message)) }
-  return <div class="mx-3 mb-1.5">
-    <input class="w-full text-[13px] px-2 py-1 rounded-md border border-line bg-panel" placeholder="지난 대화에서 찾기(두 글자 이상)" value={q}
-      onInput={e => setQ(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter') go() }} />
-    {hits && <div class="mt-1 text-[12.5px]">{hits.length ? hits.map(h => <button key={h.run_dir} class="block w-full text-left px-2 py-1 rounded hover:bg-soft"
-      title="새 대화 칸으로 연다" onClick={() => post('/api/chat/new', { how: 'reopen', run_dir: h.run_dir }).then(r => { openChat(r.chat); refresh() }, e => toast('안 됨: ' + e.message))}>
-      <div class="truncate font-semibold">{h.first || '(첫 말 없음)'}{h.kind ? <span class="text-mute font-normal"> · {KIND_LABEL[h.kind]}</span> : null}</div>
-      <div class="text-mute truncate">{h.role === 'user' ? '사람: ' : '모델: '}{h.snippet}</div></button>) : <div class="text-mute px-2">없음</div>}</div>}
-  </div>
 }
 
 // 점 둘: 허브(이 브라우저 ↔ 허브)와 모델 서버(허브 ↔ 모델 서버, 허브가 실제로 찔러 본 결과). 하나만 보고 "연결됨" 이라 읽지 않게 이름을 붙인다
@@ -341,17 +327,8 @@ export function Sidebar() {
       <Board />
       <button class="mx-3 mb-2 px-3 py-2 rounded-[10px] font-semibold text-left min-h-[44px] hover:bg-soft" onClick={() => setNewOpen(true)}>＋ 새 대화</button>
       <div class="flex-1 overflow-auto scroll-thin pb-2">
-        {/* 판 124: 자리별 묶음 — parlando(대화 자리)와 코드. 묶음 머리만으로 가른다(알약·색 없이) */}
-        {['talk', 'code'].map(k => {
-          const kindOf = x => ((st?.chats || []).find(c => c.name === (x.role === 'main' ? 'main' : x.name)) || {}).kind || 'code'
-          const list = [...(main ? [main] : []), ...chats].filter(x => kindOf(x) === k)
-          if (!list.length) return null
-          return <div key={k}>
-            <div class="px-4 pt-3 pb-1 text-[12.5px] text-mute" title={k === 'talk' ? '묻고, 찾아 읽고, 글이나 파일을 받는다. 프로젝트 폴더는 건드리지 않는다' : '폴더 하나를 맡긴다. 읽고, 고치고, 명령을 돌린다'}>
-              <PlaceName k={k} /></div>
-            {list.map(x => <SessionItem key={x.name} s={x} />)}
-          </div>
-        })}
+        {/* 판 124.2: 열린 칸과 지난 대화를 한 목록에(자리 묶음 안 날짜순) — convlist.jsx */}
+        <ConvList Item={SessionItem} />
         {now.length > 0 && <div class="px-4 pt-2.5 pb-1 text-xs text-mute font-semibold tracking-wide" title="메인(또는 사람)이 일을 맡긴 작업자 — 보고를 메인에 낸다">작업자 · 맡긴 일</div>}
         {now.map(s => <SessionItem key={s.name} s={s} />)}
         <Past />

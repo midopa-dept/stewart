@@ -375,6 +375,48 @@ def _reach(backend) -> str:
     return ""
 
 
+def _replay(ui, messages: list | None) -> None:
+    """판 124.2: 이어 받은 대화(다시 열기·갈래·허브 다시 켜기)의 앞 내용을 화면 기록에 다시 그린다 — 사람 말·도구 한 줄·답.
+    모델 문맥은 그대로(sess.messages), 화면 줄만 만든다. 도구 결과 본문은 다시 그리지 않는다(기록 폴더에 있다)."""
+    from .chat import _arg_summary
+    from .images import text_of
+    for m in messages or []:
+        role = m.get("role")
+        if role == "user":
+            t = _strip_env(text_of(m.get("content"))).strip()
+            if not t or t.startswith("[엔진]"):
+                continue
+            ui._add("hub" if t.startswith("[허브]") else "user", t)
+        elif role == "assistant":
+            t = str(m.get("content") or "").strip() if isinstance(m.get("content"), (str, type(None))) else text_of(m.get("content")).strip()
+            if t:   # 실제 차례처럼 답 글이 먼저, 그 뒤 도구 줄
+                ui._add("assistant", t)
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                ui._add("tool", f"{fn.get('name') or '?'} {_arg_summary(fn.get('name') or '', args if isinstance(args, dict) else {})}")
+
+
+def _conv_brief(sess) -> dict:
+    """판 124.2: 목록 줄에 쓸 첫 사람 말(한 줄)과 마지막으로 손댄 때(기록 파일 시각, 없으면 지금)."""
+    from .images import text_of
+    first = ""
+    for m in getattr(sess, "messages", None) or []:
+        if m.get("role") == "user":
+            t = _strip_env(text_of(m.get("content")))
+            if t and not t.startswith("[엔진]"):
+                first = " ".join(t.split())[:120]
+                break
+    try:
+        last = (Path(sess.rec.dir) / "messages.json").stat().st_mtime
+    except (OSError, AttributeError):
+        last = time.time()
+    return {"first": first, "last": last}
+
+
 def _run_kind(run_dir: Path, default: str) -> str:
     """지난 기록의 종류: 그 기록을 연 프로필의 자리(대화 프로필이면 talk)."""
     from . import surfaces as SF
@@ -454,7 +496,8 @@ class HubMain:
         self.sess = ChatSession(profile, backend, rec, ui=self.ui, stream=True, mode=mode, default_mode="edits",
                                 extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
         if history:
-            self.ui._add("info", f"앞 메인 대화를 이어 받았다({resumed_from}). 새로 시작하려면 허브를 --new-main 으로 띄운다.")
+            _replay(self.ui, history)
+            self.ui._add("meta", f"앞 메인 대화를 이어 받았다({resumed_from}). 새로 시작하려면 허브를 --new-main 으로 띄운다.")
         self.ui.env = self.sess.env
         self.sess.env.on_quota = self._quota_alert   # brave 이달 80%·한도 도달 → 폰·화면(판 61)
         from .modelstat import ModelWatch
@@ -672,17 +715,19 @@ class HubMain:
 
     # ── 지난 세션(U2-3 2c) ──
     def past_mains(self, limit: int = 10) -> list[dict]:
-        """이 프로젝트의 지난 허브 메인 대화(지금 것 빼고, 새것부터): {run_dir, started, first, turns}."""
+        """이 허브의 지난 대화(열린 칸 빼고, 마지막으로 손댄 것부터 — trash.past_mains)."""
         from .trash import past_mains
+        return past_mains(self._runs_dir, Path(self._profile.workdir), str(self.sess.rec.dir), limit=limit, skip=self.open_runs())
+
+    def open_runs(self) -> set[str]:
+        """지금 열린 대화 칸(메인·사람이 연 대화)의 기록 폴더."""
         root = self._root()
-        open_runs = {str(root.sess.rec.dir)} | {str(c.sess.rec.dir) for c in root.chats.values()}   # 지금 열린 대화는 빼고
-        return [x for x in past_mains(self._runs_dir, Path(self._profile.workdir), str(self.sess.rec.dir), limit=limit + len(open_runs))
-                if x["run_dir"] not in open_runs][:limit]
+        return {str(root.sess.rec.dir)} | {str(c.sess.rec.dir) for c in root.chats.values()}
 
     def manager(self):
         """지난 세션 정리(지우기·되돌리기·이름·보관, trash.py)."""
         from .trash import Manager
-        return Manager(self.hub, self._runs_dir, Path(self._profile.workdir), current_main=str(self.sess.rec.dir))
+        return Manager(self.hub, self._runs_dir, Path(self._profile.workdir), current_main=str(self.sess.rec.dir), open_runs=self.open_runs())
 
     def _swap_session(self, history: list | None, resumed_from: str | None) -> str:
         """메인 대화를 새 ChatSession 으로 바꾼다(지금 대화는 기록에 그대로). 부르는 쪽이 _busy 를 잡고 있어야 한다."""
@@ -705,12 +750,16 @@ class HubMain:
     def reopen_main(self, run_dir: str) -> str:
         """지난 메인 대화 하나로 메인을 바꿔 연다(지금 메인 대화는 기록에 그대로 남는다). 일하는 중이면 거절."""
         from .resume import load_messages
-        if run_dir not in {x["run_dir"] for x in self.past_mains(50)}:
+        if run_dir not in {x["run_dir"] for x in self.past_mains(100000)}:
             raise ValueError("지난 메인 대화 목록에 없는 기록")
         if not self._busy.acquire(blocking=False):
             raise RuntimeError("메인이 일하는 중이다. 멈추거나 끝난 뒤 다시 연다")
         try:
-            new = self._swap_session(load_messages(Path(run_dir)), run_dir)
+            hist = load_messages(Path(run_dir))
+            new = self._swap_session(hist, run_dir)
+            with self.ui._lock:
+                self.ui.log.clear()
+            _replay(self.ui, hist)
             self.ui._add("info", f"지난 메인 대화를 다시 열었다({run_dir}).")
             return new
         finally:
@@ -942,10 +991,12 @@ class HubMain:
     def _chat_list(self) -> list[dict]:
         root = self._root()
         tier = (((root._profile.raw or {}).get("tier") or {}).get("name")) or ""
-        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": tier}]
+        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": tier,
+                **_conv_brief(root.sess)}]
         for c in root.chats.values():
             out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir),
-                        "kind": getattr(c, "kind", root.kind), "tier": tier if getattr(c, "kind", root.kind) == root.kind else ""})
+                        "kind": getattr(c, "kind", root.kind), "tier": tier if getattr(c, "kind", root.kind) == root.kind else "",
+                        **_conv_brief(c.sess)})
         return out
 
     def conv(self, name: str | None) -> "HubMain":
@@ -996,7 +1047,7 @@ class HubMain:
             kind = getattr(src, "kind", root.kind)   # 갈래는 원래 대화와 같은 종류
         elif how == "reopen":
             from .resume import load_messages
-            if run_dir not in {x["run_dir"] for x in root.past_mains(50)}:
+            if run_dir not in {x["run_dir"] for x in root.past_mains(100000)}:
                 raise ValueError("지난 대화 목록에 없는 기록")
             history, resumed = load_messages(Path(run_dir)), run_dir
             kind = kind or _run_kind(Path(run_dir), root.kind)
@@ -1276,11 +1327,19 @@ class HubChat(HubMain):
         self._profile, self._backend, self._mode, self._runs_dir = prof, back, main._mode, main._runs_dir
         self._worker_profile, self._worker_backend = main._worker_profile, main._worker_backend
         rec = Recorder(self._runs_dir, "hub-main")
+        if origin == "fork":   # 판 124.2: 갈래는 원래 대화를 숨기지 않는다(지난 대화 목록은 다시 열기만 이어 받은 것으로 본다)
+            try:
+                (Path(rec.dir) / "hub-origin.json").write_text(json.dumps({"how": "fork"}), encoding="utf-8")
+            except OSError:
+                pass
         self.sess = ChatSession(self._profile, self._backend, rec, ui=self.ui, stream=True, mode=self._mode, default_mode="edits",
                                 extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
         if history:
-            self.ui._add("info", f"{'갈라 온' if origin == 'fork' else '다시 연'} 대화다 — 앞 문맥을 이어 받았다({resumed_from}). "
+            _replay(self.ui, history)
+            self.ui._add("meta", f"{'갈라 온' if origin == 'fork' else '다시 연'} 대화다 — 앞 문맥을 이어 받았다({resumed_from}). "
                                  "이제부터는 원래 대화와 서로 독립이다.")
+            if origin == "fork":   # 갈래는 원래 대화가 따로 이어지므로 화면에 한 줄 남긴다(다시 열기는 같은 대화처럼 그대로 이어 쓴다)
+                self.ui._add("info", "여기서 갈라졌다 — 이제부터 원래 대화와 서로 독립이다.")
         self.ui.env = self.sess.env
         self.sess.env.on_quota = main._quota_alert
         self.watch = main.watch

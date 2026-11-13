@@ -30,37 +30,101 @@ def _iso_ts(s: str | None) -> float | None:
         return None
 
 
-def past_mains(runs_dir: Path, project: Path, current: str | None = None, limit: int = 200) -> list[dict]:
-    """이 프로젝트의 지난 허브 메인 대화(지금 것 빼고, 새것부터): {run_dir, started, first, turns}."""
+_INFO: dict[str, tuple] = {}   # 기록 폴더 → ((mtime, 크기), 요약) — 목록을 30초마다 다시 읽어도 바뀐 기록만 연다
+
+
+def _run_info(d: Path) -> dict | None:
+    """기록 하나의 요약: {workdir, profile, started, resumed_from, first, turns, last}. 사람 말이 없거나 못 읽으면 None."""
     from .hubmain import _strip_env
     from .images import text_of
-    proj = str(Path(project).resolve())
+    try:
+        st = (d / "messages.json").stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _INFO.get(str(d))
+    if hit and hit[0] == key:
+        return hit[1]
+    try:
+        with open(d / "events.jsonl", encoding="utf-8") as f:
+            meta = (json.loads(f.readline()).get("meta") or {})
+        msgs = json.loads((d / "messages.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    users = [text_of(m.get("content")) for m in msgs if m.get("role") == "user"]
+    info = None
+    if users:   # 사람 말이 없던 빈 대화는 보이지 않는다
+        first = next((u for u in (_strip_env(x) for x in users) if u and not u.startswith("[엔진]")), "")
+        fork = (d / "hub-origin.json").is_file()   # 갈래(원래 대화도 따로 이어진다) — 원래를 숨기지 않는다
+        info = {"workdir": str(meta.get("workdir") or ""), "profile": meta.get("profile") or "", "started": meta.get("started"),
+                "resumed_from": "" if fork else (meta.get("resumed_from") or ""), "first": " ".join(first.split())[:120], "turns": len(users),
+                "last": st.st_mtime}
+    _INFO[str(d)] = (key, info)
+    return info
+
+
+def _kind_of(profile: str) -> str:
+    from . import surfaces as SF
+    return "talk" if profile == SF.TALK_PROFILE else "code"
+
+
+def past_mains(runs_dir: Path, project: Path | None = None, current: str | None = None, limit: int = 300,
+               skip: set[str] | frozenset = frozenset()) -> list[dict]:
+    """이 허브 기록 폴더의 지난 대화(지금 것·skip 빼고, 마지막으로 손댄 것부터):
+    {run_dir, started, last, first, turns, place(talk·code), folder, here}.
+
+    판 124.2: 작업 폴더로 거르지 않는다 — parlando 대화(대화 프로필 폴더)와 허브를 다른 코드 폴더로 켜던 때의 대화도 보인다
+    (here = 지금 프로젝트 폴더의 대화인가). 다시 연 대화(resumed_from)가 있으면, 그 뒤로 손대지 않은 원래 기록은 숨긴다
+    — 다시 연 쪽이 원래 내용을 모두 담는다(갈래처럼 원래 쪽도 이어 쓴 것은 둘 다 보인다)."""
+    proj = str(Path(project).resolve()) if project else ""
+    rows = []
+    for d in Path(runs_dir).glob("*-hub-main*"):
+        info = _run_info(d)
+        if info is not None:
+            rows.append((str(d), info))
+    hidden = _hidden(rows)
     out = []
-    for d in sorted(Path(runs_dir).glob("*-hub-main*"), reverse=True):
-        if str(d) == current or not (d / "messages.json").is_file():
+    for d, info in sorted(rows, key=lambda r: r[1]["last"], reverse=True):
+        if d == current or d in skip or d in hidden:
             continue
-        try:
-            with open(d / "events.jsonl", encoding="utf-8") as f:
-                meta = (json.loads(f.readline()).get("meta") or {})
-            if str(Path(meta.get("workdir") or "").resolve()) != proj:
-                continue
-            msgs = json.loads((d / "messages.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        users = [text_of(m.get("content")) for m in msgs if m.get("role") == "user"]
-        if not users:   # 사람 말이 없던 빈 대화는 보이지 않는다
-            continue
-        first = next((u for u in (_strip_env(x) for x in users) if u), "")
-        out.append({"run_dir": str(d), "started": meta.get("started"), "first": first[:120], "turns": len(users)})
+        wd = info["workdir"]
+        out.append({"run_dir": d, "started": info["started"], "last": info["last"], "first": info["first"], "turns": info["turns"],
+                    "place": _kind_of(info["profile"]), "folder": Path(wd).name if wd else "",
+                    "here": bool(proj) and bool(wd) and str(Path(wd).resolve()) == proj})
         if len(out) >= limit:
             break
     return out
 
 
+def _hidden(rows: list[tuple[str, dict]]) -> set[str]:
+    """다시 열기로 이어 받은 뒤 손대지 않은 원래 기록들(목록·찾기에서 숨긴다)."""
+    newer: dict[str, float] = {}   # 원래 기록 → 그것을 다시 연 기록이 시작한 때(가장 늦은 것)
+    for _, info in rows:
+        rf = info["resumed_from"]
+        t = _iso_ts(info["started"])
+        if rf and t is not None:
+            newer[rf] = max(newer.get(rf, 0.0), t)
+    return {d for d, info in rows if d in newer and info["last"] <= newer[d] + 1}
+
+
+def superseded(runs_dir: Path, key: str) -> list[str]:
+    """key 가 이어 받은(다시 열기로 숨겨진) 앞 기록들 — 지울 때 함께 옮겨 옛 꼴로 다시 나타나지 않게."""
+    by = {str(d): _run_info(d) for d in Path(runs_dir).glob("*-hub-main*")}
+    out, cur = [], by.get(key)
+    while cur and cur["resumed_from"] and cur["resumed_from"] in by and by[cur["resumed_from"]] and cur["resumed_from"] not in out:
+        prev = by[cur["resumed_from"]]
+        if prev["last"] > (_iso_ts(cur["started"]) or 0) + 1:   # 원래 쪽도 이어 쓴 갈래면 따로 보이는 대화다
+            break
+        out.append(cur["resumed_from"])
+        cur = prev
+    return out
+
+
 class Manager:
-    def __init__(self, hub, runs_dir: Path, project: Path, current_main: str | None = None):
+    def __init__(self, hub, runs_dir: Path, project: Path, current_main: str | None = None, open_runs=frozenset()):
         self.hub, self.runs_dir, self.project = hub, Path(runs_dir), Path(project)
         self.current_main = current_main
+        self.open_runs = set(open_runs)   # 지금 열린 대화 칸들의 기록(지난 목록에 넣지 않는다)
         self.meta_file = Path(hub.dir) / "session-meta.json"
         self.trash_dir = Path(hub.dir) / "trash"
 
@@ -111,7 +175,7 @@ class Manager:
     def mains(self) -> list[dict]:
         meta = self.meta()["mains"]
         out = []
-        for m in past_mains(self.runs_dir, self.project, self.current_main):
+        for m in past_mains(self.runs_dir, self.project, self.current_main, skip=self.open_runs):
             x = meta.get(m["run_dir"], {})
             out.append({**m, "kind": "main", "key": m["run_dir"], "title": x.get("title", ""), "archived": bool(x.get("archived"))})
         return out
@@ -146,8 +210,10 @@ class Manager:
         elif kind == "main":
             if key == self.current_main:
                 raise RuntimeError("지금 메인 대화는 지우지 않는다(다른 대화를 다시 열거나 허브를 --new-main 으로 띄운 뒤)")
-            if key not in {m["run_dir"] for m in past_mains(self.runs_dir, self.project, self.current_main)}:
-                raise ValueError("이 프로젝트의 지난 메인 대화 목록에 없는 기록")
+            if key in self.open_runs:
+                raise RuntimeError("열려 있는 대화다 — 먼저 닫은 뒤 지운다")
+            if key not in {m["run_dir"] for m in past_mains(self.runs_dir, self.project, self.current_main, limit=100000, skip=self.open_runs)}:
+                raise ValueError("이 허브의 지난 대화 목록에 없는 기록")
         else:
             raise ValueError(f"모르는 종류: {kind}")
 
@@ -167,8 +233,9 @@ class Manager:
                 srcs.append(Path(entry["run_dir"]))
             label = meta.get("title") or key
         else:
-            srcs = [Path(key)]
-            first = next((m["first"] for m in past_mains(self.runs_dir, self.project, self.current_main) if m["run_dir"] == key), "")
+            srcs = [Path(key)] + [Path(x) for x in superseded(self.runs_dir, key)]   # 판 124.2: 숨겨진 앞 기록도 함께
+            first = next((m["first"] for m in past_mains(self.runs_dir, self.project, self.current_main, limit=100000, skip=self.open_runs)
+                          if m["run_dir"] == key), "")
             label = meta.get("title") or (f"메인 · {first}" if first else Path(key).name)
         for i, src in enumerate(srcs):
             if src.exists():
@@ -235,19 +302,18 @@ class Manager:
 
 
 def past_search(runs_dir: Path, project, q: str, limit: int = 30, scan: int = 300) -> list[dict]:
-    """판 112(SW-45 ⑦, 사람용): 이 프로젝트의 지난 허브 대화에서 사람 말·모델 답 글을 낱말로 찾는다(대소문자 무시).
+    """판 112(SW-45 ⑦, 사람용): 이 허브의 지난 대화에서 사람 말·모델 답 글을 낱말로 찾는다(대소문자 무시).
     {run_dir, started, first, role, snippet[, kind]}. 모델 문맥과 무관(화면 검색).
-    판 120: project 에 [(폴더, 종류), …] 를 주면 여러 폴더(대화 칸·코드 칸)를 함께 찾고 결과에 kind 를 단다."""
+    판 124.2: 작업 폴더로 거르지 않는다(project 는 옛 부름 꼴 맞춤으로만 받는다), kind 는 기록의 프로필에서."""
     from .hubmain import _strip_env
     from .images import text_of
     q = " ".join(str(q or "").split()).lower()
     if len(q) < 2:
         return []
-    kinds = ({str(Path(x).resolve()): k for x, k in project} if isinstance(project, (list, tuple))
-             else {str(Path(project).resolve()): None})
     out, n = [], 0
-    for d in sorted(Path(runs_dir).glob("*-hub-*"), reverse=True):
-        if not (d / "messages.json").is_file():
+    hidden = _hidden([(str(d), i) for d in Path(runs_dir).glob("*-hub-main*") if (i := _run_info(d)) is not None])
+    for d in sorted(Path(runs_dir).glob("*-hub-main*"), reverse=True):
+        if not (d / "messages.json").is_file() or str(d) in hidden:
             continue
         n += 1
         if n > scan:
@@ -255,9 +321,6 @@ def past_search(runs_dir: Path, project, q: str, limit: int = 30, scan: int = 30
         try:
             with open(d / "events.jsonl", encoding="utf-8") as f:
                 meta = (json.loads(f.readline()).get("meta") or {})
-            wdk = str(Path(meta.get("workdir") or "").resolve())
-            if wdk not in kinds:
-                continue
             msgs = json.loads((d / "messages.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
@@ -270,7 +333,7 @@ def past_search(runs_dir: Path, project, q: str, limit: int = 30, scan: int = 30
             i = t.lower().find(q)
             if i < 0 or t.startswith("[엔진]"):
                 continue
-            out.append({"run_dir": str(d), "started": meta.get("started"), "first": first[:80], "role": m["role"], **({"kind": kinds[wdk]} if kinds[wdk] else {}),
+            out.append({"run_dir": str(d), "started": meta.get("started"), "first": first[:80], "role": m["role"], "kind": _kind_of(meta.get("profile") or ""), "folder": Path(str(meta.get("workdir") or "")).name,
                         "snippet": ("…" if i > 40 else "") + t[max(0, i - 40):i + len(q) + 60] + ("…" if i + len(q) + 60 < len(t) else "")})
             break   # 대화마다 첫 맞음 하나
         if len(out) >= limit:
