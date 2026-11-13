@@ -181,6 +181,8 @@ uv run stewart hub --project ~/my-project
 - How many workers run at once is set by the model server's concurrent-request setting (the backend's `concurrency`). A tier's `max` can lower it further.
 - If a tier's server cannot be reached, it does not fall back to the default model. A worker notes this and ends; with `--tier` the hub says so at startup. Unknown tiers are refused, listing the ones that exist.
 - Thinking fields: `think`, `think_max_tokens` and `think_max_tokens_first`, `reasoning_effort` and `reasoning_effort_at`, `think_sampling`. The same can be set with `STEWART_THINK_*` and `STEWART_REASONING_*` environment variables. Environment variables win over tiers, and tiers over profiles.
+  - Effort words differ by the server's chat template. If a backend lists `effort_values = [...]` (the words that template accepts), other values are reported at startup and not sent. If it does not, the value is sent as is, and a template that does not know it may silently treat it as another level.
+  - Experimental knobs: `thinking_token_budget` (server thinking budget, as a tier field or `STEWART_THINKING_TOKEN_BUDGET`) and `reasoning_passback` (tier field; the `STEWART_REASONING_PASSBACK` environment variable wins).
 - A tier's context budget is the compaction window for both a main seated with `--tier` and workers started on that tier. Runs without a tier behave as before.
 - Tags read "seat · tier" (worker 3 · `presto` / main · `largo`).
 

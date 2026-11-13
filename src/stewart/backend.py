@@ -541,7 +541,7 @@ def _send(backend: Backend, body: dict, overrides: dict | None):
                                           f"키체인 항목 {backend.api_key_keychain}" if getattr(backend, "api_key_keychain", None) else "") if x)
         raise BackendError(f"API 키가 없다: {where}", 401, "")
     for k in backend.dropped_params:
-        body.pop(k, None)
+        _drop(body, k)
     n = retries_for(backend)
     gen = (_ABORT_GEN[0], _SCOPE_GEN.get(_scope(), 0))
     _RETRY.log = []
@@ -559,16 +559,34 @@ def _send(backend: Backend, body: dict, overrides: dict | None):
     raise AssertionError("닿지 않음")
 
 
+TPL_EFFORT = "chat_template_kwargs.reasoning_effort"   # 판 123: template 자리에 실은 노력(점 = 안쪽 칸)
+
+
+def _drop(body: dict, k: str) -> None:
+    """요청 본문에서 칸 하나를 뺀다. "a.b" 는 body[a] 안의 b(공유 dict 를 고치지 않게 사본으로 바꾼다)."""
+    if "." in k:
+        a, b = k.split(".", 1)
+        if isinstance(body.get(a), dict) and b in body[a]:
+            body[a] = {x: y for x, y in body[a].items() if x != b}
+        return
+    body.pop(k, None)
+
+
 def _send_once(backend: Backend, body: dict, overrides: dict | None):
     from .think import SAMPLING_KEYS
     try:
         return _open(backend, "/chat/completions", body, backend.timeout_s)
     except BackendError as e:
-        bad = [k for k in (overrides or {}) if k in SAMPLING_KEYS + ("reasoning_effort",) and k in body and k in (e.body or "")]
+        text = e.body or ""
+        bad = [k for k in (overrides or {}) if k in SAMPLING_KEYS + ("reasoning_effort", "thinking_token_budget") and k in body and k in text]
+        ctk = (overrides or {}).get("chat_template_kwargs")
+        if isinstance(ctk, dict) and "reasoning_effort" in ctk and "reasoning_effort" in text \
+                and "reasoning_effort" in (body.get("chat_template_kwargs") or {}):
+            bad.append(TPL_EFFORT)
         if e.status not in (400, 422) or not bad:
             raise
         for k in bad:
-            body.pop(k, None)
+            _drop(body, k)
             if k not in backend.dropped_params:
                 backend.dropped_params.append(k)
         return _open(backend, "/chat/completions", body, backend.timeout_s)

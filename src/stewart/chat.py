@@ -390,7 +390,7 @@ class ChatSession:
         from . import toolrepair as TR   # 견고성(판 81): 본문 툴콜·깨진 인자 복구·편집 되먹임(실사용 켬), 생각 되돌려 보내기(기본 끔)
         self.repair_on = TR.on("STEWART_TOOLCALL_REPAIR", True)
         self.edit_fb = TR.on("STEWART_EDIT_FEEDBACK", True)
-        self.passback = TR.passback()
+        self.passback = TR.passback(default=((getattr(profile, "raw", None) or {}).get("tier") or {}).get("think", {}).get("reasoning_passback"))
         if self.mem is not None and self.mem.md():   # 자료 기억(판 83)은 doc_search(source="memory")로 찾는다
             self.env.memory_knowledge_dir = self.mem.store.dir / "knowledge"
         if self.mem is not None:   # 웹 글 캐시(판 64): 받은 본문을 기억 폴더에 남겨 doc_search 로 다시 찾게(30일·200개)
@@ -421,6 +421,10 @@ class ChatSession:
         self.messages: list[dict] = prepare(history, system) if history else [{"role": "system", "content": system}]
         self.bd = BND.from_profile(profile)   # 작업 폴더 경계(밖 쓰기는 모드와 관계없이 묻는다)
         self.tks = TH.settings(profile)   # 생각 켬 차례의 상한·샘플링 손잡이
+        eff_note = TH.check_effort(self.tks, backend)   # 판 123: 이 백엔드가 받지 않는 노력 낱말은 보내지 않고 시작할 때 알린다
+        if eff_note:
+            self.ui.warn("  " + eff_note)
+            rec.event("think_effort_rejected", **self.tks["effort_rejected"])
         self._pmark = 0                   # 마지막 응답 때의 메시지 수(프롬프트 어림용)
         self.summary_on = os.environ.get("STEWART_SUMMARY") != "0"   # 요약 접기 자동(판 65, chat·허브). 시험 묶음은 끔
         self.ctx = sync_context(backend)    # 실제 문맥 길이 = 서버 max_model_len(있으면). 다르면 시작 화면에 경고

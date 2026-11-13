@@ -31,10 +31,17 @@ def on(knob: str, interactive: bool, env=None) -> bool:
     return v == "1" if v in ("0", "1") else bool(interactive)
 
 
-def passback(env=None) -> str:
+PASSBACK_MODES = ("off", "tool_turns", "current_turn", "all")
+
+
+def passback(env=None, default: str | None = None) -> str:
+    """환경 STEWART_REASONING_PASSBACK 가 이긴다. 없으면 default(등급 think 칸 reasoning_passback — 판 123), 그것도 없으면 off."""
     env = os.environ if env is None else env
-    v = (env.get("STEWART_REASONING_PASSBACK") or "off").strip().lower()
-    return v if v in ("off", "tool_turns", "current_turn", "all") else "off"
+    v = env.get("STEWART_REASONING_PASSBACK")
+    if v is None:
+        v = default or "off"
+    v = str(v).strip().lower()
+    return v if v in PASSBACK_MODES else "off"
 
 
 def keep_reasoning(mode: str, think: str | None, has_calls: bool) -> bool:

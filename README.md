@@ -183,6 +183,8 @@ uv run stewart hub --project ~/my-project
 - 작업자를 동시에 몇이나 돌릴지는 모델 서버의 동시 요청 설정(백엔드 `concurrency`)이 정합니다. 등급의 `max` 로 더 줄일 수 있습니다.
 - 등급의 서버에 닿지 못하면 기본 모델로 대신 돌리지 않습니다. 작업자는 그 사실을 적고 끝나고, `--tier` 로 켜면 시작할 때 알립니다. 표에 없는 등급은 거절하고 있는 등급을 보여 줍니다.
 - 생각 칸: `think`, `think_max_tokens`·`think_max_tokens_first`, `reasoning_effort`·`reasoning_effort_at`, `think_sampling`. 같은 것을 `STEWART_THINK_*`·`STEWART_REASONING_*` 환경 변수로도 줍니다. 환경 변수가 등급보다, 등급이 프로필보다 앞섭니다.
+  - 노력 낱말은 서버의 대화 틀마다 다릅니다. 백엔드에 `effort_values = [...]`(그 틀이 받는 낱말)를 적으면 밖의 값은 시작할 때 알리고 보내지 않습니다. 적지 않으면 그대로 보내는데, 틀이 모르는 값은 오류 없이 다른 수준으로 처리될 수 있습니다.
+  - 실험 손잡이: `thinking_token_budget`(서버 생각 예산 — 등급 칸 또는 `STEWART_THINKING_TOKEN_BUDGET`), `reasoning_passback`(등급 칸 — 환경 변수 `STEWART_REASONING_PASSBACK` 이 이깁니다).
 - 등급의 문맥 예산은 그 등급의 메인(`--tier`)과 작업자 모두의 압축 창입니다. 등급 없이 도는 실행은 예전 그대로입니다.
 - 꼬리표는 "자리 · 등급"으로 읽습니다(작업자 3 · `presto` / 메인 · `largo`).
 

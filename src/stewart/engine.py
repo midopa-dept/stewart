@@ -403,6 +403,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     last_todo_step = last_remind_step = 0
     review_paths: set[str] = set()      # 요구 대조 뒤에 도구로 바꾼 파일
     tks = TH.settings(profile)   # 생각 켬 차례의 상한·샘플링 손잡이(기본은 없음 = 백엔드 params 그대로)
+    eff_note = TH.check_effort(tks, backend)   # 판 123: 이 백엔드가 받지 않는 노력 낱말은 보내지 않고 알린다
+    if eff_note:
+        print(f"stewart: 경고 — {eff_note}", file=sys.stderr)
     ctx = sync_context(backend)          # 실제 문맥 길이 = 서버 max_model_len(있으면) — 접기 판단·기록 모두 이 값
     if ctx["warn"]:
         print(f"stewart: 경고 — {ctx['warn']}", file=sys.stderr)
@@ -468,7 +471,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                                        tool_defs, "run", {"selfcheck": {k: v for k, v in _SCK.flags(profile).items() if k in _SCK.ENVS},
                                                           "repair": _TRK.on("STEWART_TOOLCALL_REPAIR", False),
                                                           "edit_feedback": _TRK.on("STEWART_EDIT_FEEDBACK", False),
-                                                          "passback": _TRK.passback(),
+                                                          "passback": _TRK.passback(default=((getattr(profile, "raw", None) or {}).get("tier") or {}).get("think", {}).get("reasoning_passback")),
                                                           **({"tier": {"name": tier.get("name"), "budget_source": "tier" if tier.get("budget") else None,
                                                                        "think": tier.get("think") or {}}} if tier else {})})
     rec.event("run_start", meta=meta, messages=messages)
@@ -512,7 +515,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     rf = RF.settings(profile, interactive=False) if not parent else {**RF.settings(profile, False), "on": False}   # 작업자는 끔
     rstate = RF.State()
     from . import toolrepair as TR   # 견고성(판 81): 평가 길은 기본 끔(등록 판 보호) — STEWART_TOOLCALL_REPAIR·EDIT_FEEDBACK=1 로 켬
-    repair_on, edit_fb, passback = TR.on("STEWART_TOOLCALL_REPAIR", False), TR.on("STEWART_EDIT_FEEDBACK", False), TR.passback()
+    repair_on, edit_fb, passback = TR.on("STEWART_TOOLCALL_REPAIR", False), TR.on("STEWART_EDIT_FEEDBACK", False), \
+        TR.passback(default=((getattr(profile, "raw", None) or {}).get("tier") or {}).get("think", {}).get("reasoning_passback"))
     st["toolcall_repaired"] = {}
     fail_steps: list[list[dict]] = []   # 모두 실패한 단계들의 호출(성공 단계가 오면 비움) — 되짚기의 거부만 판정
     recent_fail: list[dict] = []        # 최근 실패 호출(되짚기에 붙일 사실)

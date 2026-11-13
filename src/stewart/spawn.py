@@ -43,14 +43,16 @@ DEFINITION = {"type": "function", "function": {
 
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
 TIER_KEYS = ("backend", "profile", "budget", "max", "use", "default_for", "slim", "slim_keep", "slim_system",
-             "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling")
-THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling")
+             "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling", "thinking_token_budget", "reasoning_passback")
+THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling",
+              "thinking_token_budget", "reasoning_passback")
 
 
 def load_tiers(path=None, main: bool = False) -> dict:
     """backends 표에서 등급. 없으면 {}(등급 없이 지금 백엔드). slim 은 메인(--tier)으로 앉힐 때만 뜻이 있다 — 작업자 목록에도 남는다(판 115).
     판 116: 아는 칸이 하나라도 있으면 등급이다 — backend 를 안 적으면 기본 모델을 물려받는다. max 를 안 적으면 None(그 백엔드의 동시 수를 따른다).
-    생각 칸(think·think_max_tokens·think_max_tokens_first·reasoning_effort·reasoning_effort_at·think_sampling)은 안 적으면 지금과 같다.
+    생각 칸(think·think_max_tokens·think_max_tokens_first·reasoning_effort·reasoning_effort_at·think_sampling·
+    thinking_token_budget·reasoning_passback — 판 123)은 안 적으면 지금과 같다.
     main 인자는 예전 호출과 맞추려고 남긴다."""
     import tomllib
     from .config import ConfigError, backends_path

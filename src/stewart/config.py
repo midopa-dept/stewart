@@ -61,6 +61,7 @@ class Backend:
     price: dict = field(default_factory=dict)  # {input, output, cache_read?} 달러/1M 토큰 — 있으면 응답 usage 에 cost_usd
     used: dict = field(default_factory=lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost_usd": 0.0,
                                                  "cache_hit": 0, "cache_seen": 0})   # 이 프로세스 누계(화면). cache_seen = 캐시 칸을 준 호출의 입력 토큰
+    effort_values: list | None = None   # 판 123: 이 서버의 대화 틀이 받는 reasoning_effort 낱말. 적으면 밖의 값은 시작할 때 알리고 보내지 않는다
     retries: int | None = None  # 429·5xx·연결 끊김에 다시 보낼 횟수. None 이면 실사용(chat·허브) 4·평가(run) 0. STEWART_BACKEND_RETRIES 가 이긴다
     adapters: dict = field(default_factory=dict)   # 판 96: LoRA 어댑터 판 이름 → 서버 쪽 이름(vLLM --lora-modules 이름) 또는 llama.cpp 어댑터 번호
     adapter: str = ""            # 지금 쓰는 판(비면 기반 모델). STEWART_ADAPTER=<판>|off 가 이긴다
@@ -177,6 +178,15 @@ def keychain_secret(service: str) -> str | None:
     return _KEYCHAIN[service]
 
 
+def _effort_values(path, name, v) -> list | None:
+    """backends.<이름>.effort_values: 낱말 목록(소문자로). 없으면 None(틀이 모르는 값도 그대로 보낸다)."""
+    if v is None:
+        return None
+    if not isinstance(v, list) or not v or not all(isinstance(x, str) and x.strip() for x in v):
+        raise ConfigError(f"{path}: backends.{name}.effort_values 는 낱말 목록(예: [\"low\", \"medium\"])")
+    return [x.strip().lower() for x in v]
+
+
 def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
     path = Path(path) if path else backends_path()
     data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -206,6 +216,7 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str]:
                 thinking_control=str(b.get("thinking_control") or "chat_template"),
                 price=dict(b.get("price") or {}),
                 retries=(int(b["retries"]) if b.get("retries") is not None else None),
+                effort_values=_effort_values(path, name, b.get("effort_values")),
                 context_budget=(int(b["context_budget"]) if b.get("context_budget") else None),
                 adapters=dict(b.get("adapters") or {}),
                 adapter=str(b.get("adapter") or ""),

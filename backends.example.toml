@@ -32,6 +32,9 @@ concurrency = 8
 enabled = true
 api_key_env = "STEWART_CLOUD_API_KEY" # vLLM --api-key 를 쓰면 그 값을 담은 환경변수 이름(비어 있으면 키 없이 보냄)
 timeout_s = 240                       # 한 요청 상한. 큰 파일 쓰기가 잘리지 않게 max_tokens 와 짝
+# effort_values = ["xhigh", "medium", "low"]   # 이 서버의 대화 틀이 받는 노력(reasoning_effort) 낱말 — 틀마다 다르다(이 모델 계열은 셋).
+#                                     # 적으면 밖의 값(예: "high")은 시작할 때 알리고 보내지 않는다. 안 적으면 그대로 보내는데,
+#                                     # 틀이 모르는 값은 오류 없이 다른 수준(기본)으로 처리될 수 있다.
 
 [backends.cloud.params]
 temperature = 0.2
