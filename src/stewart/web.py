@@ -422,6 +422,8 @@ class WebApp:
                 self._notice(f"사람이 현황판 {t['id']}({t['title']})을 {'했다' if st == 'done' else '안 하기로 했다'}" +
                              (f": {t['outcome']}" if t.get("outcome") else ""))
                 return self._json(h, 200, {"ok": True})
+            if path.startswith("/api/settings/"):   # 판 125: 설정 시트 고치기(파일이 정본 — 백업·검사 뒤 쓴다)
+                return self.settings_post(h, path, data)
             if path in ("/api/main/stop", "/api/main/compact", "/api/main/new", "/api/main/reopen", "/api/chat/new", "/api/chat/close", "/api/main/unban"):
                 try:   # 어느 대화인가(SW-29): body 의 chat(없으면 메인)
                     cv = self.main.conv(data.get("chat") if isinstance(data.get("chat"), str) else None)
@@ -432,7 +434,8 @@ class WebApp:
                 try:
                     c = self.main.new_chat(str(data.get("how") or "fresh"), source=str(data.get("from") or "main"),
                                            run_dir=str(data.get("run_dir") or ""), title=str(data.get("title") or "")[:80],
-                                           kind=data.get("kind") if data.get("kind") in ("talk", "code") else None)
+                                           kind=data.get("kind") if data.get("kind") in ("talk", "code") else None,
+                                           tier=data.get("tier") if isinstance(data.get("tier"), str) and data.get("tier") else None)
                 except (ValueError, KeyError) as e:
                     return self._json(h, 400, {"error": "chat", "detail": str(e)})
                 except RuntimeError as e:
@@ -562,6 +565,10 @@ class WebApp:
         if path == "/api/files":      # 입력 칸 @파일: 작업 폴더 안 파일 이름(비밀 파일·.gitignore 빼고)
             q = (parse_qs(url.query).get("q") or [""])[0]
             return self._json(h, 200, {"files": self.file_names(q, self._conv_q(url))})
+        if path == "/api/tiers":   # 판 125: 등급 표(새 대화 고르기·설정 시트) — 키 값은 없다
+            return self._json(h, 200, self.main.tier_rows(probe=True))
+        if path == "/api/settings":   # 판 125: 설정 시트 — 등급 표·백엔드 목록·고칠 수 있나(키 값은 없다)
+            return self._json(h, 200, self.settings_view())
         if path == "/api/past_sessions":
             return self._json(h, 200, self.past_sessions(archived=(parse_qs(url.query).get("archived") or ["0"])[0] == "1"))
         if path == "/api/test_commands":
@@ -815,6 +822,84 @@ class WebApp:
         mains = [m for m in allm if m["archived"] == archived]
         n_arch = sum(1 for w in mg.workers() if w["archived"]) + sum(1 for m in allm if m["archived"])
         return {"workers": workers, "mains": mains, "archived_count": n_arch, "trash": mg.trash()}
+
+    def settings_view(self) -> dict:
+        from . import settings as ST
+        from . import tomledit as TE
+        from .config import ConfigError, backends_path, load_backends
+        ok, why = ST.editable()
+        if self.accounts is not None:
+            ok, why = False, "사람별 허브는 설정을 화면에서 고치지 않는다 — 허브를 켜는 사람이 `stewart setup` 으로"
+        bp = backends_path()
+        try:
+            bks, default = load_backends()
+        except (OSError, ConfigError):
+            bks, default = {}, ""
+        return {"file": bp.name, "backups": len(TE.backups(bp)), "editable": ok, "why": why, "default": default,
+                **self.main.tier_rows(probe=True),
+                "backends": [{"name": n, "base_url": b.base_url, "model": b.model, "concurrency": b.concurrency, "max_context": b.max_context,
+                              "external": b.external(), "provider": b.provider if b.provider else "",
+                              "keychain": b.api_key_keychain or "", "key_env": b.api_key_env or ""} for n, b in bks.items()]}
+
+    def settings_post(self, h, path: str, data: dict) -> None:
+        from . import settings as ST
+        from . import tomledit as TE
+        from .config import backends_path, load_backends
+        view = self.settings_view()
+        if not view["editable"]:
+            return self._json(h, 409, {"error": "settings", "detail": view["why"]})
+        bp = backends_path()
+        try:
+            if path == "/api/settings/tier":
+                tier, backend = data.get("tier"), data.get("backend")
+                bf, tf = data.get("backend_fields") or {}, data.get("tier_fields") or {}
+                if not isinstance(bf, dict) or not isinstance(tf, dict):
+                    return self._json(h, 400, {"error": "fields"})
+                if bf.get("base_url") and not data.get("confirm_outside"):
+                    from .config import Backend   # 바깥 주소로 바꾸는 저장은 화면이 한 번 더 받은 뒤에만(confirm_outside)
+                    if Backend(name="x", base_url=str(bf["base_url"]), model="x", precision="?", max_context=1, provider=str(bf.get("provider") or "")).external():
+                        return self._json(h, 409, {"error": "outside", "detail": "바깥 주소다 — 이 등급 대화의 글·읽은 파일 내용이 그 주소로 나간다. 확인한 뒤 다시"})
+                r = ST.edit(bp, tier if isinstance(tier, str) else None, tf, backend if isinstance(backend, str) else None, bf)
+                self.main._root().__dict__.pop("_tier_probe", None)
+                self._notice(f"사람이 설정 시트에서 backends 표를 고쳤다({tier or backend}) — 새 대화·새 작업자부터")
+                return self._json(h, 200, {"ok": True, **r, "view": self.settings_view()})
+            if path == "/api/settings/key":
+                tier, value = data.get("tier"), data.get("value")
+                if not isinstance(tier, str) or not isinstance(value, str):
+                    return self._json(h, 400, {"error": "fields"})
+                row = next((r for r in view["rows"] if r["tier"] == tier and r.get("connected")), None)
+                if row is None:
+                    return self._json(h, 404, {"error": "settings", "detail": f"등급 {tier} 에 연결된 백엔드가 없다"})
+                bks, _ = load_backends()
+                b = bks[row["backend"]]
+                svc = b.api_key_keychain or f"stewart-{b.name}"
+                ST.keychain_put(svc, value.strip())
+                if not b.api_key_keychain:
+                    ST.edit(bp, backend=b.name, backend_fields={"api_key_keychain": svc})
+                self.main._root().__dict__.pop("_tier_probe", None)
+                self._notice(f"사람이 설정 시트에서 등급 {tier} 의 키를 키체인({svc})에 넣었다(값은 기록하지 않음)")
+                return self._json(h, 200, {"ok": True, "keychain": svc, "view": self.settings_view()})
+            if path == "/api/settings/revert":
+                src = TE.revert(bp)
+                self.main._root().__dict__.pop("_tier_probe", None)
+                self._notice("사람이 설정 시트에서 backends 표를 바로 앞 백업으로 되돌렸다")
+                return self._json(h, 200, {"ok": True, "from": src.name, "view": self.settings_view()})
+            if path == "/api/settings/probe":   # [불러오기]: 그 주소의 GET /models 로 모델 이름·문맥
+                import dataclasses as _dc
+                from . import backend as B
+                from .config import Backend
+                url = str(data.get("base_url") or "").rstrip("/")
+                if not url.startswith(("http://", "https://")):
+                    return self._json(h, 400, {"error": "fields"})
+                bk = Backend(name="probe", base_url=url, model="?", precision="?", max_context=8192, timeout_s=5)
+                names, _ = B.models(bk, timeout=4)
+                ctx = B.served_context(_dc.replace(bk, model=names[0]), timeout=4) if names else None
+                return self._json(h, 200, {"ok": True, "models": names[:20], "max_context": ctx})
+        except ValueError as e:
+            return self._json(h, 409, {"error": "settings", "detail": str(e)})
+        except Exception as e:   # noqa: BLE001 — 찌르기 실패 등은 까닭만
+            return self._json(h, 409, {"error": "settings", "detail": str(e)[:200]})
+        return self._json(h, 404, {"error": "not_found"})
 
     def manage_sessions(self, h, data: dict) -> None:
         """지난 세션 정리: op = delete(휴지통으로) · restore · empty · rename · archive · unarchive.

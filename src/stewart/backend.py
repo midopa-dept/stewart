@@ -156,9 +156,19 @@ def _body(backend: Backend, messages, tools=None, response_format=None, **extra)
     return body
 
 
+def _spend_before(backend) -> None:
+    """판 125: 바깥 등급의 돈 상한(spend.py) — 넘었으면 보내지 않는다."""
+    sp = getattr(backend, "spend", None)
+    if sp is not None:
+        sp.before()
+
+
 def count_use(backend: Backend, data: dict) -> None:
     """이 프로세스에서 이 백엔드로 보낸 호출 수·토큰 누계(허브 화면 — 바깥 API 의 무료 한도·과금 대비)."""
     u = (data.get("usage") if isinstance(data, dict) else None) or {}
+    sp = getattr(backend, "spend", None)
+    if sp is not None:   # 판 125: 하루·대화 누계
+        sp.after(u)
     used = getattr(backend, "used", None)
     if used is None:
         return
@@ -604,6 +614,7 @@ def chat(
     """요청 1회. (응답 JSON, 소요 초)를 돌려준다. 소요 초에는 상한 대기 시간이 들어가지 않는다.
     max_tokens 가 있으면 백엔드 params 의 값을 덮어쓴다(프로필 max_tokens).
     thinking 이 None 이 아니면 chat_template_kwargs.enable_thinking 을 그 값으로 덮어쓴다(chat /think)."""
+    _spend_before(backend)
     if getattr(backend, "kind", "openai") == "anthropic":   # Messages API(판 69)
         from . import anthropic_backend as AB
         with slot(backend):
@@ -847,6 +858,7 @@ def chat_stream(
     """chat() 과 같은 (응답, 초)를 돌려주지만 스트리밍으로 받는다. on_delta(본문 조각, 생각 조각)를 조각마다 부른다.
     on_first() 는 첫 조각(본문·생각·툴콜 무엇이든)이 왔을 때 한 번 부른다(첫 토큰까지 시간).
     도중에 KeyboardInterrupt 가 나면 연결을 바로 닫고(서버도 생성을 멈춘다) 받은 데까지를 e.partial 에 붙여 다시 던진다."""
+    _spend_before(backend)
     if getattr(backend, "kind", "openai") == "anthropic":   # Messages API(판 69)
         from . import anthropic_backend as AB
         with slot(backend):

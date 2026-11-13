@@ -8,7 +8,7 @@ import { get, post, fmtK, estTokens } from './lib.js'
 import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
 import { Thread, Md, TodoItems, UserImgs } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
-import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips, kindTag } from './side.jsx'
+import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips, kindTag, NewSession } from './side.jsx'
 import { Panel } from './panel.jsx'
 import { useWorker, WorkerThread, WorkerControls, WorkerInfo } from './worker.jsx'
 import { narrow, convSheet } from './mobile.js'
@@ -16,6 +16,8 @@ import { IconMenu, IconNew, IconChev, IconPanel } from './icons.jsx'
 import { TokenLine } from './thread.jsx'
 import { conn } from './state.js'
 import { place, PlaceName } from './places.jsx'
+import { newChat, workerOpen } from './newchat.jsx'
+import { SettingsSheet, settingsOpen } from './settings.jsx'
 
 // 한 칸이 그리다 깨져도 화면 전체가 멈추지 않게: 그 칸만 "못 그렸다 + 다시"로 바꾼다(승인 칸이 안 보이던 일의 재발 막기)
 class Guard extends Component {
@@ -99,12 +101,14 @@ function Center() {
   const w = useWorker(isMain ? '' : v)
   const [ref, onScroll] = useStick()
   useEffect(() => { if (isMain && chat.value !== v) openChat(v) }, [v])
-  const title = v === 'main' ? '메인' : conv ? conv.title : `작업자 ${v}`
+  const title = v === 'main' ? '메인' : conv ? ((/^(새 대화|대화 \d+)$/.test(conv.title || '') && conv.first) || conv.title) : `작업자 ${v}`   // 판 125: 새 대화는 첫 말을 이름으로
   const main = sessions.value.find(s => s.role === 'main')
   return (
     <main class="flex flex-col min-w-0 h-full relative">
       {st?.hub_color && <div class="h-1.5 w-full flex-none" style={`background:${safeColor(st.hub_color)}`} title={st.hub_label || ''} />}
       <MobileHead title={title} isMain={isMain} conv={conv} w={!isMain ? v : null} />
+      {workerOpen.value && <NewSession onClose={() => { workerOpen.value = false }} />}
+      {settingsOpen.value && <SettingsSheet />}
       <div class="flex-1 overflow-auto scroll-thin" ref={ref} onScroll={onScroll}>
         <div class="max-w-[760px] mx-auto px-6 max-md:px-4 pt-6 max-md:pt-3 pb-10 [overflow-wrap:anywhere]">
           <Guard key={v} name="대화">{isMain ? <Thread log={st?.main_log || []} prior={<Prior />} /> : <WorkerThread name={v} {...w} />}</Guard>
@@ -140,7 +144,7 @@ function MobileHead({ title, isMain, conv, w }) {
         </button>
         <span class="flex-1 max-md:hidden" />
         <span class="max-md:hidden"><StatusNote inline /></span>
-        {isMain ? <button class="ibtn" disabled={st?.busy} onClick={newMain} aria-label="새 대화" title="새 대화"><IconNew /></button>
+        {isMain ? <button class="ibtn" onClick={newChat} aria-label="새 대화" title="새 대화"><IconNew /></button>
           : <span class="w-11" />}
         <button class={'ibtn max-md:hidden ' + (panel.value ? 'bg-soft' : '')} onClick={() => setPanel(panel.value ? null : (isMain ? 'steps' : 'session'))}
           aria-label="작업 내역" title="작업 내역(오른쪽 칸)"><IconPanel /></button>
@@ -231,7 +235,7 @@ function ConvSheet() {
         {isMain && st?.mode && <ModeRows st={st} talk={chatKind(conv) === 'talk'} />}
         {isMain && t?.window && <div class="row-btn"><span>문맥 사용</span><span class="sub">{t.estimated ? '약 ' : ''}{fmtK(t.last_prompt || 0)} / {fmtK(t.window)} · {Math.min(100, Math.round((t.last_prompt || 0) / t.window * 100))}%</span></div>}
         {(st?.tool_toggles || []).length > 0 && <div class="py-2.5 border-b border-line"><div class="mb-1.5">도구</div><div class="flex gap-1.5 flex-wrap"><ToolChips /></div></div>}
-        {st?.backend?.external && <div class="row-btn"><span>바깥 API</span><span class="sub text-warn truncate max-w-[65%]"><ExternalChip plain /></span></div>}
+        {st?.backend?.external && <div class="row-btn"><span>바깥 API</span><span class="sub text-warn text-right max-w-[72%]"><ExternalChip plain /></span></div>}
         {t && <div class="py-2.5 border-b border-line text-[12.5px] text-mute leading-relaxed">
           {t.turn && <div>이번 차례 · 입력 {fmtK(t.turn.prompt)} · 출력 {fmtK(t.turn.completion)}</div>}
           <div>이 대화 · 입력 {fmtK(t.prompt_total)} · 출력 {fmtK(t.completion_total)} · 단계 {t.steps}{t.compactions ? ` · 줄이기 ${t.compactions}번` : ''}</div>

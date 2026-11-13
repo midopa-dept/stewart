@@ -344,7 +344,7 @@ def main_tier(a, workdir: str):
     t = tiers.get(name)
     if t is None:   # 판 116: 없는 등급은 기본 모델로 대신하지 않는다(바깥 유료 등급이 몰래 물려받기로 떨어지지 않게)
         raise ConfigError(f"등급이 없다: {name}. 등급은 backends 표 [tiers.<이름>] 에 적어야 켜진다(있는 등급: {', '.join(tiers) or '없음'}). "
-                          "바깥 유료 모델 등급은 기본 모델로 대신하지 않는다 — 따로 도는 허브(stewart instance)로 띄운다")
+                          "바깥 유료 모델 등급은 기본 모델로 대신하지 않는다 — backends 표에 적는다(stewart tiers 로 확인)")
     import dataclasses
     profile, backend = resolve(t.get("profile") or a.profile, t.get("backend") or a.backend, workdir)
     if t.get("budget"):
@@ -995,7 +995,8 @@ class HubMain:
                 **_conv_brief(root.sess)}]
         for c in root.chats.values():
             out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir),
-                        "kind": getattr(c, "kind", root.kind), "tier": tier if getattr(c, "kind", root.kind) == root.kind else "",
+                        "kind": getattr(c, "kind", root.kind),
+                        "tier": getattr(c, "tier", "") or (tier if getattr(c, "kind", root.kind) == root.kind else ""),
                         **_conv_brief(c.sess)})
         return out
 
@@ -1018,6 +1019,71 @@ class HubMain:
                 pass
         return out
 
+    def tier_rows(self, probe: bool = False) -> dict:
+        """판 125: 등급 표(tierview) — 새 대화 고르기·설정 시트. 따로 도는 허브는 rubato 만 연결된 꼴. 상태 찌르기는 60초 묶음."""
+        from . import tierview as TV
+        root = self._root()
+        inst = bool(os.environ.get("STEWART_INSTANCE"))
+        rows, bks = TV.load(instance_backend=root._backend.name if inst else None)
+        if probe:
+            cache = root.__dict__.setdefault("_tier_probe", {"t": 0.0, "st": {}})
+            if time.monotonic() - cache["t"] > 60:
+                TV.probe(rows, bks, timeout=2.0)
+                cache.update(t=time.monotonic(), st={r["tier"]: r["status"] for r in rows})
+            else:
+                for r in rows:
+                    if r.get("status") == "unchecked" and r["tier"] in cache["st"]:
+                        r["status"] = cache["st"][r["tier"]]
+        return {"instance": inst, "rows": rows}
+
+    def tier_profile(self, tier: str, kind: str):
+        """판 125: 사람이 고른 등급의 (프로필, 백엔드) — 그 자리(kind)의 프로필에 등급의 백엔드·문맥 예산·생각 칸.
+        연결 없음·키 없음이면 거절한다(다른 모델로 대신 돌리지 않는다)."""
+        import dataclasses
+        from . import spawn as SP
+        from .cli import resolve
+        rows = {r["tier"]: r for r in self.tier_rows()["rows"]}
+        r = rows.get(tier)
+        if r is None:
+            raise ValueError(f"모르는 등급: {tier} (있는 등급: {', '.join(rows)})")
+        if not r.get("connected"):
+            raise ValueError(f"등급 {tier} 는 이 허브에 연결이 없다")
+        if r.get("key") == "없음":
+            raise ValueError(f"등급 {tier} 의 키가 없다 — `stewart tiers` 의 안내대로 넣는다")
+        prof, _ = self.kind_profile(kind)
+        _, back = resolve(str(prof.path), r["backend"], str(prof.workdir), check_workdir=False)
+        t = {**(SP.load_tiers().get(tier) or {}), "name": tier}
+        if t.get("budget"):
+            back = dataclasses.replace(back, context_budget=max(4096, min(int(t["budget"]), back.max_context)))
+        prof = dataclasses.replace(prof, raw={**(prof.raw or {}), "tier": SP.tier_raw(t)})
+        if r.get("manual") and r.get("external"):
+            back = self.guard_outside(back, tier, t)
+        return prof, back
+
+    def guard_outside(self, back, tier: str, t: dict | None):
+        """판 125: 바깥 사람만 등급 — 키 파일은 읽지 않고(키체인·환경 변수만), 돈 상한(하루·대화)을 붙인다."""
+        import dataclasses
+        from . import spend as SPD
+        if back.api_key_file:
+            back = dataclasses.replace(back, api_key_file=None)
+        SPD.attach(back, Path(self._root().hub.dir) / "spend", tier, t)
+        return back
+
+    def run_tier(self, run_dir: Path) -> str | None:
+        """판 125: 지난 기록이 사람만 등급의 백엔드로 돌았으면 그 등급 이름(다시 열 때 같은 모델로). 아니면 None(그 자리의 기본)."""
+        try:
+            with open(Path(run_dir) / "events.jsonl", encoding="utf-8") as f:
+                bname = ((json.loads(f.readline()).get("meta") or {}).get("backend") or {}).get("name")
+        except (OSError, ValueError):
+            return None
+        root = self._root()
+        if not bname or bname == root._backend.name and not os.environ.get("STEWART_INSTANCE"):
+            return None
+        for r in self.tier_rows()["rows"]:
+            if r.get("backend") == bname and r.get("manual"):
+                return r["tier"]
+        return None
+
     def kind_profile(self, kind: str):
         """판 120: 그 종류 대화의 (프로필, 백엔드). 메인과 같은 종류면 메인 것. 종류마다 한 번만 풀어 둔다."""
         root = self._root()
@@ -1031,7 +1097,8 @@ class HubMain:
             cache[kind] = (with_role(p), b)
         return cache[kind]
 
-    def new_chat(self, how: str = "fresh", source: str = "main", run_dir: str = "", title: str = "", kind: str | None = None) -> "HubChat":
+    def new_chat(self, how: str = "fresh", source: str = "main", run_dir: str = "", title: str = "", kind: str | None = None,
+                 tier: str | None = None) -> "HubChat":
         """새 대화. fresh = 빈 문맥(격리), fork = source 대화를 지금까지 복사해 갈라짐(이후 서로 독립),
         reopen = 지난 대화 기록(run_dir)을 새 칸으로. 같은 프로젝트·기억·현황판·허용 규칙을 쓰고, 기록 폴더·압축·문맥 % 는 따로."""
         root = self._root()
@@ -1045,12 +1112,14 @@ class HubMain:
             history = json.loads(json.dumps(src.sess.messages, ensure_ascii=False))
             resumed = str(src.sess.rec.dir)
             kind = getattr(src, "kind", root.kind)   # 갈래는 원래 대화와 같은 종류
+            tier = getattr(src, "tier", "") or None   # 판 125: 같은 등급
         elif how == "reopen":
             from .resume import load_messages
             if run_dir not in {x["run_dir"] for x in root.past_mains(100000)}:
                 raise ValueError("지난 대화 목록에 없는 기록")
             history, resumed = load_messages(Path(run_dir)), run_dir
             kind = kind or _run_kind(Path(run_dir), root.kind)
+            tier = tier or root.run_tier(Path(run_dir))   # 판 125: 사람만 등급(바깥 등)으로 하던 대화는 그 등급으로
         elif how != "fresh":
             raise ValueError("how 는 fresh·fork·reopen")
         kind = kind or root.kind
@@ -1060,9 +1129,10 @@ class HubMain:
         name = f"chat-{root._chat_n}"
         if not title:
             title = {"fresh": f"대화 {root._chat_n}", "fork": f"갈래 {root._chat_n}", "reopen": f"다시 연 대화 {root._chat_n}"}[how]
-        c = HubChat(root, name, title=title, origin=how, history=history, resumed_from=resumed, kind=kind)
+        c = HubChat(root, name, title=title, origin=how, history=history, resumed_from=resumed, kind=kind, tier=tier)
         root.chats[name] = c
-        root.hub.event("chat_new", chat=name, how=how, chat_kind=kind, source=source if how == "fork" else None, run_dir=str(c.sess.rec.dir))
+        root.hub.event("chat_new", chat=name, how=how, chat_kind=kind, tier=tier or None, source=source if how == "fork" else None,
+                       run_dir=str(c.sess.rec.dir))
         return c
 
     def close_chat(self, name: str) -> str:
@@ -1199,6 +1269,7 @@ class HubMain:
                 "vision": bool(self.sess.backend.vision), "image_tiles": bool(getattr(root, "image_tiles", False)),
                 "pending": list(self.ui.pending),
                 "backend": {"name": self.sess.backend.name, "model": self.sess.backend.model,
+                            **({"spend": self.sess.backend.spend.public()} if getattr(self.sess.backend, "spend", None) is not None else {}),
                             **({"external": self.sess.backend.provider_label(), "used": dict(self.sess.backend.used)}
                                if self.sess.backend.external() else {})},
                 "tokens": self.tokens(), "resume_note": self.resume_note(), "model": self.watch.status,
@@ -1311,12 +1382,13 @@ class HubChat(HubMain):
     현황판·기억·모델 감시·허용 규칙은 메인 것을 함께 쓰고, ChatSession·기록 폴더·화면 기록·바쁨은 따로."""
 
     def __init__(self, main: HubMain, name: str, title: str = "", origin: str = "fresh",
-                 history: list | None = None, resumed_from: str | None = None, kind: str | None = None):
+                 history: list | None = None, resumed_from: str | None = None, kind: str | None = None, tier: str | None = None):
         from .record import Recorder
         hub = main.hub
         self.hub, self.main, self.name, self.title, self.origin = hub, main, name, title, origin
         self.kind = kind or main.kind   # 판 120: 만들 때 정하고 바뀌지 않는다(지시문·도구 고정 → 앞부분 캐시 유지)
-        prof, back = main.kind_profile(self.kind)
+        self.tier = tier or ""          # 판 125: 사람이 고른 등급(만들 때 정하고 바뀌지 않는다)
+        prof, back = main.tier_profile(tier, self.kind) if tier else main.kind_profile(self.kind)
         self.chats = {}
         hub.register_chat(name, prof.workdir, main._mode, title=title, origin=origin, kind=self.kind)
         self.ui = HubMainUI(hub, name)
@@ -1707,6 +1779,10 @@ def run_hub(a) -> int:
     main = HubMain(hub, profile, backend, rec, mode=a.mode, worker_profile=a.worker_profile or a.profile,
                    worker_backend=a.backend, history=history, resumed_from=prev)
     main.kind_resolver = kind_resolver(a, project, backend.name)   # 판 120: ＋새 대화에서 대화·코드 칸
+    if os.environ.get("STEWART_INSTANCE") and backend.external():   # 판 125: 따로 도는 허브 = rubato 만 연결 — 메인·기본 칸도 돈 상한
+        from . import spawn as _SP
+        from . import spend as _SPD
+        _SPD.attach(backend, Path(hub.dir) / "spend", "rubato", _SP.load_tiers().get("rubato"))
     main._project = project
     main.label, main.color = str(cfg.get("label") or ""), str(cfg.get("color") or "")   # 허브가 여럿일 때 가름(머리 이름·색 띠)
     main.image_ocr, main.image_tiles = bool(cfg.get("image_ocr", False)), bool(cfg.get("image_tiles", False))   # 판 82 손잡이

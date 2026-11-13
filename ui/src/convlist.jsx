@@ -7,11 +7,12 @@ import { get, post, store } from './lib.js'
 import { hub, sessions, view, drawer, refresh, toast, openChat, chat } from './state.js'
 import { PlaceName, placeText } from './places.jsx'
 import { IconMore } from './icons.jsx'
+import { isDraft } from './newchat.jsx'
 
 export const past = signal({ workers: [], mains: [], archived_count: 0, trash: [] })
 export const loadPast = () => get('/api/past_sessions').then(r => { past.value = r }).catch(() => {})
 
-const DEFAULT_TITLE = /^(메인|대화 \d+|갈래 \d+|다시 연 대화 \d+)$/
+const DEFAULT_TITLE = /^(메인|새 대화|대화 \d+|갈래 \d+|다시 연 대화 \d+)$/
 const BUCKETS = ['오늘', '어제', '지난 7일', '더 전']
 function bucket(t) {
   if (!t) return 0
@@ -101,7 +102,7 @@ export function ConvList({ Item }) {
   const main = ss.find(s => s.role === 'main')
   const chats = ss.filter(s => s.role === 'chat')
   const info = name => (st?.chats || []).find(c => c.name === name) || {}
-  const openRows = [...(main ? [main] : []), ...chats].map(s => {
+  const openRows = [...(main ? [main] : []), ...chats].filter(s => s.role === 'main' || s.name === chat.value || !isDraft(info(s.name))).map(s => {   // 판 125: 말하기 전 새 대화는 보는 것만
     const c = info(s.role === 'main' ? 'main' : s.name)
     const title = c.title || s.title || (s.role === 'main' ? '메인' : s.name)
     return { open: true, s, kind: c.kind || 'code', last: c.last || 0, label: (!DEFAULT_TITLE.test(title) && title) || c.first || title, run: c.run_dir }

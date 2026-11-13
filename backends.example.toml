@@ -90,6 +90,23 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # [tiers.largo]
 # max = 1                      # 서버 창 전부(budget 없음) — 모든 기능의 메인: stewart hub --tier largo
 # use = "계획·분배·검토"
-# rubato(바깥의 큰 모델)는 이 표에 두지 않는다 — 글이 그 회사로 나가고 돈이 드니, 따로 도는 허브로 띄워 사람이 열 때만 쓴다.
-#   표에 없는 등급을 --tier 로 부르면 거절한다(기본 모델로 대신하지 않는다):
-#   stewart instance <이름> start   (자기 backends·작업 폴더·기억, OS 샌드박스 — README "따로 도는 허브")
+# rubato — 바깥의 큰 모델(유료, 판 125). 사람이 허브의 「＋ 새 대화」에서 고를 때만 쓴다(작업자·자동 분배는 부르지 않는다).
+#   그 대화의 글·올린 파일·읽은 파일 내용이 그 회사 서버로 나간다. 키가 없으면 "키 없음"으로 꺼져 보인다(stewart tiers).
+#   키는 키체인(api_key_keychain) 또는 환경 변수(api_key_env)에만 — 이 등급은 키 파일을 읽지 않는다.
+#   돈 상한은 적지 않아도 하루 3·대화 1 달러(0 = 끔). price(가격표)가 없으면 돈을 셀 수 없어 max_tokens_day 로 건다.
+#   OS 격리까지 원하면 따로 도는 허브(stewart instance <이름> start)로 띄운다 — 그 허브는 rubato 만 연결된 stewart 로 보인다.
+# [backends.outside]
+# base_url = "https://<제공자 API 주소>/v1"
+# model = "<제공자 모델 이름>"
+# provider = "<제공자 이름>"            # 화면의 "바깥 API · <이름>"
+# api_key_keychain = "stewart-outside"  # macOS 키체인 항목 이름(값은 이 파일에 없다) — 넣기: security add-generic-password -U -s stewart-outside -a api -w
+# # api_key_env = "OUTSIDE_API_KEY"     # 또는 환경 변수
+# price = { input = 0.0, output = 0.0 } # 달러/1M 토큰 — 돈 상한을 세려면 제공자 가격을 적는다
+# concurrency = 2
+# [tiers.rubato]
+# backend = "outside"
+# use = "바깥의 큰 모델(유료) — 사람이 고를 때만"
+# # manual = true                # 바깥 백엔드면 적지 않아도 사람만
+# # max_usd_day = 3              # 하루 상한(등급 전체), 0 = 끔
+# # max_usd_chat = 1             # 대화 하나 상한, 0 = 끔
+# # max_tokens_day = 2000000     # 가격표가 없을 때 쓰는 토큰 상한

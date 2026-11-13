@@ -5,6 +5,8 @@ import { hub, sessions, queue, view, drawer, refresh, toast, tick, clockSkew, co
 import { NotifToggle } from './notify.jsx'
 import { PlaceName, placeText } from './places.jsx'
 import { ConvList } from './convlist.jsx'
+import { newChat } from './newchat.jsx'
+import { settingsOpen } from './settings.jsx'
 
 export const STATUS = {
   starting: ['시작하는 중', 'run'], idle: ['쉬는 중', 'ok'], working: ['일하는 중', 'run'], waiting_approval: ['승인 기다림', 'wait'],
@@ -31,50 +33,11 @@ function Board() {
 }
 
 const MODES = ['plan', 'ask', 'edits', 'auto']
-// ＋새 대화: 새로(빈 문맥, 격리) · 갈래(지금 보는 대화를 복사해 갈라짐) · 작업자 맡기기(메인이 일을 맡긴 것처럼 따로 프로세스)
+// 판 125: ＋새 대화는 바로 빈 대화(newchat.jsx) — 갈래는 "이 대화" 판, 작업자 맡기기는 "+" 시트(아래 NewSession)
 // 판 120: 대화 칸의 종류 — 대화(묻고 찾고 건넴, 프로젝트 안 건드림) · 코드(폴더 하나를 맡겨 읽고 고치고 명령)
 export const KIND_LABEL = { talk: placeText('talk'), code: placeText('code') }
 export const kindTag = c => c?.kind ? KIND_LABEL[c.kind] + (c.tier ? ' · ' + c.tier : '') : ''
-const KIND_KEY = 'stewart.newKind'
-function lastKind() { try { return localStorage.getItem(KIND_KEY) || 'talk' } catch { return 'talk' } }
-function NewChooser({ onClose }) {
-  const [worker, setWorker] = useState(false)
-  const [err, setErr] = useState('')
-  const [kind, setKind] = useState(lastKind())
-  const cur = (hub.value?.chats || []).find(c => c.name === chat.value)
-  async function go(how) {
-    try {
-      const body = { how, from: chat.value }
-      if (how === 'fresh') { body.kind = kind; try { localStorage.setItem(KIND_KEY, kind) } catch { /* 저장 못 해도 된다 */ } }
-      const r = await cpost('/api/chat/new', body); onClose(); openChat(r.chat); refresh()
-    } catch (e) { setErr(e.message) }
-  }
-  if (worker) return <NewSession onClose={onClose} />
-  const kbtn = (k, desc) => <button key={k} aria-pressed={kind === k}
-    class={'flex-1 text-left border rounded-xl px-3 py-2 ' + (kind === k ? 'border-accent bg-soft' : 'border-line hover:bg-soft')}
-    onClick={() => setKind(k)}><div class="font-semibold"><PlaceName k={k} /></div><div class="text-xs text-mute">{desc}</div></button>
-  return (
-    <div class="fixed inset-0 z-50 bg-black/45 grid place-items-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div class="w-full max-w-md bg-panel rounded-2xl p-4 space-y-2 shadow-card">
-        <div class="font-semibold text-base mb-1">새 대화</div>
-        <div class="flex gap-2 max-md:flex-col">
-          {kbtn('talk', '묻고, 찾아 읽고, 글이나 파일을 받는다. 프로젝트 폴더는 건드리지 않는다')}
-          {kbtn('code', '폴더 하나를 맡긴다. 읽고, 고치고, 명령을 돌린다')}
-        </div>
-        <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => go('fresh')}>
-          <div class="font-semibold">새로 — <PlaceName k={kind} />, 빈 문맥</div><div class="text-xs text-mute">기억·현황판은 함께 쓰고, 앞 대화는 모른다(서로 격리). 종류는 도중에 바뀌지 않는다</div></button>
-        <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft disabled:opacity-50" disabled={!!cur?.busy} onClick={() => go('fork')}>
-          <div class="font-semibold">이어서(갈래) — {cur?.title || '메인'} 을 복사</div><div class="text-xs text-mute">지금까지의 대화를 가지고 갈라진다(같은 종류{cur?.kind ? ' · ' + KIND_LABEL[cur.kind] : ''}). 이후로는 서로 독립{cur?.busy ? ' · 일하는 중이라 끝난 뒤' : ''}</div></button>
-        <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => setWorker(true)}>
-          <div class="font-semibold">작업자 맡기기</div><div class="text-xs text-mute">따로 도는 작업자에게 일 하나를 맡긴다(메인에 보고, 대화 칸과 다르다)</div></button>
-        {err && <div class="text-bad text-sm">안 됨: {err}</div>}
-        <div class="flex justify-end pt-1"><button class="btn" onClick={onClose}>닫기</button></div>
-      </div>
-    </div>
-  )
-}
-
-function NewSession({ onClose }) {
+export function NewSession({ onClose }) {
   const main = sessions.value.find(s => s.role === 'main')
   const top = main ? Math.max(0, MODES.indexOf(main.mode)) : 2
   const [f, setF] = useState({ name: '', task: '', workdir: '', repo: '', branch: '', profile: '', mode: MODES[top] })
@@ -308,11 +271,19 @@ export function ExternalChip({ plain }) {
   const cache = u.cache_seen ? Math.round(100 * (u.cache_hit || 0) / u.cache_seen) : null   // 캐시 칸을 주는 API 만(판 86)
   return <span class={plain ? 'text-warn' : 'chip !text-warn flex-none'} title={`바깥 API: ${ext} — 이 대화의 글·파일 내용·도구 결과가 그 회사 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)\n이 허브가 켜진 뒤 누계: 호출 ${u.calls || 0}번 · 입력 ${u.prompt || 0} · 출력 ${u.completion || 0} 토큰` + (u.cost_usd ? ` · $${u.cost_usd}` : '')}>
     {!plain && <span class="max-md:hidden">바깥 API: </span>}{short}<span> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span>
-    {cache != null && <span> · 캐시 {cache}%</span>}{u.cost_usd ? <span> · ${u.cost_usd < 0.01 ? u.cost_usd.toFixed(4) : u.cost_usd.toFixed(2)}</span> : null}</span>
+    {cache != null && <span> · 캐시 {cache}%</span>}{u.cost_usd ? <span> · ${u.cost_usd < 0.01 ? u.cost_usd.toFixed(4) : u.cost_usd.toFixed(2)}</span> : null}
+    {plain && <SpendLine sp={b.spend} />}</span>
+}
+
+// 판 125: 바깥 등급의 돈 상한 — 오늘(등급 전체)·이 대화. 가격표가 없으면 셀 수 없다고
+function SpendLine({ sp }) {
+  if (!sp) return null
+  const d = v => '$' + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2))
+  if (!sp.priced) return <span class="block">{sp.tokens_day ? `오늘 토큰 ${sp.today_tokens} / ${sp.tokens_day}` : '가격표 없음 — 돈 상한을 셀 수 없다'}</span>
+  return <span class="block">{[sp.usd_day ? `오늘 ${d(sp.today_usd)} / ${d(sp.usd_day)}` : '', sp.usd_chat ? `이 대화 ${d(sp.chat_usd)} / ${d(sp.usd_chat)}` : ''].filter(Boolean).join(' · ') || '돈 상한 꺼짐'}</span>
 }
 
 export function Sidebar() {
-  const [newOpen, setNewOpen] = useState(false)
   const ss = sessions.value
   const main = ss.find(s => s.role === 'main')
   const chats = ss.filter(s => s.role === 'chat')
@@ -325,7 +296,7 @@ export function Sidebar() {
         <button class="ibtn ml-auto md:hidden text-mute" onClick={() => { drawer.value = false }} aria-label="서랍 닫기">✕</button>
       </div>
       <Board />
-      <button class="mx-3 mb-2 px-3 py-2 rounded-[10px] font-semibold text-left min-h-[44px] hover:bg-soft" onClick={() => setNewOpen(true)}>＋ 새 대화</button>
+      <button class="mx-3 mb-2 px-3 py-2 rounded-[10px] font-semibold text-left min-h-[44px] hover:bg-soft" onClick={newChat}>＋ 새 대화</button>
       <div class="flex-1 overflow-auto scroll-thin pb-2">
         {/* 판 124.2: 열린 칸과 지난 대화를 한 목록에(자리 묶음 안 날짜순) — convlist.jsx */}
         <ConvList Item={SessionItem} />
@@ -343,10 +314,10 @@ export function Sidebar() {
           <NotifToggle />
           {USER && <><span>{USER}</span>
             <button class="hover:underline" onClick={() => post('/logout', {}).then(() => { location.href = '/login' })}>나가기</button></>}
+          <button class="hover:underline" onClick={() => { settingsOpen.value = true; drawer.value = false }} title="모델 등급·서버·키">설정</button>
           <a class="hover:underline" href="/?ui=old" title="예전 화면(되돌릴 길)">옛 화면</a>
         </div>
       </div>
-      {newOpen && <NewChooser onClose={() => setNewOpen(false)} />}
     </aside>
   )
 }

@@ -596,6 +596,14 @@ def main(argv: list[str] | None = None) -> int:
     og = sub.add_parser("organize", help="폴더 정리 계획 검토·실행·되돌리기(review|apply|undo)", add_help=False)
     og.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("backends", help="백엔드 목록")
+    su = sub.add_parser("setup", help="물어 가며 backends 표(등급 ↔ 서버·모델, 바깥 API 키는 키체인)를 만든다 — 터미널에서만. 판 125")
+    su.add_argument("--instance", default=None, help="따로 도는 허브(stewart instance <이름>)의 표를 고친다")
+    su.add_argument("--backends", default=None, help="backends 표 파일(기본: 지금 설정)")
+    tv = sub.add_parser("tiers", help="등급 표 한눈에 — 등급마다 서버·모델·상태·키(있음·없음만)·돈 상한. 판 125")
+    tv.add_argument("--json", action="store_true", help="설정 시트와 같은 칸을 JSON 으로")
+    tv.add_argument("--no-check", action="store_true", help="서버를 찔러 보지 않고 표만")
+    tv.add_argument("--instance", default=None, help="따로 도는 허브(stewart instance <이름>)의 표 — 그 허브는 rubato 만 연결된 꼴로 보인다")
+    tv.add_argument("--backends", default=None, help="backends 표 파일(기본: 지금 설정)")
     pf = sub.add_parser("profiles", help="프로필 목록 · --cost 면 프로필마다 첫 요청 고정 몫(시스템·도구 정의·환경 블록) 토큰 어림")
     pf.add_argument("names", nargs="*", help="--cost: 잴 프로필(없으면 chat·code)")
     pf.add_argument("--cost", action="store_true")
@@ -771,6 +779,35 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigError(str(e)) from None
             print(json.dumps({k: rep[k] for k in ("to", "restored", "moved_aside", "outside_changes", "skipped", "aside_dir")},
                              ensure_ascii=False, indent=1))
+            return 0
+        if a.cmd == "setup":
+            if not sys.stdin.isatty():
+                print("stewart setup 은 묻는 길이라 터미널에서만 돈다", file=sys.stderr)
+                return 2
+            from . import setup as SU
+            bf = a.backends
+            if a.instance:
+                from .instance import InstanceError, load as _iload
+                try:
+                    bf = bf or str(_iload(a.instance)["_dirs"]["config"] / "backends.toml")
+                except InstanceError as e:
+                    raise ConfigError(str(e)) from None
+            return SU.run(bf)
+        if a.cmd == "tiers":
+            from . import tierview as TV
+            ib, bf, title = None, a.backends, ""
+            if a.instance:
+                from .instance import InstanceError, load as _iload
+                try:
+                    cfg = _iload(a.instance)
+                except InstanceError as e:
+                    raise ConfigError(str(e)) from None
+                ib, bf = str(cfg["backend"]), bf or str(cfg["_dirs"]["config"] / "backends.toml")
+                title = f"따로 도는 허브 {a.instance} — rubato 만 연결된 stewart"
+            rws, bks = TV.load(bf, instance_backend=ib, instance_keychain=(str(cfg.get("keychain_service") or "") or None) if a.instance else None)
+            if not a.no_check:
+                TV.probe(rws, bks)
+            print(json.dumps(rws, ensure_ascii=False, indent=1) if a.json else TV.text(rws, title))
             return 0
         if a.cmd == "profiles" and a.cost:
             from . import ctxcost as CC

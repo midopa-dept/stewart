@@ -9,6 +9,7 @@ import { hub, tick, clockSkew, busy, refresh, toast, cpost, chat, composerFill }
 import { narrow } from './mobile.js'
 import { IconUp, IconDown, IconChev, IconMore, IconUpS, IconDown2 } from './icons.jsx'
 import { place, PlaceName } from './places.jsx'
+import { DraftPick } from './newchat.jsx'
 import { lastShot } from './stepshot.js'
 
 // main_log 줄을 덩어리로: user · assistant · diff · steps(도구·안내 줄 묶음)
@@ -595,7 +596,9 @@ export function Thread({ log, prior }) {
         <div class="empty-hint text-center pt-[30vh] md:pt-[28vh]">
           <div class="text-[17px] font-semibold"><PlaceName k={curKind()} /></div>
           <div class="text-[13px] text-mute mt-1">{emptySub()}</div>
+          {hub.value?.backend?.external && <div class="text-[12.5px] text-warn mt-2 max-w-[34ch] mx-auto">이 대화의 글·올린 파일·읽은 파일 내용은 {String(hub.value.backend.external).replace(/\(.*\)/, '').trim()} 로 나간다</div>}
           {place(curKind()).folder && curFolder() && <div class="text-[12.5px] text-mute mt-2">{curFolder()}</div>}
+          <DraftPick />
         </div>
       )}
       {false && (

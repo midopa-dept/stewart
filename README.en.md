@@ -194,7 +194,29 @@ uv run stewart hub --project ~/my-project
 | `presto` | Light work such as finding, reading and summarizing. A thin prompt, read tools and a short context make it good for running several as workers. With `slim = true`, seating it as the main gives the slim hub. Its results get double-checked |
 | `moderato` | The default for coding and conversation; the default tier for work that lists tools (writes) |
 | `largo` | Planning, dispatching and review. Seated as the main with every tool and a wide context (`stewart hub --tier largo`) |
-| `rubato` | An external API (paid). Not in the tier table; it runs as a separately started instance (`stewart instance`), only when a person opens it. The default model is never used in its place |
+| `rubato` | An external API (paid). Put it in the tier table with a key, and it is used only when a person picks it under "+ New conversation" (workers and automatic dispatch never call it). The default model is never used in its place |
+
+### Tier table at a glance · outside tier
+
+- `stewart tiers` shows in one table which server and model each of the four tiers (presto, moderato, largo, rubato) points to, whether it is reachable, its concurrency, its key (present or not, never the value) and its spending caps.
+  - `--no-check` skips probing the servers, `--json` gives the same fields as the hub screen, and `--instance <name>` shows a separately run hub's table.
+  - presto, moderato and largo fall back to the default model when they are not in the table. rubato is "not set" when it is not in the table.
+- "+ New conversation" in the hub opens an empty conversation straight away. On its first screen you pick the place (stewart · *parlando*) and the model tier (default, presto, moderato, largo, rubato).
+  - Tiers with no connection or no key are greyed out and cannot be picked.
+  - The choice is fixed once you send the first message. Branches keep the tier, and a conversation that used the outside tier reopens with it.
+- `stewart setup` builds the backends table by asking questions (terminal only).
+  - With no table yet it starts with a model server. Given an address, it finds the model name and context size with `GET /models`.
+  - Then for each tier it lets you pick a server or add one. For rubato it asks for the outside API's address, model, provider name, spending caps and key (hidden input, stored in the keychain).
+- The "Settings" sheet at the bottom of the hub's side column does the same.
+  - Tap a tier to change its server, address ([Load]), model, concurrency, key and caps. Key values go only to the keychain and are never shown again.
+  - Only the edited lines of the backends table change; comments and other tables stay. The file is checked and backed up (`backends.toml.bak-*`, last 10) before writing, and "Revert" restores the previous version.
+  - Changes apply to new conversations and new workers. Saving an outside address asks once more. Separately run hubs and per-person hubs are view-only.
+- A tier that points to an outside backend (one with `provider`, or an address outside private networks) is for people only. Add `manual = false` to let workers and automatic dispatch use it.
+  - That conversation's first screen and the picker say "this conversation's messages, uploaded files and the contents of files it reads go to <provider>", and the header shows "outside API · <provider>".
+  - Keys live only in the keychain (`api_key_keychain`) or an environment variable (`api_key_env`). This tier never reads key files.
+  - Spending caps: even when unset, 3 dollars a day (across the tier) and 1 dollar per conversation. Change them with `max_usd_day` and `max_usd_chat`; 0 turns a cap off. Over a cap, nothing is sent and the reason is shown. The daily total is kept in the hub state folder (`spend/<date>.json`), so it carries over hub restarts.
+  - Without a price table (`price`) on the backend, spending cannot be counted, so cap it with `max_tokens_day`. The rubato entry in `backends.example.toml` is the example.
+- A separately run hub (`stewart instance`) shows as "stewart with only rubato connected". Use it when you need OS isolation that opens only its own folders.
 
 ## Safety
 

@@ -316,7 +316,7 @@ class ChatSession:
         if profile.tools and DG.wanted(profile.tools, 0):
             defs.append(DG.CHAT_DEFINITION)   # 작업자에게 맡기기(확인 질문은 같은 화면에 "[작업자 N]"). 기본 읽기 전용
             if SP.enabled():
-                self.tiers = SP.load_tiers()  # 작업자 등급(판 110): backends 표 [tiers.*]
+                self.tiers, self.manual_tiers = SP.split_manual(SP.load_tiers())  # 작업자 등급(판 110) — 판 125: 사람만 등급(바깥 등)은 빼고
                 defs.append(SP.definition(self.tiers))   # 동시 작업자(판 108, SW-43): 띄우고 바로 돌아옴, 걸음 사이 끝 알림, 끝에서 wait
         if not web:
             defs = [d for d in defs if d["function"]["name"] not in T.WEB_TOOLS]
@@ -2006,8 +2006,10 @@ class ChatSession:
             if not str(args.get("task") or "").strip():
                 return False, "spawn 은 task 에 맡길 일을 적는다"
             note = ""
+            if getattr(self, "tiers", None) is not None:   # 판 125: 띄울 때마다 표를 다시 읽는다(설정 시트에서 고친 것이 새 작업자부터)
+                self.tiers, self.manual_tiers = SP.split_manual(SP.load_tiers())
             if getattr(self, "tiers", None):
-                note = SP.unknown_note(self.tiers, args.get("tier"))   # 판 116: 없는 등급 이름은 조용히 바꿔 타지 않고 알린다
+                note = SP.unknown_note(self.tiers, args.get("tier"), getattr(self, "manual_tiers", set()))   # 판 116: 없는 등급 이름은 조용히 바꿔 타지 않고 알린다
                 t = SP.pick_tier(self.tiers, args)
                 args = {**args, "tier": t} if t else {k: v for k, v in args.items() if k != "tier"}
                 if note:
@@ -2080,6 +2082,8 @@ class ChatSession:
             tokens = max(4096, min(int(tokens), base.max_context))
         self.backend = base if tokens is None else dataclasses.replace(base, context_budget=tokens)
         self.backend.used = base.used                        # 누계는 같은 것을 쓴다
+        if getattr(base, "spend", None) is not None:          # 판 125: 돈 상한도 같은 것을
+            self.backend.spend = base.spend
         self.comp = self._new_compactor()
         self.rec.event("context_budget", tokens=tokens, window=self.backend.budget())
         return self.backend.budget()

@@ -7,7 +7,8 @@ import { copyText, flash } from './copy.js'
 import { prepImage, pastedFiles } from './imgprep.js'
 import { hub, queue, busy, refresh, toast, view, sessions, chat, cpost, composerFill } from './state.js'
 import { narrow, touch, plusSheet, convSheet } from './mobile.js'
-import { IconPlus, IconSend, IconStop, IconMore, IconFile, IconImage, IconWarn, IconSliders } from './icons.jsx'
+import { IconPlus, IconSend, IconStop, IconMore, IconFile, IconImage, IconWarn, IconSliders, IconNew } from './icons.jsx'
+import { workerOpen } from './newchat.jsx'
 
 const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
 export const sheetAsk = signal(null)      // 폰: 승인 전문 시트에 띄운 건(session#seq)
@@ -415,6 +416,7 @@ function PlusSheet({ vision, addFiles, uploadFiles, mode }) {
           <input type="file" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; close(); uploadFiles(fs) }} /></label>
         {vision && <label class="row-btn cursor-pointer"><span class="w-5 h-5 text-mute"><IconImage /></span><span>사진</span>
           <input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; close(); addFiles(fs) }} /></label>}
+        {!talk && <button class="row-btn" onClick={() => { close(); workerOpen.value = true }}><span class="w-5 h-5 text-mute"><IconNew /></span><span>작업자 맡기기</span><span class="sub">따로 도는 작업자에게 일 하나</span></button>}
         <button class="row-btn" onClick={() => { close(); convSheet.value = true }}><span class="w-5 h-5 text-mute"><IconSliders /></span><span>{talk ? '생각' : '방식·생각'}</span><span class="sub">{talk ? '' : (MODE_NAME[mode] || mode || '')}</span></button>
         <div class="text-[13px] text-mute pt-2">{talk ? '/ 를 치면 명령을 고른다.' : '/ 를 치면 명령, @ 를 치면 파일을 고른다.'}</div>
       </div>

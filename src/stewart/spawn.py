@@ -43,6 +43,7 @@ DEFINITION = {"type": "function", "function": {
 
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
 TIER_KEYS = ("backend", "profile", "budget", "max", "use", "default_for", "slim", "slim_keep", "slim_system",
+             "manual", "max_usd_day", "max_usd_chat", "max_tokens_day",
              "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling", "thinking_token_budget", "reasoning_passback")
 THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling",
               "thinking_token_budget", "reasoning_passback")
@@ -67,8 +68,30 @@ def load_tiers(path=None, main: bool = False) -> dict:
                               "max": int(t["max"]) if t.get("max") else None, "use": " ".join(str(t.get("use") or "").split())[:80],
                               "default_for": t.get("default_for") or [], "slim": bool(t.get("slim")),
                               "slim_keep": t.get("slim_keep"), "slim_system": t.get("slim_system"),
-                              "think": {k: t[k] for k in THINK_KEYS if k in t}}
+                              "think": {k: t[k] for k in THINK_KEYS if k in t},
+                              # 판 125: 사람만(바깥 등급의 기본) · 돈·토큰 상한 — tierview.is_manual·caps 가 읽는다
+                              "manual": (bool(t["manual"]) if "manual" in t else None),
+                              **{k: t[k] for k in ("max_usd_day", "max_usd_chat", "max_tokens_day") if k in t}}
     return out
+
+
+def split_manual(tiers: dict, backends: dict | None = None) -> tuple[dict, set]:
+    """판 125: 작업자·자동 분배가 쓸 등급과, 사람이 고를 때만 쓰는 등급(manual)을 가른다 → (자동 등급들, 사람만 이름들).
+    manual 을 적었으면 그 값, 안 적었으면 그 등급의 백엔드가 바깥(Backend.external())일 때 사람만이다."""
+    if backends is None:
+        from .config import ConfigError, load_backends
+        try:
+            backends, _ = load_backends()
+        except (OSError, ValueError, ConfigError):
+            backends = {}
+    from .tierview import is_manual
+    auto, manual = {}, set()
+    for k, t in tiers.items():
+        if is_manual(t, backends.get(t.get("backend") or "")):
+            manual.add(k)
+        else:
+            auto[k] = t
+    return auto, manual
 
 
 def tier_raw(t: dict) -> dict:
@@ -76,9 +99,11 @@ def tier_raw(t: dict) -> dict:
     return {"name": t.get("name"), "budget": t.get("budget"), **({"think": t["think"]} if t.get("think") else {})}
 
 
-def unknown_note(tiers: dict, asked) -> str:
-    """판 116: 모델이 없는 등급 이름을 냈으면 그 사실(조용히 바꿔 타지 않게)."""
+def unknown_note(tiers: dict, asked, manual: set | frozenset = frozenset()) -> str:
+    """판 116: 모델이 없는 등급 이름을 냈으면 그 사실(조용히 바꿔 타지 않게). 판 125: 사람만 등급이면 그 까닭."""
     a = str(asked or "")
+    if a in manual:
+        return f"등급 '{a}' 는 사람이 대화를 열 때 고를 때만 쓴다(작업자로 부르지 않는다)"
     return f"모르는 등급 '{a[:30]}' — 있는 등급: {', '.join(tiers) or '없음'}" if a and a not in tiers else ""
 
 
