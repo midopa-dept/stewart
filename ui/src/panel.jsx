@@ -1,25 +1,39 @@
 // 오른쪽 패널(데스크톱, 기본 닫힘) / 아래 시트(폰): 단계 · 계획 · 늘 허용 · 토큰
 import { useState, useEffect } from 'preact/hooks'
+import { IconX } from './icons.jsx'
 import { get, post, fmtK, fmtSecs } from './lib.js'
 import { hub, panel, setPanel, sessions, toast, refresh, busy, cpost, chat } from './state.js'
 import { STATUS } from './side.jsx'
 
 const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰'], ['status', '상태']]
 
+// 판 124: 본문 글 규칙 — 시각은 보조 글, 빈 줄·"-----" 줄은 접고, 한 명령의 출력(뒤따르는 info 줄)은 옅은 바탕 코드 덩어리 하나로
+const NOISE = t => !String(t || '').trim() || /^[-=\s]{6,}$/.test(t)
+function stepItems(log) {
+  const out = []
+  for (const m of log) {
+    if (m.kind === 'meta' || m.kind === 'turn_end') continue
+    if (m.kind === 'info' && out.length && out[out.length - 1].kind === 'tool') { if (!NOISE(m.text)) out[out.length - 1].out.push(m.text); continue }
+    if (m.kind === 'info' && NOISE(m.text)) continue
+    out.push({ ...m, out: [] })
+  }
+  return out
+}
 function Steps() {
   const log = (hub.value?.main_log || []).filter(m => m.kind !== 'info' || !/^ {4}/.test(m.text))
-  if (!log.length) return <div class="text-mute text-sm p-4">아직 없음</div>
+  const items = stepItems(log)
+  if (!items.length) return <div class="text-mute text-sm p-4">아직 없음</div>
   return (
-    <div class="px-3.5 py-2 text-[13px]">
-      {log.slice().reverse().map((m, i) => (
-        <div key={i} class="grid grid-cols-[58px_1fr] gap-2 py-1.5 border-b border-soft">
-          <span class="text-mute text-xs pt-px">{m.ts}</span>
-          <span class={'min-w-0 break-words ' + (m.kind === 'tool' ? 'font-mono text-[12.5px]' : m.kind === 'warn' ? 'text-warn' : m.kind === 'user' ? 'font-semibold' : m.kind === 'info' ? 'text-mute' : '')}>
-            {m.kind === 'user' ? '사람: ' : m.kind === 'assistant' ? '모델: ' : m.kind === 'diff' ? '± ' : ''}
-            {m.kind === 'diff' ? `${m.stat?.path || ''} +${m.stat?.plus ?? ''} −${m.stat?.minus ?? ''}` : m.text.slice(0, 300)}
+    <div class="px-4 py-2 text-[14px]">
+      {items.slice().reverse().map((m, i) => (
+        <div key={i} class="py-2 border-b border-line/60">
+          <div class="text-[12px] text-mute mb-0.5">{m.ts}{m.kind === 'user' ? ' · 사람' : m.kind === 'assistant' ? ' · 모델' : m.kind === 'tool' ? ' · 도구' : ''}
             {m.kind === 'tool' && m.ok != null && <span class={m.ok ? 'text-ok' : 'text-bad'}> {m.ok ? '✓' : '✕'}</span>}
-            {m.rep > 1 && <span class="text-bad"> (같은 오류 {m.rep}번째)</span>}
-          </span>
+            {m.rep > 1 && <span class="text-bad"> · 같은 오류 {m.rep}번째</span>}</div>
+          <div class={'min-w-0 break-words ' + (m.kind === 'tool' ? 'font-mono text-[13px]' : m.kind === 'warn' ? 'text-warn' : m.kind === 'info' ? 'text-mute text-[13px]' : '')}>
+            {m.kind === 'diff' ? `± ${m.stat?.path || ''} +${m.stat?.plus ?? ''} −${m.stat?.minus ?? ''}` : m.text.slice(0, 300)}
+          </div>
+          {m.out.length > 0 && <pre class="mt-1 bg-code rounded-lg px-2.5 py-1.5 font-mono text-[12px] text-mute whitespace-pre-wrap break-all max-h-40 overflow-auto">{m.out.join('\n').slice(0, 2000)}</pre>}
         </div>
       ))}
     </div>
@@ -261,8 +275,8 @@ export function Panel({ extra }) {
   const body = p === 'board' ? <BoardTab /> : p === 'memory' ? <MemoryTab /> : p === 'steps' ? <Steps /> : p === 'plan' ? <Plan /> : p === 'rules' ? <Rules /> : p === 'tokens' ? <Tokens /> : p === 'status' ? <StatusTab /> : extra && p === extra.tab[0] ? extra.body : <Steps />
   return (
     <>
-      <div class="flex items-center gap-2 px-4 py-3 border-b border-line font-[650]">작업 내역
-        <button class="chip ml-auto" onClick={() => setPanel(null)}>닫기 ✕</button></div>
+      <div class="flex items-center gap-2 pl-4 pr-1.5 h-12 border-b border-line font-[650]">작업 내역
+        <button class="ibtn ml-auto text-mute" onClick={() => setPanel(null)} aria-label="작업 내역 닫기"><IconX /></button></div>
       <div class="flex gap-1 px-3 py-2 border-b border-line overflow-x-auto">
         {tabs.map(([k, label]) => <button key={k} class={'text-[13px] px-2.5 py-1 rounded-lg whitespace-nowrap ' + (p === k ? 'bg-soft text-fg font-semibold' : 'text-mute')} onClick={() => setPanel(k)}>{label}</button>)}
       </div>

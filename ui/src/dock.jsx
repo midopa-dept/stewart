@@ -6,6 +6,8 @@ import { post, get, store } from './lib.js'
 import { copyText, flash } from './copy.js'
 import { prepImage, pastedFiles } from './imgprep.js'
 import { hub, queue, busy, refresh, toast, view, sessions, chat, cpost, composerFill } from './state.js'
+import { narrow, touch, plusSheet, convSheet } from './mobile.js'
+import { IconPlus, IconSend, IconStop, IconMore, IconFile, IconImage, IconWarn, IconSliders } from './icons.jsx'
 
 const KIND = { exact: '이 명령 그대로', subcommand: '하위 명령까지', code_prefix: '이 앞머리', first_word: '이 프로그램 전부' }
 export const sheetAsk = signal(null)      // 폰: 승인 전문 시트에 띄운 건(session#seq)
@@ -105,6 +107,21 @@ function AskCard({ it, full }) {
   const key = it.session + '#' + it.seq
   const sent = sentAsk.value.has(key)
   const first = (queue.value || []).find(x => !sentAsk.value.has(askKey(x))) === it   // 키보드가 고르는 건
+  if (!full) return (   // 판 124: 입력 칸 바로 위 시트 — 사람 말 제목, 명령, 허용(먹색)·거부(글자)·⋯(폰·데스크톱 같은 꼴, 단축키는 그대로)
+    <div class="bg-panel rounded-2xl px-3.5 pt-2.5 pb-2.5 shadow-card border border-line">
+      <div class="text-[15.5px] font-semibold flex items-center gap-2"><span class="w-[17px] h-[17px] text-warn flex-none"><IconWarn /></span>{s.tool === 'run_shell' || s.command ? '이 명령을 실행할까요?' : s.paths ? '이 파일을 바꿀까요?' : '승인할까요?'}</div>
+      {it.prompt && it.prompt !== text && !s.command && <div class="text-[14px] mt-1 whitespace-pre-wrap">{it.prompt}</div>}
+      <pre class="font-mono text-[13px] leading-normal mt-1.5 mb-2 bg-code rounded-[10px] px-3 py-1.5 whitespace-pre-wrap break-all max-h-[3.6em] overflow-hidden"
+        onClick={() => { sheetAsk.value = key }}>{text}</pre>
+      {s.diff && <div class="text-xs text-mute -mt-1 mb-2">diff {s.diff.length}줄 — <button class="underline" onClick={() => { sheetAsk.value = key }}>전문 보기</button></div>}
+      <div class="flex gap-2 items-center">
+        <button class="btn-pri flex-1 md:flex-none md:w-44 h-11 rounded-xl text-[16px] font-semibold" disabled={sent} onClick={() => answer(it, 'y')}
+          title={first ? KEY_OK : ''}>{sent ? '보냄…' : '허용'}</button>
+        <button class="h-11 px-5 rounded-xl text-[16px] font-semibold text-fg hover:bg-soft" disabled={sent} onClick={() => answer(it, 'n')}>거부</button>
+        <button class="ibtn" onClick={() => { sheetAsk.value = key }} aria-label="더 보기(누가·언제·전문·늘 허용·말 전하기)"><IconMore /></button>
+      </div>
+    </div>
+  )
   return (
     <div class="border-[1.5px] border-warn bg-panel rounded-[14px] px-3 py-2.5 shadow-card">
       <div class="flex gap-2 items-center text-[13px] font-semibold text-warn">
@@ -173,12 +190,13 @@ export function AskSheet() {
   const it = k && queue.value.find(x => x.session + '#' + x.seq === k)
   if (!it) return null
   return (
-    <div class="fixed inset-0 z-40 bg-black/45 flex items-end" onClick={e => { if (e.target === e.currentTarget) sheetAsk.value = null }}>
-      <div class="w-full bg-bg rounded-t-2xl p-3 safe-b max-h-[92vh] overflow-auto">
-        <div class="flex items-center mb-2"><span class="font-semibold">승인 전문</span><button class="btn btn-ghost ml-auto" onClick={() => { sheetAsk.value = null }}>닫기 ✕</button></div>
+    <>
+      <div class="sheet-back" onClick={() => { sheetAsk.value = null }} />
+      <div class="sheet sheet-wide" role="dialog" aria-label="승인 전문">
+        <div class="flex items-center mb-2"><span class="font-semibold">승인 전문</span><button class="btn btn-ghost ml-auto !border-0" onClick={() => { sheetAsk.value = null }}>닫기</button></div>
         <AskCard it={it} full />
       </div>
-    </div>
+    </>
   )
 }
 
@@ -331,12 +349,38 @@ export function Composer({ target }) {
           ))}
         </div>
       )}
+      {true ? (   // 판 124: 한 줄에서 자라는 칸 — 왼쪽 "+", 오른쪽 둥근 보내기(도는 중에는 멈춤). 폰·데스크톱 같은 꼴
+        <div class="border border-line bg-panel rounded-[22px] px-1.5 py-1.5 mb-1.5 focus-within:border-mute/60">
+          {imgs.length > 0 && <div class="flex gap-1.5 flex-wrap mb-1.5 px-2 pt-1">{imgs.map((im, i) => (
+            <button key={i} class="chip" onClick={() => setImgs(xs => xs.filter((_, j) => j !== i))}>{im.name} ✕</button>
+          ))}</div>}
+          <div class="flex items-end gap-1">
+            {isMain && <button class="ibtn !w-10 !h-10 text-mute" onClick={() => { plusSheet.value = true }} aria-label="붙이기·방식"><IconPlus /></button>}
+            <span class="relative flex-1 min-w-0 flex">
+            {!text && <span class="absolute left-1.5 top-[9px] pointer-events-none text-[16px] leading-[1.45] text-mute whitespace-nowrap overflow-hidden" aria-hidden="true">
+              {isMain ? '메시지' : `${target} 에게`}{isMain && !narrow.value && !touch && <span class="opacity-55"> &nbsp;/ 명령{talkHere() ? '' : ' · @ 파일'}</span>}</span>}
+            <textarea ref={ta} rows={1} value={text} class="flex-1 min-w-0 resize-none bg-transparent outline-none focus-visible:outline-none text-[16px] leading-[1.45] py-[9px] px-1.5"
+              aria-label={isMain ? '메시지' : `${target} 에게`}
+              onInput={e => { setText(e.currentTarget.value); hist.current.pos = null; clearTimeout(timer.current); timer.current = setTimeout(suggest, 150) }}
+              onKeyDown={onKey} onBlur={() => setTimeout(hideSug, 150)}
+              onPaste={e => { const fs = pastedFiles(e.clipboardData); if (fs.length) { e.preventDefault(); addFiles(fs) } }} />
+            </span>
+            {!isMain && working && text.trim() && <button class="h-10 px-2 text-[14px] text-mute" disabled={sending} onClick={() => send('긴급')}>긴급</button>}
+            {working && !text.trim() && !imgs.length
+              ? <button class="w-10 h-10 rounded-full grid place-items-center bg-ink text-on-ink flex-none" disabled={stopping} onClick={stop}
+                  aria-label={stopping ? '멈추는 중' : '멈춤'}><span class="w-5 h-5"><IconStop /></span></button>
+              : <button class={'w-10 h-10 rounded-full grid place-items-center flex-none disabled:!opacity-100 ' + (text.trim() || imgs.length ? 'bg-ink text-on-ink' : 'bg-soft text-mute/60')} disabled={sending || (!text.trim() && !imgs.length)}
+                  onClick={() => send()} aria-label={working && isMain ? '대기 줄에 보내기' : '보내기'} title={(working && isMain ? '대기 줄에 보내기' : '보내기') + (touch ? '' : ' (⌘/Ctrl+Enter)')}><span class="w-5 h-5"><IconSend /></span></button>}
+          </div>
+          {plusSheet.value && isMain && <PlusSheet vision={vision} addFiles={addFiles} uploadFiles={uploadFiles} mode={main?.mode} />}
+        </div>
+      ) : (
       <div class="border border-line bg-panel rounded-2xl pt-2.5 pb-2 pl-3.5 pr-2.5 shadow-card">
         {imgs.length > 0 && <div class="flex gap-1.5 flex-wrap mb-1.5">{imgs.map((im, i) => (
           <button key={i} class="chip" onClick={() => setImgs(xs => xs.filter((_, j) => j !== i))}>🖼 {im.name} ({Math.round(im.size / 1024)}KB) ✕</button>
         ))}</div>}
         <textarea ref={ta} rows={2} value={text} class="w-full resize-none bg-transparent outline-none text-[15px] leading-relaxed placeholder:text-mute"
-          placeholder={isMain ? (chat.value === 'main' ? '메인에게' : '이 대화에') + ' 할 말 — /명령 · @파일' + (vision ? ' · 이미지 붙여넣기' : '') + ' · ⌘/Ctrl+Enter 보내기' : `${target} 에게 직접 할 말(메인에게도 알림이 간다)`}
+          placeholder={isMain ? (chat.value === 'main' ? '메인에게' : '이 대화에') + ' 할 말 — /명령 · @파일' + (vision ? ' · 이미지 붙여넣기' : '') + (touch ? '' : ' · ⌘/Ctrl+Enter 보내기') : `${target} 에게 직접 할 말(메인에게도 알림이 간다)`}
           onInput={e => { setText(e.currentTarget.value); hist.current.pos = null; clearTimeout(timer.current); timer.current = setTimeout(suggest, 150) }}
           onKeyDown={onKey} onBlur={() => setTimeout(hideSug, 150)}
           onPaste={e => { const fs = pastedFiles(e.clipboardData); if (fs.length) { e.preventDefault(); addFiles(fs) } }} />
@@ -351,9 +395,33 @@ export function Composer({ target }) {
           {working && <button class="btn btn-stop" disabled={stopping} onClick={stop} title={isMain ? '메인의 지금 차례를 끊는다(Esc)' : '이 작업자를 잠시 멈춘다'}>{stopping ? '멈추는 중…' : '■ 멈춤'}</button>}
         </div>
       </div>
+      )}
     </div>
   )
 }
+
+const talkHere = () => ((hub.value?.chats || []).find(x => x.name === chat.value) || (hub.value?.chats || []).find(x => x.name === 'main') || {}).kind === 'talk'
+
+// 판 124 폰 "+" 시트: 파일 올리기 · 사진 · 방식(이 대화 시트로)
+function PlusSheet({ vision, addFiles, uploadFiles, mode }) {
+  const c = (hub.value?.chats || []).find(x => x.name === chat.value) || (hub.value?.chats || []).find(x => x.name === 'main')
+  const talk = c?.kind === 'talk'   // parlando: 작업 폴더·편집 방식이 뜻이 없다
+  const close = () => { plusSheet.value = false }
+  return (
+    <>
+      <div class="sheet-back" onClick={close} />
+      <div class="sheet" role="dialog" aria-label="붙이기">
+        <label class="row-btn cursor-pointer"><span class="w-5 h-5 text-mute"><IconFile /></span><span>{talk ? '파일 보내기' : '파일 올리기'}</span><span class="sub">{talk ? '이 대화에서 읽는다' : '작업 폴더 inbox/'}</span>
+          <input type="file" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; close(); uploadFiles(fs) }} /></label>
+        {vision && <label class="row-btn cursor-pointer"><span class="w-5 h-5 text-mute"><IconImage /></span><span>사진</span>
+          <input type="file" accept="image/*,.heic,.heif" multiple hidden onChange={e => { const fs = [...(e.currentTarget.files || [])]; e.currentTarget.value = ''; close(); addFiles(fs) }} /></label>}
+        <button class="row-btn" onClick={() => { close(); convSheet.value = true }}><span class="w-5 h-5 text-mute"><IconSliders /></span><span>{talk ? '생각' : '방식·생각'}</span><span class="sub">{talk ? '' : (MODE_NAME[mode] || mode || '')}</span></button>
+        <div class="text-[13px] text-mute pt-2">{talk ? '/ 를 치면 명령을 고른다.' : '/ 를 치면 명령, @ 를 치면 파일을 고른다.'}</div>
+      </div>
+    </>
+  )
+}
+const MODE_NAME = { plan: '계획', ask: '묻기', edits: '편집', auto: '자동' }
 
 // Esc: 일하는 중이면 멈춤(고르기 판·시트가 열려 있으면 그것만 닫는다)
 document.addEventListener('keydown', e => {

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'preact/hooks'
 import { get, post, store, USER } from './lib.js'
 import { hub, sessions, queue, view, drawer, refresh, toast, tick, clockSkew, conn, setPanel, chat, cpost, openChat } from './state.js'
 import { NotifToggle } from './notify.jsx'
+import { PlaceName, placeText } from './places.jsx'
 
 export const STATUS = {
   starting: ['시작하는 중', 'run'], idle: ['쉬는 중', 'ok'], working: ['일하는 중', 'run'], waiting_approval: ['승인 기다림', 'wait'],
@@ -15,7 +16,7 @@ function Board() {
   const n = b.open.length + q.length
   const urg = { 돈: 'text-bad', 장애: 'text-bad', 마감: 'text-warn', 막힘: 'text-warn' }
   return (
-    <button class={'mx-3 mb-2.5 border rounded-[10px] px-2.5 py-2 text-[13px] text-left w-[calc(100%-24px)] hover:bg-soft ' + (n ? 'border-warn/60' : 'border-line')}
+    <button class={'mx-3 mb-2.5 border rounded-[10px] px-2.5 py-2 text-[13px] text-left w-[calc(100%-24px)] hover:bg-soft border-0 bg-soft px-3 py-2.5 ' + (n ? 'border-l-[3px] border-warn' : '')}
       onClick={() => { setPanel('board'); drawer.value = false }} title="현황판 전체(작업 내역 → 현황판)">
       <div class="flex items-center font-semibold mb-1">현황판{n ? <span class="chip ml-auto !text-warn">사용자 할 일 {n}</span> : <span class="chip ml-auto">할 일 없음</span>}</div>
       {b.open.slice(0, 4).map(t => <div key={t.id} class="py-0.5 truncate"><b class={'mr-1 ' + (urg[t.urgency] || 'text-warn')}>{t.id}</b>{t.title}</div>)}
@@ -31,7 +32,7 @@ function Board() {
 const MODES = ['plan', 'ask', 'edits', 'auto']
 // ＋새 대화: 새로(빈 문맥, 격리) · 갈래(지금 보는 대화를 복사해 갈라짐) · 작업자 맡기기(메인이 일을 맡긴 것처럼 따로 프로세스)
 // 판 120: 대화 칸의 종류 — 대화(묻고 찾고 건넴, 프로젝트 안 건드림) · 코드(폴더 하나를 맡겨 읽고 고치고 명령)
-export const KIND_LABEL = { talk: '대화', code: '코드' }
+export const KIND_LABEL = { talk: placeText('talk'), code: placeText('code') }
 export const kindTag = c => c?.kind ? KIND_LABEL[c.kind] + (c.tier ? ' · ' + c.tier : '') : ''
 const KIND_KEY = 'stewart.newKind'
 function lastKind() { try { return localStorage.getItem(KIND_KEY) || 'talk' } catch { return 'talk' } }
@@ -50,7 +51,7 @@ function NewChooser({ onClose }) {
   if (worker) return <NewSession onClose={onClose} />
   const kbtn = (k, desc) => <button key={k} aria-pressed={kind === k}
     class={'flex-1 text-left border rounded-xl px-3 py-2 ' + (kind === k ? 'border-accent bg-soft' : 'border-line hover:bg-soft')}
-    onClick={() => setKind(k)}><div class="font-semibold">{KIND_LABEL[k]}</div><div class="text-xs text-mute">{desc}</div></button>
+    onClick={() => setKind(k)}><div class="font-semibold"><PlaceName k={k} /></div><div class="text-xs text-mute">{desc}</div></button>
   return (
     <div class="fixed inset-0 z-50 bg-black/45 grid place-items-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div class="w-full max-w-md bg-panel rounded-2xl p-4 space-y-2 shadow-card">
@@ -60,7 +61,7 @@ function NewChooser({ onClose }) {
           {kbtn('code', '폴더 하나를 맡긴다. 읽고, 고치고, 명령을 돌린다')}
         </div>
         <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => go('fresh')}>
-          <div class="font-semibold">새로 — {KIND_LABEL[kind]}, 빈 문맥</div><div class="text-xs text-mute">기억·현황판은 함께 쓰고, 앞 대화는 모른다(서로 격리). 종류는 도중에 바뀌지 않는다</div></button>
+          <div class="font-semibold">새로 — <PlaceName k={kind} />, 빈 문맥</div><div class="text-xs text-mute">기억·현황판은 함께 쓰고, 앞 대화는 모른다(서로 격리). 종류는 도중에 바뀌지 않는다</div></button>
         <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft disabled:opacity-50" disabled={!!cur?.busy} onClick={() => go('fork')}>
           <div class="font-semibold">이어서(갈래) — {cur?.title || '메인'} 을 복사</div><div class="text-xs text-mute">지금까지의 대화를 가지고 갈라진다(같은 종류{cur?.kind ? ' · ' + KIND_LABEL[cur.kind] : ''}). 이후로는 서로 독립{cur?.busy ? ' · 일하는 중이라 끝난 뒤' : ''}</div></button>
         <button class="w-full text-left border border-line rounded-xl px-3 py-2.5 hover:bg-soft" onClick={() => setWorker(true)}>
@@ -119,11 +120,18 @@ function SessionItem({ s }) {
   return (
     <button class={'mx-2 my-px px-2.5 py-2 rounded-[9px] flex flex-col gap-px text-left w-[calc(100%-16px)] hover:bg-soft ' + (on ? 'bg-soft' : '')}
       onClick={() => { if (conv) openChat(s.role === 'main' ? 'main' : s.name); else { view.value = s.name; drawer.value = false } }}>
-      <span class="font-[560] truncate w-full">{name}{conv && kindTag(cinfo) ? <span class="text-xs text-mute font-normal ml-1.5">{kindTag(cinfo)}</span> : null}{asks ? <span class="chip ml-1.5 !text-warn">승인 {asks}</span> : null}</span>
-      <span class="text-xs text-mute flex gap-1.5 items-center w-full min-w-0">
-        <span class={'dot ' + (mainBusy ? 'dot-run' : dot ? 'dot-' + dot : '')} />
-        <span class="truncate">{conv ? (mainBusy ? '일하는 중' : '기다리는 중') + (s.role === 'chat' && cinfo?.origin === 'fork' ? ' · 갈래' : '') : label}{now ? ` · ${now.what.slice(0, 40)} · ${secs}초` : ''}</span>
-      </span>
+      <span class="font-[560] truncate w-full">{name}{conv && cinfo?.tier ? <span class="text-xs text-mute font-normal ml-1.5">{cinfo.tier}</span> : null}</span>
+      {/* 판 124: 상태 줄은 도는 중·승인 대기·오류일 때만, 사람 말로(한가한 대화는 이름·종류만) */}
+      {(() => {
+        const failed = s.status === 'failed'
+        const busyNow = conv ? mainBusy : ['working', 'waiting_approval'].includes(s.status)
+        const txt = asks ? `승인 ${asks}건 대기` : failed ? '오류로 멈춤' : busyNow ? `일하는 중${now ? ` · ${secs < 60 ? secs + '초' : Math.floor(secs / 60) + '분'}` : ''}` : (!conv ? label : '')
+        if (!txt) return null
+        return <span class={'text-xs flex gap-1.5 items-center w-full min-w-0 ' + (asks ? 'text-warn' : failed ? 'text-bad' : 'text-mute')}>
+          {(busyNow || asks) && <span class={'dot ' + (asks ? 'dot-wait' : 'dot-run')} />}
+          <span class="truncate">{txt}{s.role === 'chat' && cinfo?.origin === 'fork' ? ' · 갈래' : ''}</span>
+        </span>
+      })()}
     </button>
   )
 }
@@ -305,15 +313,15 @@ export function ToolChips() {
   </span>
 }
 
-export function ExternalChip() {
+export function ExternalChip({ plain }) {
   const b = hub.value?.backend, ext = b?.external
   if (!ext) return null
   const u = b.used || {}
   const k = n => n >= 1000000 ? (n / 1000000).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n || 0)
   const short = ext.replace(/\(.*\)/, '').trim()
   const cache = u.cache_seen ? Math.round(100 * (u.cache_hit || 0) / u.cache_seen) : null   // 캐시 칸을 주는 API 만(판 86)
-  return <span class="chip !text-warn flex-none" title={`바깥 API: ${ext} — 이 대화의 글·파일 내용·도구 결과가 그 회사 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)\n이 허브가 켜진 뒤 누계: 호출 ${u.calls || 0}번 · 입력 ${u.prompt || 0} · 출력 ${u.completion || 0} 토큰` + (u.cost_usd ? ` · $${u.cost_usd}` : '')}>
-    <span class="max-md:hidden">바깥 API: </span>{short}<span> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span>
+  return <span class={plain ? 'text-warn' : 'chip !text-warn flex-none'} title={`바깥 API: ${ext} — 이 대화의 글·파일 내용·도구 결과가 그 회사 서버로 나간다(그 회사 약관이 적용 — 학습에 쓰일 수 있다)\n이 허브가 켜진 뒤 누계: 호출 ${u.calls || 0}번 · 입력 ${u.prompt || 0} · 출력 ${u.completion || 0} 토큰` + (u.cost_usd ? ` · $${u.cost_usd}` : '')}>
+    {!plain && <span class="max-md:hidden">바깥 API: </span>}{short}<span> · 호출 {u.calls || 0} · 토큰 {k((u.prompt || 0) + (u.completion || 0))}</span>
     {cache != null && <span> · 캐시 {cache}%</span>}{u.cost_usd ? <span> · ${u.cost_usd < 0.01 ? u.cost_usd.toFixed(4) : u.cost_usd.toFixed(2)}</span> : null}</span>
 }
 
@@ -325,30 +333,41 @@ export function Sidebar() {
   const now = ss.filter(s => s.role !== 'main' && s.role !== 'chat' && !['paused', 'stopped', 'failed'].includes(s.status))
   const st = hub.value
   return (
-    <aside class="bg-panel border-r border-line flex flex-col min-w-0 h-full">
+    <aside class="bg-bg border-r border-line flex flex-col min-w-0 h-full">
       <div class="flex items-center gap-2 px-4 py-3.5 font-[650]">
-        <span class="w-[22px] h-[22px] rounded-md" style="background:linear-gradient(135deg,var(--c-accent),#9b6cf6)" />stewart hub
-        <button class="btn btn-ghost !px-2 ml-auto md:hidden" onClick={() => { drawer.value = false }}>✕</button>
+        stewart
+        <button class="ibtn ml-auto md:hidden text-mute" onClick={() => { drawer.value = false }} aria-label="서랍 닫기">✕</button>
       </div>
       <Board />
-      <button class="mx-3 mb-2 px-3 py-2 border border-line rounded-[10px] bg-soft font-semibold text-left" onClick={() => setNewOpen(true)}>＋ 새 대화</button>
+      <button class="mx-3 mb-2 px-3 py-2 rounded-[10px] font-semibold text-left min-h-[44px] hover:bg-soft" onClick={() => setNewOpen(true)}>＋ 새 대화</button>
       <div class="flex-1 overflow-auto scroll-thin pb-2">
-        <div class="px-4 pt-2.5 pb-1 text-xs text-mute font-semibold tracking-wide" title="메인과 같은 채팅(사진·/명령·압축·승인 모두). 기억·현황판은 함께 쓰고 문맥은 따로">대화</div>
-        {main && <SessionItem s={main} />}
-        {chats.map(s => <SessionItem key={s.name} s={s} />)}
+        {/* 판 124: 자리별 묶음 — parlando(대화 자리)와 코드. 묶음 머리만으로 가른다(알약·색 없이) */}
+        {['talk', 'code'].map(k => {
+          const kindOf = x => ((st?.chats || []).find(c => c.name === (x.role === 'main' ? 'main' : x.name)) || {}).kind || 'code'
+          const list = [...(main ? [main] : []), ...chats].filter(x => kindOf(x) === k)
+          if (!list.length) return null
+          return <div key={k}>
+            <div class="px-4 pt-3 pb-1 text-[12.5px] text-mute" title={k === 'talk' ? '묻고, 찾아 읽고, 글이나 파일을 받는다. 프로젝트 폴더는 건드리지 않는다' : '폴더 하나를 맡긴다. 읽고, 고치고, 명령을 돌린다'}>
+              <PlaceName k={k} /></div>
+            {list.map(x => <SessionItem key={x.name} s={x} />)}
+          </div>
+        })}
         {now.length > 0 && <div class="px-4 pt-2.5 pb-1 text-xs text-mute font-semibold tracking-wide" title="메인(또는 사람)이 일을 맡긴 작업자 — 보고를 메인에 낸다">작업자 · 맡긴 일</div>}
         {now.map(s => <SessionItem key={s.name} s={s} />)}
         <Past />
       </div>
-      <div class="px-4 py-3 border-t border-line text-xs text-mute flex flex-wrap gap-2 items-center">
-        <div class="w-full flex items-center gap-1.5 min-w-0"><ModelDot /><span class="truncate" title="서버가 실제로 올린 모델">{modelName(st?.model) || st?.backend?.model}</span></div>
-        <ConnDot />
-        {st?.web && <span class="chip" title={st.web.why || ''}>{st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐'}</span>}
-        <span class="flex-1" />
-        <NotifToggle />
-        {USER && <><span class="chip" title="로그인한 사람(계정 모드)">{USER}</span>
-          <button class="underline-offset-2 hover:underline" onClick={() => post('/logout', {}).then(() => { location.href = '/login' })}>나가기</button></>}
-        <a class="underline-offset-2 hover:underline" href="/?ui=old" title="예전 화면(되돌릴 길)">옛 화면</a>
+      <div class="px-4 py-3 border-t border-line text-[12.5px] text-mute space-y-1">
+        {/* 판 124: 상태 알약 대신 보조 글 한 줄 — 정상인 연결·모델 상태는 적지 않는다 */}
+        <div class="truncate" title="서버가 실제로 올린 모델">모델 {modelName(st?.model) || st?.backend?.model}
+          {st?.model && !['ok', 'unknown'].includes(st.model.state) ? <span class="text-warn"> · {st.model.label}</span> : null}
+          {st?.web ? ' · ' + (st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐') : ''}</div>
+        {conn.value.state !== 'ok' && <div class="text-warn"><ConnDot /></div>}
+        <div class="flex gap-3 items-center">
+          <NotifToggle />
+          {USER && <><span>{USER}</span>
+            <button class="hover:underline" onClick={() => post('/logout', {}).then(() => { location.href = '/login' })}>나가기</button></>}
+          <a class="hover:underline" href="/?ui=old" title="예전 화면(되돌릴 길)">옛 화면</a>
+        </div>
       </div>
       {newOpen && <NewChooser onClose={() => setNewOpen(false)} />}
     </aside>

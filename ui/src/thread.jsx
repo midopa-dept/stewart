@@ -6,8 +6,13 @@ import { diffRows } from './diffrows.js'
 import { copyText, flash } from './copy.js'
 import { ThinkBlock } from './think.jsx'
 import { hub, tick, clockSkew, busy, refresh, toast, cpost, chat, composerFill } from './state.js'
+import { narrow } from './mobile.js'
+import { IconUp, IconDown, IconChev, IconMore, IconUpS, IconDown2 } from './icons.jsx'
+import { place, PlaceName } from './places.jsx'
 
 // main_log 줄을 덩어리로: user · assistant · diff · steps(도구·안내 줄 묶음)
+const NEWCHAT_RX = /^\s*새 대화를 시작했다/   // 판 124 폰: 기록 경로가 든 긴 안내 대신 "새 대화" 구분선 한 줄
+const SKILLS_RX = /^\s*스킬 \d+개:/   // 세션 시작 안내의 스킬 목록 줄(판 124 폰에서는 숨긴다 — "/" 나 "+" 에서)
 export function groupLog(log) {
   const out = []
   let g = null
@@ -33,7 +38,11 @@ export function groupLog(log) {
       continue
     }
     if (think) { out.push({ type: 'think', key: 'th' + think.ts + (think.chars || 0), m: think }); think = null }
-    if (m.kind === 'meta') continue                 // 차례 요약 줄: 대화에선 숨김(작업 내역·토큰 줄에 있다)
+    if (m.kind === 'meta') {                         // 차례 요약 줄: 대화에선 숨기고, 그 차례의 마지막 답에 붙여 "⋯"로 본다(판 124)
+      const last = [...out].reverse().find(x => x.type === 'assistant')
+      if (last) last.meta = m.text
+      continue
+    }
     flush()
     if (m.kind === 'turn_end') { if (!['answered', 'backend_error', 'context_overflow'].includes(m.reason)) out.push({ type: 'end', key: 'e' + m.ts + m.text, m }); continue }
     if (m.kind === 'error') { out.push({ type: 'error', key: 'x' + m.ts + m.text, m }); continue }
@@ -93,7 +102,7 @@ function Step({ s, running }) {
   const shown = s.ok === false || open ? (full && open ? full : s.out) : []
   const code = name === 'run_shell' ? exitOf(s) : null
   return (
-    <div class="flex gap-2.5 items-start px-3 py-2 text-[13.5px] border-t border-soft first:border-t-0">
+    <div class="flex gap-2.5 items-start px-3 py-2 text-[13.5px] border-t border-line/60">
       <Icon ok={s.ok} run={running} />
       <div class="flex-1 min-w-0">
         <button class="block w-full text-left font-mono text-[13px] truncate" title={s.text} onClick={(full || s.out).length ? toggle : undefined}>
@@ -230,7 +239,7 @@ export function UserImgs({ names }) {
 
 // 묶음 제목 요약: "명령 3개 실행 · 파일 2개 읽음 · 파일 1개 고침"(꼴은 OpenHands event-group.tsx, MIT — ui/THIRD_PARTY.md)
 const VERB = [[/^run_shell$/, '명령', '실행'], [/^(read_file|view_image)$/, '파일', '읽음'], [/^(write_file|edit_file|multi_edit)$/, '파일', '고침'],
-  [/^(list_dir|glob|search|folder_scan|scan_read|scan_stats|peek)$/, '찾아보기', ''], [/^session_/, '작업자 일', ''], [/^memory_|^note_add$/, '기억', ''], [/^web_/, '웹', ''], [/^board$/, '현황판', ''], [/^forge_/, '저장소', '']]
+  [/^(list_dir|glob|search|folder_scan|scan_read|scan_stats|peek)$/, '찾아보기', ''], [/^session_/, '작업자 일', ''], [/^memory_|^note_add$/, '기억', ''], [/^web_search$/, '검색', '번'], [/^web_fetch$/, '웹 글', '읽음'], [/^web_/, '웹', ''], [/^board$/, '현황판', ''], [/^forge_/, '저장소', '']]
 export function stepSummary(steps) {
   const n = new Map()
   for (const s of steps) {
@@ -244,6 +253,15 @@ export function stepSummary(steps) {
 }
 export const exitOf = s => { const m = /^\[exit (-?\d+)\]/.exec(s.result || (s.out || [])[0] || ''); return m ? +m[1] : null }
 
+// 승인 대기 중이면 도구 한 줄이 "승인을 기다리는 중 · 6초" 하나로 말하고, 아래 진행 줄은 겹치므로 숨긴다(판 124)
+const waiting = () => !!(hub.value?.busy && (hub.value?.queue || []).length && /승인/.test(hub.value?.now?.what || ''))
+function waitSecs() {
+  tick.value
+  const now = hub.value?.now
+  const secs = now ? Date.now() / 1000 - clockSkew.value - now.since : 0
+  return secs < 60 ? Math.max(1, Math.round(secs)) + '초' : Math.floor(secs / 60) + '분'
+}
+
 function StepsCard({ g, last }) {
   const steps = g.steps
   const fails = steps.filter(s => s.ok === false).length
@@ -253,17 +271,25 @@ function StepsCard({ g, last }) {
   const show = open ? steps : steps.filter((x, i) => i >= steps.length - 3 || x.kind === 'reflect')   // 되짚기 줄은 접어도 보인다
   const hidden = steps.length - show.length
   if (!steps.length && !g.notes.length && !g.files) return null
+  if (steps.length && !open) return (   // 판 124: 테두리 없는 한 줄 — 누르면 펼침(폰·데스크톱)
+    <button class="w-full flex items-center gap-2 py-1.5 my-1 text-[14px] text-mute text-left min-h-[40px]" onClick={toggle}>
+      {isLive ? <span class="spin" /> : fails ? <span class="text-bad text-[12px]">✕</span> : <span class="text-[12px]">✓</span>}
+      <span class="truncate">{isLive && waiting() ? `승인을 기다리는 중 · ${waitSecs()}` :
+        <>{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{isLive ? ' 중' : ''}</>}</span>
+      <span class="w-4 h-4 flex-none"><IconChev /></span>
+    </button>
+  )
   if (!steps.length) return (   // 도구 없이 안내 줄만: 카드 말고 흐린 글
     <div class="my-2 space-y-0.5">{g.notes.map(n => (
       <div key={n.ts + n.text} class={'text-[13px] whitespace-pre-wrap ' + (n.kind === 'warn' ? 'text-warn' : 'text-mute')}>{n.kind === 'warn' ? '⚠ ' : ''}{n.text}</div>
     ))}{g.files && <div class="text-[13px] text-mute">{g.files}</div>}</div>
   )
   return (
-    <div class="border border-line rounded-xl bg-panel my-2.5 overflow-hidden shadow-card">
-      <button class="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-mute border-b border-line text-left" onClick={toggle}>
-        <span>{isLive ? '⏺' : '●'}</span>
-        <span>{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{g.files ? ' · ' + g.files.replace(/^이번 차례에 바뀐 /, '바꾼 ').split(':')[0] : ''}</span>
-        <span class="ml-auto">{open ? '접기 ▴' : hidden ? `앞 ${hidden}단계 · 펼치기 ▾` : '펼치기 ▾'}</span>
+    <div class="rounded-xl bg-soft my-2 overflow-hidden">
+      <button class="w-full flex items-center gap-2 px-3 py-2 text-[14px] text-mute text-left min-h-[40px]" onClick={toggle}>
+        {isLive ? <span class="spin" /> : fails ? <span class="text-bad text-[12px]">✕</span> : <span class="text-[12px]">✓</span>}
+        <span class="truncate">{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{g.files ? ' · ' + g.files.replace(/^이번 차례에 바뀐 /, '바꾼 ').split(':')[0] : ''}</span>
+        <span class="ml-auto w-4 h-4 flex-none" aria-label={open ? '접기' : '펼치기'}>{open ? <IconUpS /> : <IconDown2 />}</span>
       </button>
       {show.map((s, i) => <Step key={s.ts + s.text} s={s} running={isLive && i === show.length - 1 && s.ok == null} />)}
       {(open || !steps.length) && g.notes.map(n => (
@@ -303,9 +329,22 @@ export function DiffCard({ text, stat }) {   // 줄 번호 4칸 격자(판 55, �
   )
 }
 
+// 판 124 폰: 지금 하는 일 줄의 내부 말을 사람 말로(허브가 쓰는 꼴만 바꾸고 나머지는 그대로)
+function plainWhat(w) {
+  const t = String(w || '')
+  if (!t) return '일하는 중'
+  if (/승인 기다리는 중/.test(t)) return '승인을 기다리는 중'
+  if (/^모델 응답 기다리는/.test(t)) return '생각하는 중'
+  if (/^모델이 답을 쓰는 중/.test(t)) return '답을 쓰는 중'
+  if (/^도구 실행 중:?\s*/.test(t)) return t.replace(/^도구 실행 중:?\s*/, '').trim() ? '도구를 쓰는 중' : '도구를 쓰는 중'
+  if (/^문맥 압축 중/.test(t)) return '앞 대화를 줄이는 중'
+  return t.split(' — ')[0]
+}
+
 function Live() {
   const st = hub.value
   if (!st?.busy) return null
+  if (waiting() && !(st.live || {}).text) return null   // 도구 한 줄이 "승인을 기다리는 중"을 말한다
   const lv = st.live || {}, now = st.now
   tick.value
   const secs = now ? Date.now() / 1000 - clockSkew.value - now.since : 0
@@ -315,13 +354,19 @@ function Live() {
     <div>
       {lv.think_text && !lv.text ? <ThinkBlock streaming text={lv.think_text} chars={lv.think} since={lv.think_since ? lv.think_since + clockSkew.value : null} /> : null}
       {lv.text ? <div class="my-4"><Md text={lv.text + ' ▍'} /></div> : null}
+      {true ? (   // 판 124: 사람 말로 짧게 — "승인을 기다리는 중 · 8분"(숫자는 "이 대화"에)
+        <div class="flex items-center gap-2.5 text-[14px] text-mute my-3.5">
+          <span class="spin" />
+          <span>{st.stopping ? '멈추는 중…' : plainWhat(now?.what)}{now ? ` · ${secs < 60 ? Math.max(1, Math.round(secs)) + '초' : Math.floor(secs / 60) + '분'}` : ''}</span>
+        </div>
+      ) : (
       <div class="flex items-center gap-2.5 text-[13px] text-mute my-3.5">
         <span class="spin" />
         <span>{st.stopping ? '멈추는 중…' : (now?.what || '일하는 중')}
           {lv.think && !lv.text ? ` · 생각 ${lv.think}자` : ''}
           {chars ? ` · 받은 ≈${estTokens(chars)} 토큰` : ''}{rate ? ` · ${Math.round(rate)} tok/s` : ''}
           {now ? ` · ${fmtSecs(secs)}` : ''}</span>
-      </div>
+      </div>)}
     </div>
   )
 }
@@ -461,23 +506,69 @@ function TodoCard({ todos, latest, ts }) {
 
 // 학습 표시(판 89): 차례의 마지막 답 줄 아래 👍👎 — 터치 기기는 늘 보이고 마우스는 줄 위에 올릴 때(app.css .tbar).
 // "교정됨"은 사람이 다음 말로 고쳤을 때 엔진이 붙인 꼬리표 — 누르면 뗀다. 표시는 기록에만 남고 대화·모델 문맥은 그대로다.
-function TrainBar({ m }) {
+// 차례 요약 줄 "[answered · 단계 5 · 프롬프트 1200/32768 tok · 생성 합 400 tok · 모델 1초]" → 사람 말 한 줄
+function metaLine(t) {
+  const g = re => (re.exec(t || '') || [])[1]
+  const steps = g(/단계 (\d+)/), pr = g(/프롬프트 (\d+)/), gen = g(/생성 합 (\d+)/), sec = g(/모델 (\d+)초/)
+  return [steps && `단계 ${steps}`, pr && `입력 ${fmtK(+pr)}`, gen && `생성 누계 ${fmtK(+gen)}`, sec && `모델 ${sec}초`].filter(Boolean).join(' · ')
+}
+function TrainBar({ m, meta }) {
   const send = label => cpost('/api/train/label', { turn: m.turn, label }).then(refresh, e => toast('표시하지 못했다: ' + e.message))
   const lb = m.label
+  const [open, setOpen] = useState(false)
   return (
-    <div class={'tbar flex gap-1.5 items-center mt-1 text-[13px]' + (lb || m.corrected ? ' tbar-on' : '')}>
+    <>
+    <div class={'tbar flex gap-1.5 items-center mt-1 text-[13px]' + (lb || m.corrected || open ? ' tbar-on' : '')}>
       <button class={'tb' + (lb === 'good' ? ' tb-sel' : '')} title={lb === 'good' ? '좋음 표시 떼기' : '좋은 예로 표시(학습 자료 고르기)'}
-        aria-pressed={lb === 'good'} onClick={() => send(lb === 'good' ? 'clear' : 'good')}>👍</button>
+        aria-pressed={lb === 'good'} onClick={() => send(lb === 'good' ? 'clear' : 'good')}><span class="block w-[18px] h-[18px] text-mute"><IconUp /></span></button>
       <button class={'tb' + (lb === 'bad' ? ' tb-sel' : '')} title={lb === 'bad' ? '나쁨 표시 떼기' : '나쁜 예로 표시'}
-        aria-pressed={lb === 'bad'} onClick={() => send(lb === 'bad' ? 'clear' : 'bad')}>👎</button>
+        aria-pressed={lb === 'bad'} onClick={() => send(lb === 'bad' ? 'clear' : 'bad')}><span class="block w-[18px] h-[18px] text-mute"><IconDown /></span></button>
       {m.corrected && <button class="text-[11px] px-2 py-px rounded-full font-semibold whitespace-nowrap text-warn bg-warn/15"
         title="다음 말이 고치는 꼴이라 붙은 꼬리표 — 누르면 뗀다" onClick={() => send('uncorrect')}>교정됨 ✕</button>}
+      {meta && <button class={'tb' + (open ? ' tb-sel' : '')} aria-expanded={open} title="이 차례의 숫자" onClick={() => setOpen(!open)}><span class="block w-[18px] h-[18px] text-mute"><IconMore /></span></button>}
     </div>
+    {open && meta && <div class="text-[12.5px] text-mute mt-0.5">{metaLine(meta)}</div>}
+    </>
   )
 }
 
+// 판 124 폰: 사용자 말풍선을 길게 누르면 — 복사 · 고쳐 다시 보내기(차례 되감기)
+const userMenu = signal(null)
+function longPress(fn) {
+  let t = null
+  const start = () => { t = setTimeout(() => { t = null; fn() }, 480) }
+  const cancel = () => { if (t) { clearTimeout(t); t = null } }
+  return { onTouchStart: start, onTouchEnd: cancel, onTouchMove: cancel, onContextMenu: e => { e.preventDefault(); cancel(); fn() } }
+}
+function UserMenu() {
+  const m = userMenu.value
+  if (!m) return null
+  const close = () => { userMenu.value = null }
+  return (
+    <>
+      <div class="sheet-back" onClick={close} />
+      <div class="sheet" role="dialog" aria-label="내 말">
+        <div class="text-[13px] text-mute mb-1 truncate">{m.text}</div>
+        <button class="row-btn" onClick={e => { copyText(m.text); close(); toast('복사했다', 'ok', 2000) }}><span>복사</span></button>
+        {m.turn && !busy.value && <button class="row-btn" onClick={() => { close(); undoTurn(m.turn, true) }}><span>고쳐 다시 보내기</span><span class="sub">이 차례를 지우고 입력 칸으로</span></button>}
+      </div>
+    </>
+  )
+}
+
+function curKind() {
+  const c = (hub.value?.chats || []).find(x => x.name === (hub.value?.chat || chat.value))
+  return c?.kind || (hub.value?.chats || []).find(x => x.name === 'main')?.kind || 'code'
+}
+function curFolder() { return (hub.value?.sessions || []).find(x => x.role === 'main')?.workdir?.split('/').slice(-1)[0] || '' }
+function emptySub() {   // 첫 화면 보조 글: 자리에 맞는 한 줄(README 대화 자리 절의 그 풀이)
+  return curKind() === 'talk' ? '묻고, 찾아 읽고, 글이나 파일을 받는다' : '이 폴더의 코드를 함께 읽고 고칩니다'
+}
+
 export function Thread({ log, prior }) {
-  const groups = useMemo(() => groupLog(log), [log])
+  const nar = true   // 판 124: 스킬 목록 줄 숨김·새 대화 구분선은 폰·데스크톱 같게
+  const groups = useMemo(() => groupLog(nar ? log.filter(m => m.kind === 'user' || m.kind === 'assistant' || !SKILLS_RX.test(m.text || ''))
+    .map(m => m.kind !== 'user' && m.kind !== 'assistant' && NEWCHAT_RX.test(m.text || '') ? { ...m, kind: 'divider', text: '새 대화' } : m) : log), [log, nar])
   let lastSteps = -1, lastTodo = -1
   groups.forEach((g, i) => { if (g.type === 'steps') lastSteps = i; if (g.type === 'todo') lastTodo = i })
   const lastOfTurn = new Set()   // 차례마다 마지막 답 줄(그 아래에만 👍👎)
@@ -493,21 +584,30 @@ export function Thread({ log, prior }) {
     <>
       {prior}
       <FileViewer />
+      <UserMenu />
       <WorkerStrip />
       {!groups.length && !busy.value && (
+        <div class="empty-hint text-center pt-[30vh] md:pt-[28vh]">
+          <div class="text-[17px] font-semibold"><PlaceName k={curKind()} /></div>
+          <div class="text-[13px] text-mute mt-1">{emptySub()}</div>
+          {place(curKind()).folder && curFolder() && <div class="text-[12.5px] text-mute mt-2">{curFolder()}</div>}
+        </div>
+      )}
+      {false && (
         <div class="text-center text-mute py-16">
           <div class="text-lg font-semibold text-fg mb-1">{(hub.value?.chat || 'main') === 'main' ? '메인에게 할 일을 말하십시오' : '새 대화 — 메인과 같은 채팅입니다'}</div>
           <div class="text-sm">작업자를 맡기고, 승인을 묻고, 보고를 모읍니다.</div>
         </div>
       )}
       {groups.map((g, i) => {
-        if (g.type === 'user') return <div key={g.key} class="my-4 tline"><div class="flex justify-end"><div class="bg-soft px-3.5 py-2.5 rounded-[16px_16px_4px_16px] max-w-[78%] max-md:max-w-[88%] whitespace-pre-wrap break-words">{g.m.text}</div></div>
-          {g.m.turn && !busy.value && <div class="tbar flex justify-end mt-0.5"><button class="tb text-[12px]" title="이 차례를 지우고 내 말을 입력 칸에 되돌린다(고쳐 다시 보내기)"
+        if (g.type === 'user') return <div key={g.key} class="my-4 tline"><div class="flex justify-end"><div class="bg-soft px-3.5 py-2.5 rounded-[16px_16px_4px_16px] max-w-[78%] max-md:max-w-[88%] whitespace-pre-wrap break-words select-text"
+            {...(narrow.value ? longPress(() => { userMenu.value = { text: g.m.text, turn: g.m.turn } }) : {})}>{g.m.text}</div></div>
+          {g.m.turn && !busy.value && !narrow.value && <div class="tbar flex justify-end mt-0.5"><button class="tb text-[12px]" title="이 차례를 지우고 내 말을 입력 칸에 되돌린다(고쳐 다시 보내기)"
             onClick={() => undoTurn(g.m.turn, true)}>↶ 되감기</button></div>}
           {g.m.imgs?.length > 0 && <UserImgs names={g.m.imgs} />}</div>
         if (g.type === 'assistant') return <div key={g.key} class="my-4 tline" onClick={onAnswerClick}><Md text={g.m.text} />
           {g.m.options?.length > 0 && i === tail && !busy.value && <AskOptions opts={g.m.options} />}
-          {lastOfTurn.has(i) && g.m.turn !== curTurn && <TrainBar m={g.m} />}</div>
+          {lastOfTurn.has(i) && g.m.turn !== curTurn && <TrainBar m={g.m} meta={g.meta} />}</div>
         if (g.type === 'diff') return <DiffCard key={g.key} text={g.m.text} stat={g.m.stat} />
         if (g.type === 'think') return <ThinkBlock key={g.key} text={g.m.text} secs={g.m.secs} chars={g.m.chars} cut={g.m.cut} />
         if (g.type === 'steps') return <div key={g.key}><StepsCard g={g} last={i === lastSteps && i >= tail - 1} />
@@ -520,10 +620,11 @@ export function Thread({ log, prior }) {
         if (g.type === 'tail') return <div key={g.key} class="text-[13px] my-2 text-warn">📌 {g.m.text}</div>
         if (g.type === 'error') return <ErrorCard key={g.key} m={g.m} last={i >= tail - 1} />
         if (g.type === 'end') return <div key={g.key} class="text-[13px] text-mute my-2">— 차례 끝: {END[g.m.reason] || g.m.reason} —</div>
+        if (g.m.kind === 'divider') return <div key={g.key} class="flex items-center gap-3 my-5 text-[12px] text-mute"><span class="flex-1 h-px bg-line" />{g.m.text}<span class="flex-1 h-px bg-line" /></div>
         return <div key={g.key} class="text-[13px] text-mute my-2 whitespace-pre-wrap">{g.m.text}</div>
       })}
       <Live />
-      <TokenLine />
+
     </>
   )
 }

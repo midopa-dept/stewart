@@ -2,26 +2,30 @@
 
 /* 색은 변수 하나로: 라이트·다크(OS 따라감). 바깥 글꼴 없음 — OS 글꼴만 */
 :root {
-  --c-bg: #f7f7f8; --c-panel: #ffffff; --c-fg: #1c1c1e; --c-mute: #6b6b73; --c-line: #e5e5ea; --c-soft: #f0f0f3;
-  --c-accent: #3b6cf6; --c-ok: #1f9d55; --c-bad: #d64545; --c-warn: #b8700c; --c-code: #f5f5f7;
+  /* 판 124 "조용한 종이": 보라 기 없는 따뜻한 흰 바탕·먹색 글·회갈색 보조. 강조색은 하나(링크·초점·진행), 주 버튼은 먹색 채움 */
+  --c-bg: #faf9f7; --c-panel: #ffffff; --c-fg: #1f1e1c; --c-mute: #6b6862; --c-line: #e7e4de; --c-soft: #f1efea;
+  --c-accent: #2f6fbd; --c-ok: #2f7d4f; --c-bad: #c2412d; --c-warn: #a86708; --c-code: #f1efea;
+  --c-ink: #1f1e1c; --c-on-ink: #faf9f7;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --c-bg: #141416; --c-panel: #1c1c1f; --c-fg: #ececf1; --c-mute: #9a9aa5; --c-line: #2c2c31; --c-soft: #26262b;
-    --c-accent: #7aa2ff; --c-ok: #3ccf7d; --c-bad: #ff6b6b; --c-warn: #f0b04a; --c-code: #202024;
+    --c-bg: #1b1a19; --c-panel: #222120; --c-fg: #eceae6; --c-mute: #a39f98; --c-line: #2e2c2a; --c-soft: #262422;
+    --c-accent: #7fb0ec; --c-ok: #6cc391; --c-bad: #f0806b; --c-warn: #e2a64a; --c-code: #262422;
+    --c-ink: #eceae6; --c-on-ink: #1b1a19;
   }
 }
 
 @theme {
   --color-bg: var(--c-bg); --color-panel: var(--c-panel); --color-fg: var(--c-fg); --color-mute: var(--c-mute);
   --color-line: var(--c-line); --color-soft: var(--c-soft); --color-accent: var(--c-accent); --color-ok: var(--c-ok);
-  --color-bad: var(--c-bad); --color-warn: var(--c-warn); --color-code: var(--c-code);
+  --color-bad: var(--c-bad); --color-warn: var(--c-warn); --color-code: var(--c-code); --color-ink: var(--c-ink); --color-on-ink: var(--c-on-ink);
   --font-sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "D2Coding", monospace;
 }
 
 html, body, #app { height: 100%; }
+@media (max-width: 767px) { #app { height: var(--app-h, 100%); } }   /* 판 124: 키보드가 올라오면 보이는 칸 높이로(mobile.js) */
 body { margin: 0; background: var(--c-bg); color: var(--c-fg); font-family: var(--font-sans); font-size: 15px; line-height: 1.6;
   -webkit-font-smoothing: antialiased; }
 button { cursor: pointer; }
@@ -33,8 +37,8 @@ button:disabled { cursor: default; opacity: .55; }
 .btn:hover:not(:disabled) { background: var(--c-soft); }
 .btn-ok { background: var(--c-ok); color: #fff; border-color: transparent; }
 .btn-ok:hover:not(:disabled) { background: color-mix(in srgb, var(--c-ok) 85%, black); }
-.btn-pri { background: var(--c-accent); color: #fff; border-color: transparent; }
-.btn-pri:hover:not(:disabled) { background: color-mix(in srgb, var(--c-accent) 85%, black); }
+.btn-pri { background: var(--c-ink); color: var(--c-on-ink); border-color: transparent; }   /* 주 버튼 = 먹색 채움(판 124) */
+.btn-pri:hover:not(:disabled) { background: color-mix(in srgb, var(--c-ink) 85%, var(--c-bg)); }
 .btn-stop { background: var(--c-fg); color: var(--c-bg); border-color: transparent; }
 .btn-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--c-fg) 85%, var(--c-bg)); }
 .btn-ghost { background: transparent; }
@@ -59,7 +63,7 @@ button:disabled { cursor: default; opacity: .55; }
 .md pre { position: relative; background: var(--c-code); border: 1px solid var(--c-line); border-radius: 10px; padding: 10px 12px;
   overflow: auto; max-height: 28rem; margin: .5rem 0; }
 .md pre code { background: none; border: 0; padding: 0; font-size: 12.5px; line-height: 1.55; }
-.md table { border-collapse: collapse; margin: .5rem 0; display: block; overflow-x: auto; }
+.md table { border-collapse: collapse; margin: 0; }
 .md th, .md td { border: 1px solid var(--c-line); padding: 3px 8px; text-align: left; }
 .md blockquote { border-left: 3px solid var(--c-line); padding-left: .7rem; color: var(--c-mute); margin: .4rem 0; }
 .md a { color: var(--c-accent); text-decoration: underline; }
@@ -107,6 +111,9 @@ button:disabled { cursor: default; opacity: .55; }
 .cp-btn:hover { background: var(--c-soft); }
 /* 코드 블록 줄 감싸기(판 67, SW-19): 폰에서 가로로 잘리지 않게. 복사는 원문 그대로 */
 .md .cb pre code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+/* 판 124: 줄마다 블록 — 꺾인 줄은 2ch 내어쓰기로 원래 줄과 가른다(줄 사이 개행 글자는 그리지 않는다) */
+.md .cb pre code { white-space: normal; }
+.md .cb pre code .ln { display: block; white-space: pre-wrap; padding-left: calc((var(--i, 0) + 2) * 1ch); text-indent: calc((var(--i, 0) + 2) * -1ch); min-height: 1.55em; }
 
 /* 학습 표시(판 89): 터치 기기는 늘 보임, 마우스는 답 줄 위에서·표시가 있으면 늘 */
 .tb { padding: 2px 8px; border-radius: 8px; opacity: .55; line-height: 1.4; }
@@ -115,4 +122,49 @@ button:disabled { cursor: default; opacity: .55; }
 @media (hover: hover) and (pointer: fine) {
   .tbar:not(.tbar-on) { visibility: hidden; }
   .tline:hover .tbar, .tbar:focus-within { visibility: visible; }
+}
+
+/* ── 판 124: "조용한 종이" — 글 위계·코드·표(폰·데스크톱 같게) ── */
+body { font-size: 16px; line-height: 1.6; }
+.md h1, .md h2, .md h3, .md h4 { font-size: 17px; font-weight: 700; margin: 1.1rem 0 .3rem; }
+.md p { margin: .45rem 0; }
+.md code { border: 0; background: var(--c-code); padding: .05rem .3rem; border-radius: 5px; font-size: 14px; }
+/* 코드 블록: 테두리 없이 옅은 바탕, 머리 줄은 옅게. 줄은 꺾는다(판 67) */
+.md .cb { border: 0; border-radius: 10px; background: var(--c-code); }
+.md .cb-head { border-bottom: 0; padding: .25rem .4rem 0 .8rem; font-size: 12px; }
+.md .cb pre { background: transparent; padding: .35rem .8rem .7rem; }
+.md .cb pre code { font-size: 13.5px; }
+.md pre { border: 0; }
+/* 표: 넘치면 가로 스크롤, 아니면 폭 100%. 바깥 테두리 없이 행 사이 가는 선만, 머리 행은 보조 글 색 */
+.md table { border: 0; width: 100%; max-width: 100%; font-size: 14.5px; }
+.md .tbl { overflow-x: auto; margin: .5rem 0; }
+.md th, .md td { border: 0; border-bottom: 1px solid var(--c-line); padding: 6px 12px 6px 0; }
+.md th { color: var(--c-mute); font-weight: 600; font-size: 13px; }
+.cp-btn { border: 0; background: transparent; color: var(--c-mute); }
+.btn { border-radius: 10px; }
+/* 아래에서 올라오는 시트(폰) */
+.sheet-back { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.35); }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; background: var(--c-bg); border-radius: 16px 16px 0 0;
+  box-shadow: 0 -4px 24px rgba(0,0,0,.12); max-height: 85vh; overflow: auto; padding: 8px 16px max(16px, env(safe-area-inset-bottom));
+  animation: sheet-up .18s ease-out; }
+.sheet::before { content: ""; display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--c-line); margin: 0 auto 10px; }
+/* 데스크톱: 시트는 머리의 대화 이름에서 내려오는 작은 판(.sheet), 승인 전문은 가운데 판(.sheet-wide) */
+@media (min-width: 768px) {
+  .sheet { left: auto; right: auto; bottom: auto; top: 52px; width: 380px; margin-left: 56px; border-radius: 14px; max-height: 70vh;
+    box-shadow: 0 8px 32px rgba(0,0,0,.14); border: 1px solid var(--c-line); animation: pop-in .14s ease-out; }
+  .sheet::before { display: none; }
+  .sheet-back { background: transparent; }
+  .sheet-wide { left: 50%; top: 12vh; width: min(720px, 90vw); margin-left: 0; transform: translateX(-50%); }
+}
+@keyframes pop-in { from { opacity: .4; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+/* 꼴 단추는 components 층에 — 층 밖에 두면 md:hidden 같은 유틸리티를 이긴다(데스크톱에 서랍 ✕ 가 보이던 것) */
+@layer components {
+.row-btn { display: flex; align-items: center; gap: .75rem; width: 100%; min-height: 48px; padding: 0 2px; text-align: left; border-bottom: 1px solid var(--c-line); }
+.row-btn:last-child { border-bottom: 0; }
+.row-btn .sub { margin-left: auto; color: var(--c-mute); font-size: 14px; }
+/* 선 아이콘 단추(44×44) */
+.ibtn { width: 44px; height: 44px; display: inline-grid; place-items: center; border-radius: 12px; color: var(--c-fg); flex: none; }
+.ibtn:hover:not(:disabled) { background: var(--c-soft); }
+.ibtn svg { width: 22px; height: 22px; }
 }

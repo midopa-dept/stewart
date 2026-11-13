@@ -11,6 +11,11 @@ import { Approvals, AskSheet, Composer } from './dock.jsx'
 import { Sidebar, ConnDot, ModelDot, ExternalChip, ToolChips, ModeChips, kindTag } from './side.jsx'
 import { Panel } from './panel.jsx'
 import { useWorker, WorkerThread, WorkerControls, WorkerInfo } from './worker.jsx'
+import { narrow, convSheet } from './mobile.js'
+import { IconMenu, IconNew, IconChev, IconPanel } from './icons.jsx'
+import { TokenLine } from './thread.jsx'
+import { conn } from './state.js'
+import { place, PlaceName } from './places.jsx'
 
 // 한 칸이 그리다 깨져도 화면 전체가 멈추지 않게: 그 칸만 "못 그렸다 + 다시"로 바꾼다(승인 칸이 안 보이던 일의 재발 막기)
 class Guard extends Component {
@@ -46,7 +51,7 @@ function CtxBar() {
 // [새 대화]: 지금 대화는 기록에 남기고(지난 세션에서 다시 연다) 빈 문맥으로 — /clear·/reset 과 같다. 확인은 단추에만
 async function newMain() {
   if (!confirm('지금 대화를 닫고 새로 시작할까요?\n(지금 대화는 기록에 남아 지난 세션 목록에서 다시 열 수 있다)')) return
-  try { await cpost('/api/main/new', {}); toast('새 대화를 시작했다'); refresh() } catch (e) { toast('새로 못 함: ' + e.message) }
+  try { await cpost('/api/main/new', {}); toast('새 대화를 시작했다', 'ok'); refresh() } catch (e) { toast('새로 못 함: ' + e.message) }
 }
 function NewMain() {
   const busy = hub.value?.busy
@@ -120,44 +125,145 @@ function Center() {
   return (
     <main class="flex flex-col min-w-0 h-full relative">
       {st?.hub_color && <div class="h-1.5 w-full flex-none" style={`background:${safeColor(st.hub_color)}`} title={st.hub_label || ''} />}
-      <div class="border-b border-line bg-bg/85 backdrop-blur">
-      <div class="flex items-center gap-2.5 px-5 max-md:px-3 pt-2.5 pb-1.5">
-        <button class="btn btn-ghost !px-2 md:hidden" onClick={() => { drawer.value = true }} aria-label="세션 서랍">☰</button>
-        <button class="btn btn-ghost !px-2 max-md:hidden" onClick={toggleSide} title="사이드바 접기·펴기">☰</button>
-        {st?.hub_label && <span class="chip font-semibold flex-none" style={st.hub_color ? `border-color:${safeColor(st.hub_color)}` : ''}>{st.hub_label}</span>}
-        <span class="font-[650] truncate min-w-[2.5rem]">{title}</span>
-        {isMain && kindTag(conv || (st?.chats || []).find(c => c.name === 'main')) &&
-          <span class="chip flex-none text-xs" title="이 대화의 종류(만들 때 정해지고 바뀌지 않는다)">{kindTag(conv || (st?.chats || []).find(c => c.name === 'main'))}</span>}
-        {!isMain && <WorkerControls name={v} />}
-        {isMain ? <CtxBar /> : <span class="ml-auto" />}
-        {isMain && <NewMain />}
-        {isMain && <button class="btn btn-ghost !px-2.5 text-xs flex-none max-md:hidden" disabled={st?.busy} onClick={forkChat} title="지금 대화를 복사해 새 대화로(이후 서로 독립)">갈래</button>}
-        {conv && v !== 'main' && <button class="btn btn-ghost !px-2.5 text-xs flex-none" onClick={() => closeChat(v)} title="이 대화 닫기(기록은 남는다)">닫기</button>}
-        <button class={'btn btn-ghost !px-2.5 ' + (hub.value?.tokens?.window ? '' : 'ml-auto')} onClick={() => setPanel(panel.value ? null : (isMain ? 'steps' : 'session'))}
-          title="작업 내역 패널">{panel.value ? <>내역<span class="max-md:hidden"> ▸</span></> : <><span class="max-md:hidden">◂ </span>내역</>}</button>
-      </div>
-      {/* 둘째 줄: 상태 칩(넘쳐도 첫 줄의 문맥 막대·단추를 밀지 않게 따로, 가로로 넘기면 옆으로 민다) */}
-      <div class="flex items-center gap-1.5 px-5 max-md:px-3 pb-2 overflow-x-auto scroll-thin whitespace-nowrap text-xs">
-        {isMain && main?.workdir && <span class="chip truncate max-w-64 flex-none" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span>}
-        <ConnDot /><ModelDot /><ExternalChip /><ModeChips /><ToolChips />
-      </div>
-      </div>
+      <MobileHead title={title} isMain={isMain} conv={conv} w={!isMain ? v : null} />
       <div class="flex-1 overflow-auto scroll-thin" ref={ref} onScroll={onScroll}>
-        <div class="max-w-[820px] mx-auto px-6 max-md:px-3.5 pt-6 pb-10 [overflow-wrap:anywhere]">
+        <div class="max-w-[760px] mx-auto px-6 max-md:px-4 pt-6 max-md:pt-3 pb-10 [overflow-wrap:anywhere]">
           <Guard key={v} name="대화">{isMain ? <Thread log={st?.main_log || []} prior={<Prior />} /> : <WorkerThread name={v} {...w} />}</Guard>
         </div>
       </div>
       <div class="pb-4 max-md:pb-0 safe-b pt-1">
-        <div class="max-w-[820px] mx-auto px-6 max-md:px-2.5">
+        <div class="max-w-[760px] mx-auto px-6 max-md:px-3">
           {isMain && <Guard name="금지"><BanStrip /></Guard>}
           {isMain && <Guard name="할 일"><TodoStrip /></Guard>}
           <Guard name="승인">{/* 승인 칸이 깨지면 최소 칸(허용·거부)은 Approvals 안에서 건마다 따로 */}<Approvals /></Guard>
           <Guard key={'c' + v} name="입력"><Composer target={isMain ? 'main' : v} /></Guard>
-          <button class="md:hidden w-full text-center text-xs text-mute pt-1.5" onClick={() => setPanel(panel.value ? null : 'steps')}>▴ 작업 내역</button>
         </div>
       </div>
       <Right worker={!isMain ? w : null} />
     </main>
+  )
+}
+
+// 판 124 머리(폰·데스크톱): 한 줄(48px) — ☰ · 대화 이름(누르면 "이 대화" 판) · 새 대화(+ 데스크톱은 작업 내역). 나머지는 판으로, 상태는 비정상일 때만
+function MobileHead({ title, isMain, conv, w }) {
+  const st = hub.value
+  const t = st?.tokens
+  const pct = t && t.window ? Math.min(100, Math.round((t.last_prompt || 0) / t.window * 100)) : 0
+  return (
+    <div class="flex-none bg-bg">
+      <div class="h-12 flex items-center gap-1 px-1.5">
+        <button class="ibtn" onClick={() => { if (narrow.value) drawer.value = true; else toggleSide() }} aria-label="세션 서랍" title="옆 기둥 접기·펴기"><IconMenu /></button>
+        <button class="conv-title flex-1 md:flex-none min-w-0 h-11 flex items-center justify-center md:justify-start gap-1 font-semibold text-[16px] md:px-2 md:rounded-xl md:hover:bg-soft" onClick={() => { convSheet.value = !convSheet.value }}
+          aria-label="이 대화 — 설정·작업 내역">
+          {st?.hub_label && <span class="text-mute font-normal truncate max-w-[30%]">{st.hub_label} ·</span>}
+          {isMain && <PlaceMark conv={conv} />}
+          <span class="truncate">{title}</span><span class="text-mute w-4 h-4 rotate-90 flex-none"><IconChev /></span>
+        </button>
+        <span class="flex-1 max-md:hidden" />
+        <span class="max-md:hidden"><StatusNote inline /></span>
+        {isMain ? <button class="ibtn" disabled={st?.busy} onClick={newMain} aria-label="새 대화" title="새 대화"><IconNew /></button>
+          : <span class="w-11" />}
+        <button class={'ibtn max-md:hidden ' + (panel.value ? 'bg-soft' : '')} onClick={() => setPanel(panel.value ? null : (isMain ? 'steps' : 'session'))}
+          aria-label="작업 내역" title="작업 내역(오른쪽 칸)"><IconPanel /></button>
+      </div>
+      {pct >= 70 && <div class="h-0.5 w-full bg-line"><div class="h-full" style={`width:${pct}%;background:${pct > 85 ? 'var(--c-bad)' : 'var(--c-warn)'}`} /></div>}
+      <span class="md:hidden"><StatusNote /></span>
+      {!isMain && w && <div class="px-3 pb-1.5 flex gap-2 overflow-x-auto"><WorkerControls name={w} /></div>}
+    </div>
+  )
+}
+
+// 판 124: 자리 표시 — parlando 는 기울인 "parlando", 코드는 프로젝트 폴더 이름(보조 글 색)
+export function chatKind(conv) {
+  const st = hub.value
+  return (conv || (st?.chats || []).find(c => c.name === 'main') || {}).kind || 'code'
+}
+function PlaceMark({ conv }) {
+  const k = chatKind(conv)
+  const wd = sessions.value.find(s => s.role === 'main')?.workdir
+  return <span class="text-mute font-normal truncate max-md:max-w-[40%] flex-none">{place(k).folder && wd ? wd.split('/').slice(-1)[0] : <PlaceName k={k} short={narrow.value} />}<span class="mx-1">·</span></span>
+}
+
+// 정상이면 아무것도 없다. 허브가 끊기거나 모델이 준비 안 됐을 때만 얇은 한 줄. 바깥 API 는 늘 한 줄(대화 내용이 그 회사로 나간다)
+function StatusNote({ inline }) {
+  const c = conn.value, m = hub.value?.model, ext = hub.value?.backend?.external
+  const bad = []
+  if (c.state !== 'ok') bad.push(c.state === 'login' ? '허브 로그인 필요' : c.state === 'retry' ? `허브 다시 붙는 중(${c.tries})` : '허브 붙는 중')
+  if (m && m.state && !['ok', 'unknown'].includes(m.state)) bad.push(`모델 ${m.label}`)
+  if (!bad.length && !ext) return null
+  return (
+    <div class={(inline ? 'pr-2' : 'px-4 pb-1.5') + ' text-[13px] flex gap-3 items-center'}>
+      {bad.length > 0 && <span class="text-warn truncate">● {bad.join(' · ')}</span>}
+      {ext && <span class="text-mute truncate ml-auto">바깥 API · {ext.replace(/\(.*\)/, '').trim()}</span>}
+    </div>
+  )
+}
+
+// "이 대화" 판의 방식·생각·문맥 크기 — 알약 셋 대신 줄 셋(왼쪽 이름, 오른쪽 값·고르기)
+const MODE_KO = { plan: '계획(읽기만)', ask: '묻기(바꾸기 전 묻기)', edits: '편집(파일은 바로, 셸은 묻기)', auto: '자동' }
+const RANK = { plan: 0, ask: 1, edits: 2, auto: 3 }
+function ModeRows({ st, talk }) {
+  const modes = Object.keys(RANK).filter(m => RANK[m] <= RANK[st.mode_max || 'edits'])
+  const setMode = mode => cpost('/api/main/mode', { mode }).then(refresh, e => toast('안 됨: ' + e.message))
+  const nextThink = st.think == null ? true : st.think ? false : null
+  const setThink = () => cpost('/api/main/think', { think: nextThink }).then(refresh, e => toast('안 됨: ' + e.message))
+  const setBudget = () => {
+    const v = window.prompt('이 대화의 문맥 크기(토큰, 예 24000). 비우면 백엔드 설정 그대로.', String(st.budget || ''))
+    if (v === null) return
+    const n = v.trim() === '' ? null : parseInt(v.replace(/[^0-9]/g, ''), 10)
+    if (n !== null && !(n > 0)) { toast('숫자를 넣는다'); return }
+    cpost('/api/main/budget', { tokens: n }).then(refresh, e => toast('안 됨: ' + e.message))
+  }
+  return <>
+    {!talk && <label class="row-btn"><span>편집 방식</span>
+      <select class="sub bg-transparent text-right outline-none" value={st.mode} onChange={e => setMode(e.currentTarget.value)} aria-label="편집 방식">
+        {modes.map(m => <option key={m} value={m}>{MODE_KO[m]}</option>)}
+      </select></label>}
+    <button class="row-btn" onClick={setThink} title={'누르면 ' + (nextThink == null ? '백엔드 기본' : nextThink ? '켬' : '끔')}>
+      <span>생각</span><span class="sub">{st.think == null ? '백엔드 기본' : st.think ? '켬' : '끔'}</span></button>
+    {st.budget && <button class="row-btn" onClick={setBudget}><span>문맥 크기</span><span class={'sub ' + (st.budget_set ? '!text-warn' : '')}>{Math.round(st.budget / 1000)}k 토큰</span></button>}
+  </>
+}
+
+// 데스크톱: 판을 머리의 대화 이름 바로 아래에 붙인다(폰은 아래 시트라 비운다)
+function anchorStyle() {
+  if (narrow.value) return ''
+  const r = document.querySelector('.conv-title')?.getBoundingClientRect()
+  return r ? `left:${Math.round(r.left)}px;margin-left:0;top:${Math.round(r.bottom + 4)}px` : ''
+}
+
+// "이 대화" 시트: 머리에서 뺀 것 — 프로젝트·종류·방식·생각·문맥·도구·누계·작업 내역·갈래·닫기
+function ConvSheet() {
+  if (!convSheet.value) return null
+  const st = hub.value, v = view.value
+  const conv = (st?.chats || []).find(c => c.name === v)
+  const isMain = v === 'main' || !!conv
+  const main = sessions.value.find(s => s.role === 'main')
+  const t = st?.tokens
+  const close = () => { convSheet.value = false }
+  const kind = isMain && kindTag(conv || (st?.chats || []).find(c => c.name === 'main'))
+  return (
+    <>
+      <div class="sheet-back" onClick={close} />
+      <div class="sheet" role="dialog" aria-label="이 대화" style={anchorStyle()}>
+        <div class="text-[13px] text-mute mb-1">이 대화</div>
+        {isMain && main?.workdir && chatKind(conv) !== 'talk' && <div class="row-btn"><span>프로젝트</span><span class="sub truncate max-w-[60%]" title={main.workdir}>{main.workdir.split('/').slice(-1)[0]}</span></div>}
+        {kind && <div class="row-btn"><span>자리</span><span class="sub"><PlaceName k={chatKind(conv)} />{conv?.tier ? ' · ' + conv.tier : ''}</span></div>}
+        {isMain && st?.mode && <ModeRows st={st} talk={chatKind(conv) === 'talk'} />}
+        {isMain && t?.window && <div class="row-btn"><span>문맥 사용</span><span class="sub">{t.estimated ? '약 ' : ''}{fmtK(t.last_prompt || 0)} / {fmtK(t.window)} · {Math.min(100, Math.round((t.last_prompt || 0) / t.window * 100))}%</span></div>}
+        {(st?.tool_toggles || []).length > 0 && <div class="py-2.5 border-b border-line"><div class="mb-1.5">도구</div><div class="flex gap-1.5 flex-wrap"><ToolChips /></div></div>}
+        {st?.backend?.external && <div class="row-btn"><span>바깥 API</span><span class="sub text-warn truncate max-w-[65%]"><ExternalChip plain /></span></div>}
+        {t && <div class="py-2.5 border-b border-line text-[12.5px] text-mute leading-relaxed">
+          {t.turn && <div>이번 차례 · 입력 {fmtK(t.turn.prompt)} · 출력 {fmtK(t.turn.completion)}</div>}
+          <div>이 대화 · 입력 {fmtK(t.prompt_total)} · 출력 {fmtK(t.completion_total)} · 단계 {t.steps}{t.compactions ? ` · 줄이기 ${t.compactions}번` : ''}</div>
+        </div>}
+        <button class="row-btn" onClick={() => { close(); setPanel(isMain ? 'steps' : 'session') }}><span>작업 내역</span><span class="sub w-4 h-4"><IconChev /></span></button>
+        {isMain && <button class="row-btn" disabled={st?.busy} onClick={() => { close(); forkChat() }}><span>갈래 — 지금 대화를 복사해 새 대화로</span></button>}
+        {conv && v !== 'main' && <button class="row-btn text-bad" onClick={() => { close(); closeChat(v) }}><span>이 대화 닫기</span></button>}
+        <div class="pt-2.5 text-[12.5px] text-mute truncate">모델 {st?.model ? (st.model.served || [])[0] || st.model.configured : st?.backend?.model}
+          {st?.web ? ' · ' + (st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐') : ''}</div>
+      </div>
+    </>
   )
 }
 
@@ -243,6 +349,7 @@ function App() {
       <div class="h-full min-h-0 min-w-0"><Center /></div>
       {pan && <div class="max-md:hidden" />}
       <AskSheet />
+      <ConvSheet />
       <Toasts />
     </div>
   )

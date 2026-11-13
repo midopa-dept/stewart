@@ -32,6 +32,15 @@ export function highlight(code, lang) {
   return esc(code)
 }
 
+// 판 124: 줄마다 따로 감싼다 — 폰에서 줄을 꺾을 때 이어진 줄을 내어쓰기로 가른다(.ln). 줄 사이 '\n' 은 남겨 복사(textContent)는 원문 그대로.
+// 색은 줄 단위로 입힌다(여러 줄에 걸친 문자열·주석은 줄마다 다시 시작 — 읽기에는 지장 없다)
+export function codeLines(text, lang) {
+  return String(text).split('\n').map(line => {
+    const ind = (/^[ \t]*/.exec(line)[0] || '').replace(/\t/g, '    ').length   // 꺾인 줄은 그 줄의 들여쓰기 + 2칸에서 잇는다
+    return `<span class="ln" style="--i:${Math.min(ind, 40)}">${highlight(line, lang) || ' '}</span>`
+  }).join('\n')
+}
+
 // 모델 답은 믿지 않는 글: 원시 HTML 은 글자로, 링크는 http(s)·상대 경로만
 const marked = new Marked({
   gfm: true, breaks: true,
@@ -42,7 +51,7 @@ const marked = new Marked({
       const info = (lang || '').trim().split(/\s+/), l = (info[0] || '').toLowerCase()
       const label = [info[0] || '', info.slice(1).join(' ')].filter(Boolean).join(' · ')
       return `<div class="cb"><div class="cb-head"><span>${esc(label)}</span><button type="button" class="cp-btn">복사</button></div>` +
-        `<pre><code class="hljs">${highlight(text, l)}</code></pre></div>`
+        `<pre><code class="hljs">${codeLines(text, l)}</code></pre></div>`
     },
     link({ href, title, tokens }) {
       const inner = this.parser.parseInline(tokens)
@@ -52,7 +61,8 @@ const marked = new Marked({
     image({ text }) { return esc(text ? `[그림: ${text}]` : '[그림]') },
   },
 })
-export const mdHtml = text => { try { return marked.parse(String(text || '')) } catch (e) { return `<pre>${esc(text)}</pre>` } }
+// 판 124: 표는 가로 스크롤 그릇(.tbl) 안에 — 넘치지 않으면 폭 100%, 넘치면 그릇 안에서만 민다
+export const mdHtml = text => { try { return marked.parse(String(text || '')).replace(/<table>/g, '<div class="tbl"><table>').replace(/<\/table>/g, '</table></div>') } catch (e) { return `<pre>${esc(text)}</pre>` } }
 
 // ── 허브 요청: 실패를 종류별로 ──
 // kind: login(다시 들어가기) · token(화면이 낡음 → 새로고침) · net(허브에 닿지 않음 → 다시 보내기) · busy(409) · big(413) · server · bad
