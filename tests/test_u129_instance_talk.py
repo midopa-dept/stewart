@@ -71,15 +71,28 @@ class TInstanceTalkDir(unittest.TestCase):
 
     @unittest.skipUnless(_sandbox_works(), "sandbox-exec 를 여기서 걸 수 없다(이미 샌드박스 안)")
     def test_real_sandbox_talk_writable_default_not(self):
-        I.make_dirs(self.cfg)
-        sb = I.write_profile(self.cfg)
-        ok = subprocess.run([I.SANDBOX, "-f", str(sb), "/usr/bin/touch", str(self.d["share"] / "talk" / "ok")], capture_output=True)
+        # 임시 폴더(/private/tmp·/private/var/folders)는 샌드박스가 늘 쓰기를 연다 — 그 아래서는 "울타리 밖"을 잴 수 없다.
+        # 그래서 이 시험의 집은 사용자 홈 아래 임시 폴더로 두고 끝나면 지운다.
+        try:
+            home = Path(tempfile.mkdtemp(prefix=".stewart-test-", dir=Path.home())).resolve()
+        except OSError:
+            self.skipTest("홈 아래 임시 폴더를 만들 수 없다")
+        self.addCleanup(lambda: shutil.rmtree(home, ignore_errors=True))
+        if any(str(home).startswith(t.rstrip("/") + "/") for t in I.TMP_WRITE):
+            self.skipTest("홈이 샌드박스의 임시 쓰기 자리 아래다")
+        d = I.dirs("ex", home)
+        d["config"].mkdir(parents=True)
+        (d["config"] / "instance.toml").write_text(f'project = "{home / "proj"}"\nport = 8766\nbackend = "x"\n', encoding="utf-8")
+        cfg = I.load("ex", home)
+        I.make_dirs(cfg)
+        sb = I.write_profile(cfg)
+        ok = subprocess.run([I.SANDBOX, "-f", str(sb), "/usr/bin/touch", str(d["share"] / "talk" / "ok")], capture_output=True)
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        other = self.home / ".local" / "share" / "stewart" / "talk"   # 기본 허브의 대화 폴더 자리(울타리 밖)
+        other = home / ".local" / "share" / "stewart" / "talk"   # 기본 허브의 대화 폴더 자리(울타리 밖)
         other.mkdir(parents=True)
         no = subprocess.run([I.SANDBOX, "-f", str(sb), "/usr/bin/touch", str(other / "no")], capture_output=True)
         self.assertNotEqual(no.returncode, 0)
-
+        self.assertFalse((other / "no").exists())
 
 if __name__ == "__main__":
     unittest.main()
