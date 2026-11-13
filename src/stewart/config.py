@@ -494,6 +494,16 @@ def _read_with_extends(path: Path) -> dict:
     return merged
 
 
+TALK_DIR_ENV = "STEWART_TALK_DIR"
+
+
+def _talk_dir(d: dict) -> str | None:
+    """대화 자리 프로필(surface = "talk")의 대화 폴더를 환경 변수로 바꾼다. 따로 도는 허브는 자기 자리 안의 대화 폴더를 쓴다
+    (기본 대화 폴더는 그 허브의 울타리 밖이다). 없으면 프로필에 적힌 값."""
+    v = os.environ.get(TALK_DIR_ENV)
+    return v if v and d.get("surface") == "talk" else None
+
+
 def load_profile(name_or_path: str) -> Profile:
     path = find_profile(name_or_path)
     d = _read_with_extends(path)
@@ -529,7 +539,7 @@ def load_profile(name_or_path: str) -> Profile:
         path=path,
         system=d.get("system", ""),
         tools=list(d.get("tools") or []),
-        workdir=rel(d.get("workdir", ".")),
+        workdir=rel(_talk_dir(d) or d.get("workdir", ".")),
         max_steps=int(d.get("max_steps", 30)),
         max_consecutive_errors=int(d.get("max_consecutive_errors", 4)),
         shell_timeout_s=float(d.get("shell_timeout_s", 60)),

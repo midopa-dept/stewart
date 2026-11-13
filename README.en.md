@@ -345,7 +345,7 @@ Add a backend with `kind = "anthropic"` to `backends.toml`; there is an example 
 - Give the key as an environment variable name (`api_key_env`) or a macOS keychain item name (`api_key_keychain`). Either way the key is not passed to the model's shell.
 - APIs without a function-calling field can use `tool_mode = "text"` for text-form tool calls.
 - With `provider` set, the hub shows that your work is sent to an outside company. Check each provider's terms and prices.
-- To run a separate hub on an outside API, use `stewart instance <name> start`. It gets its own config, state and memory folders (`stewart-<name>`), runs inside the macOS sandbox, and cannot read the keychain from inside.
+- To run a separate hub on an outside API, use `stewart instance <name> start`. It gets its own config, state, memory and conversation-place folders (`stewart-<name>`; the conversation place is `talk/` inside the hub's own area), runs inside the macOS sandbox, and cannot read the keychain from inside.
 
 ### Rented GPU
 

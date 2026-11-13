@@ -2,7 +2,7 @@
 
 인스턴스 하나 = 이름 N 에 대해
   설정  ~/.config/stewart-N/      instance.toml · backends.toml · hub.toml · profiles/ · skills/ · sandbox-allow.txt
-  상태  ~/.local/state/stewart-N/ (허브 상태·runs), 기억 ~/.local/share/stewart-N/, 캐시 ~/.cache/stewart-N/
+  상태  ~/.local/state/stewart-N/ (허브 상태·runs), 기억·대화 자리 폴더 ~/.local/share/stewart-N/(memory/·talk/), 캐시 ~/.cache/stewart-N/
 기존(이름 없는) stewart 자리와 섞이지 않는다. 키는 macOS 키체인에서 켤 때 한 번 읽어 환경 변수로만 넘기고(파일·화면에 안 남김),
 모델의 셸·도구 자식 환경에서는 지운다(shell.HIDDEN_ENV). 샌드박스 안에서는 키체인 조회도 막는다.
 
@@ -125,6 +125,7 @@ def env(cfg: dict, key: str | None, base: dict | None = None) -> dict:
         "STEWART_USER_DIR": str(d["config"]), "STEWART_BACKENDS": str(d["config"] / "backends.toml"),
         "STEWART_PROFILES_DIR": str(d["config"] / "profiles"), "STEWART_SKILLS_DIR": str(d["config"] / "skills"),
         "STEWART_HUB_CONFIG": str(d["config"] / "hub.toml"), "STEWART_MEMORY_DIR": str(d["share"] / "memory"),
+        "STEWART_TALK_DIR": str(d["share"] / "talk"),   # 대화 자리 폴더도 자기 자리 안(기본 대화 폴더는 울타리 밖)
         "STEWART_RUNS_DIR": str(d["state"] / "runs"), "STEWART_CLOUD_DIR": str(d["cache"] / "cloud"),
         "XDG_CONFIG_HOME": str(d["config"] / "xdg"), "XDG_STATE_HOME": str(d["state"] / "xdg"), "XDG_DATA_HOME": str(d["share"] / "xdg"), "XDG_CACHE_HOME": str(d["cache"] / "xdg"),
         "PYTHONDONTWRITEBYTECODE": "1", "STEWART_INSTANCE": cfg["_name"],
@@ -163,6 +164,7 @@ def make_dirs(cfg: dict) -> None:
         d[k].mkdir(parents=True, exist_ok=True)
     (d["state"] / "runs").mkdir(parents=True, exist_ok=True)
     (d["share"] / "memory").mkdir(parents=True, exist_ok=True)
+    (d["share"] / "talk").mkdir(parents=True, exist_ok=True)
     Path(cfg["project"]).mkdir(parents=True, exist_ok=True)
 
 
@@ -279,9 +281,11 @@ def check(name: str, paths: list[str]) -> int:
                        env=env(cfg, None), capture_output=True, timeout=60, cwd=str(cfg["project"]))
     sys.stdout.write(r.stdout.decode("utf-8", "replace"))
     sys.stderr.write(r.stderr.decode("utf-8", "replace")[-2000:])
-    w = subprocess.run([SANDBOX, "-f", str(sb), "/bin/sh", "-c", f"touch {shlex.quote(str(cfg['project']))}/.stewart-check && rm {shlex.quote(str(cfg['project']))}/.stewart-check && echo 쓰기됨 자기폴더"],
-                       env=env(cfg, None), capture_output=True, timeout=30)
-    sys.stdout.write(w.stdout.decode("utf-8", "replace") or "쓰기안됨 자기폴더\n")
+    for label, where in (("자기폴더", cfg["project"]), ("대화폴더", d["share"] / "talk")):   # 대화 자리 폴더도 울타리 안이어야 한다
+        q = shlex.quote(str(where))
+        w = subprocess.run([SANDBOX, "-f", str(sb), "/bin/sh", "-c", f"touch {q}/.stewart-check && rm {q}/.stewart-check && echo 쓰기됨 {label}"],
+                           env=env(cfg, None), capture_output=True, timeout=30)
+        sys.stdout.write(w.stdout.decode("utf-8", "replace") or f"쓰기안됨 {label}\n")
     k = subprocess.run([SANDBOX, "-f", str(sb), "/usr/bin/security", "find-generic-password", "-s", str(cfg.get("keychain_service") or "x"), "-w"],
                        env=env(cfg, None), capture_output=True, timeout=30)
     print("키체인 " + ("막힘" if k.returncode != 0 else "열림(!)"))
