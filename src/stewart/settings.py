@@ -70,6 +70,8 @@ def keychain_put(service: str, value: str, account: str = "api", run=subprocess.
         raise ValueError("키체인 항목 이름은 영숫자·._- 로")
     if not value or any(c in value for c in '"\\\n\r') or len(value) > 4096:
         raise ValueError("키 값에 따옴표·역빗금·줄바꿈은 넣지 못한다")
+    if sys.platform == "win32":   # Windows: 고장이 아니라 이 길을 쓰지 않는다
+        raise ValueError("이 PC(Windows)에서는 설정 시트의 키 넣기를 쓰지 않는다 — 바깥 API 키가 필요하면 허브를 켜는 셸의 환경 변수(api_key_env)로 넣는다")
     if sys.platform != "darwin" or not shutil.which("security"):
         raise ValueError("이 기계에는 키체인이 없다 — 허브를 켜는 셸의 환경 변수(api_key_env)로 넣고 다시 켠다")
     line = f'add-generic-password -U -s "{service}" -a "{account}" -w "{value}"\n'

@@ -50,6 +50,9 @@ class HubMainUI(HubUI):
 
     def __init__(self, hub: Hub, name: str = "main"):
         super().__init__(hub.sdir(name), name, None)
+        self.hub = hub
+        self.run_rec = None                   # 판 127: 승인 기록을 그 대화의 기록 폴더에도(다시 열 때 다시 그린다)
+        self._step_u = None                   # 판 127: 막 받은 걸음의 숫자(토큰·시간) — 다음 도구 줄 또는 답 줄에 붙인다
         self.log: deque = deque(maxlen=LOG_MAX)
         self._answers: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
@@ -77,6 +80,8 @@ class HubMainUI(HubUI):
         self._add("assistant", s)
         if self.turn_no:
             self.log[-1]["turn"] = self.turn_no
+        if self._step_u is not None and not self._step_u.get("calls"):   # 판 127: 답으로 끝난 걸음의 숫자
+            self.log[-1]["usage"], self._step_u = self._step_u, None
 
     def asked_options(self, opts: list[str]) -> None:
         """판 106: ask_user 의 선택지를 바로 앞 질문 줄에 단다(화면 단추 — 누르면 그 글이 다음 사람 말로 간다)."""
@@ -125,6 +130,8 @@ class HubMainUI(HubUI):
 
     def tool(self, name: str, summary: str) -> None:
         self._add("tool", f"{name} {summary}")
+        if self._step_u is not None:   # 판 127: 이 도구를 부른 걸음의 숫자(한 걸음에 도구가 여럿이면 첫 줄에만)
+            self.log[-1]["usage"], self._step_u = self._step_u, None
         self._tool_what = f"{name} {summary}"
         self.now = {"what": f"도구 실행 중: {self._tool_what}"[:200], "since": time.time()}
 
@@ -256,10 +263,37 @@ class HubMainUI(HubUI):
 
     def ask(self, prompt: str) -> str:
         self.now = {"what": "사람 승인 기다리는 중 — 승인 칸", "since": time.time(), "ask": True}
+        t0, what = time.time(), getattr(self, "_tool_what", "")
+        n = (sorted(int(p.stem) for p in self.sd.ask_dir.glob("[0-9][0-9][0-9][0-9].json")) or [0])[-1] + 1   # HubUI.ask 가 쓸 번호
         try:
-            return super().ask(prompt)
+            ans = super().ask(prompt)
+        except EOFError:
+            self.approval(what, None, None, time.time() - t0, prompt)
+            raise
         finally:   # 답을 받으면 곧바로 되돌린다(전에는 승인 뒤 도구가 도는 내내 "승인 기다리는 중" 이 남았다 — tag 45 실사용)
             self.now = {"what": f"도구 실행 중: {getattr(self, '_tool_what', '')}"[:200], "since": time.time()}
+        self.approval(what, ans, self.hub.answer_via.pop((self.name, n), None), time.time() - t0, prompt)
+        return ans
+
+    def approval(self, what: str, ans: str | None, via: str | None, secs: float, prompt: str = "") -> None:
+        """판 127: 승인 하나를 화면 기록·그 대화 기록 폴더에 남긴다 — 무엇을(도구·인자 요약)·어떻게 답했나·얼마나 기다렸나."""
+        a = (ans or "").strip().lower()
+        word = ("취소됨(멈춤)" if ans is None else "늘 허용함" if via == "web-always" else "허용함" if a in ("y", "yes", "ㅇ", "네")
+                else "거부함" if a in ("n", "no", "ㄴ", "아니", "") else "말을 전함")
+        s = round(secs)
+        self._add("approval", f"{word} · {s // 60}분 {s % 60}초" if s >= 60 else f"{word} · {s}초")
+        self.log[-1].update(what=what[:200], answer=word, secs=round(secs, 1), via=via or "", turn=self.turn_no or None,
+                            note=(ans or "")[:200] if word == "말을 전함" else "")
+        if self.run_rec is not None:
+            try:
+                self.run_rec.event("approval", what=what[:300], answer=word, secs=round(secs, 1), via=via or "",
+                                   prompt=str(prompt or "").strip()[:300])
+            except Exception:   # noqa: BLE001 — 기록 실패가 승인을 막지 않게
+                pass
+
+    def step_usage(self, d: dict) -> None:
+        """판 127: 막 받은 걸음의 숫자 — 도구를 부른 걸음이면 다음 도구 줄에, 아니면 다음 답 줄에 붙인다."""
+        self._step_u = dict(d)
 
     def put_answer(self, seq: int, text: str) -> None:
         self._answers.put((seq, text))
@@ -375,11 +409,37 @@ def _reach(backend) -> str:
     return ""
 
 
-def _replay(ui, messages: list | None) -> None:
+def _approvals(run_dir) -> list[dict]:
+    """판 127: 이어 받은 기록(과 그 앞 기록들)의 승인 사건 — 오래된 것부터."""
+    out, seen, cur = [], set(), str(run_dir or "")
+    while cur and cur not in seen and len(seen) < 20:
+        seen.add(cur)
+        evs, nxt = [], ""
+        try:
+            with open(Path(cur) / "events.jsonl", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if i == 0:
+                        nxt = str((e.get("meta") or {}).get("resumed_from") or "")
+                    if e.get("kind") == "approval":
+                        evs.append(e)
+        except OSError:
+            break
+        out = evs + out
+        cur = nxt
+    return out
+
+
+def _replay(ui, messages: list | None, run_dir=None) -> None:
     """판 124.2: 이어 받은 대화(다시 열기·갈래·허브 다시 켜기)의 앞 내용을 화면 기록에 다시 그린다 — 사람 말·도구 한 줄·답.
-    모델 문맥은 그대로(sess.messages), 화면 줄만 만든다. 도구 결과 본문은 다시 그리지 않는다(기록 폴더에 있다)."""
+    모델 문맥은 그대로(sess.messages), 화면 줄만 만든다. 도구 결과 본문은 다시 그리지 않는다(기록 폴더에 있다).
+    판 127: 그 기록의 승인 사건을 해당 도구 줄 뒤에 다시 붙인다(허용함 · 12초)."""
     from .chat import _arg_summary
     from .images import text_of
+    aps = _approvals(run_dir) if run_dir else []
     for m in messages or []:
         role = m.get("role")
         if role == "user":
@@ -397,7 +457,13 @@ def _replay(ui, messages: list | None) -> None:
                     args = json.loads(fn.get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                ui._add("tool", f"{fn.get('name') or '?'} {_arg_summary(fn.get('name') or '', args if isinstance(args, dict) else {})}")
+                tl = f"{fn.get('name') or '?'} {_arg_summary(fn.get('name') or '', args if isinstance(args, dict) else {})}"
+                ui._add("tool", tl)
+                if aps and str(aps[0].get("what") or "")[:80] == tl[:80]:
+                    a = aps.pop(0)
+                    sec = int(round(float(a.get("secs") or 0)))
+                    ui._add("approval", f"{a.get('answer')} · {sec // 60}분 {sec % 60}초" if sec >= 60 else f"{a.get('answer')} · {sec}초")
+                    ui.log[-1].update(what=tl[:200], answer=a.get("answer"), secs=a.get("secs"), via=a.get("via") or "", replayed=True)
 
 
 def _conv_brief(sess) -> dict:
@@ -496,9 +562,10 @@ class HubMain:
         self.sess = ChatSession(profile, backend, rec, ui=self.ui, stream=True, mode=mode, default_mode="edits",
                                 extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
         if history:
-            _replay(self.ui, history)
+            _replay(self.ui, history, resumed_from)
             self.ui._add("meta", f"앞 메인 대화를 이어 받았다({resumed_from}). 새로 시작하려면 허브를 --new-main 으로 띄운다.")
         self.ui.env = self.sess.env
+        self.ui.run_rec = self.sess.rec   # 판 127: 승인 기록을 이 대화 기록 폴더에도
         self.sess.env.on_quota = self._quota_alert   # brave 이달 80%·한도 도달 → 폰·화면(판 61)
         from .modelstat import ModelWatch
         self._idle_since = time.monotonic()  # 꿈꾸기 자동의 한가함 잣대(판 54)
@@ -738,6 +805,7 @@ class HubMain:
                                 default_mode="edits", extra_tools=(HT.DEFINITIONS, self.tools.execute),
                                 history=history, resumed_from=resumed_from)
         self.ui.env = self.sess.env
+        self.ui.run_rec = self.sess.rec   # 판 127: 승인 기록을 이 대화 기록 폴더에도
         self.sess.env.on_quota = self._quota_alert
         self._resumed, self._turn0 = bool(history), None
         self.ui.sd.set_status(run_dir=str(rec.dir))
@@ -759,7 +827,7 @@ class HubMain:
             new = self._swap_session(hist, run_dir)
             with self.ui._lock:
                 self.ui.log.clear()
-            _replay(self.ui, hist)
+            _replay(self.ui, hist, run_dir)
             self.ui._add("info", f"지난 메인 대화를 다시 열었다({run_dir}).")
             return new
         finally:
@@ -1411,12 +1479,13 @@ class HubChat(HubMain):
         self.sess = ChatSession(self._profile, self._backend, rec, ui=self.ui, stream=True, mode=self._mode, default_mode="edits",
                                 extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
         if history:
-            _replay(self.ui, history)
+            _replay(self.ui, history, resumed_from)
             self.ui._add("meta", f"{'갈라 온' if origin == 'fork' else '다시 연'} 대화다 — 앞 문맥을 이어 받았다({resumed_from}). "
                                  "이제부터는 원래 대화와 서로 독립이다.")
             if origin == "fork":   # 갈래는 원래 대화가 따로 이어지므로 화면에 한 줄 남긴다(다시 열기는 같은 대화처럼 그대로 이어 쓴다)
                 self.ui._add("info", "여기서 갈라졌다 — 이제부터 원래 대화와 서로 독립이다.")
         self.ui.env = self.sess.env
+        self.ui.run_rec = self.sess.rec   # 판 127: 승인 기록을 이 대화 기록 폴더에도
         self.sess.env.on_quota = main._quota_alert
         self.watch = main.watch
         self.ui.on_backend_error = main.ui.on_backend_error

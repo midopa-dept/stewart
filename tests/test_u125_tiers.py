@@ -286,6 +286,10 @@ class TSettings(unittest.TestCase):
         with mock.patch("sys.platform", "linux"):
             with self.assertRaises(ValueError):
                 ST.keychain_put("stewart-outside", "k", run=run)
+        with mock.patch("sys.platform", "win32"):
+            with self.assertRaises(ValueError) as e:
+                ST.keychain_put("stewart-outside", "k", run=run)
+        self.assertIn("이 PC(Windows)에서는 설정 시트의 키 넣기를 쓰지 않는다", str(e.exception))
 
     def test_instance_not_editable(self):
         from stewart import settings as ST

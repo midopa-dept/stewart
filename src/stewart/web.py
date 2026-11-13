@@ -663,6 +663,8 @@ class WebApp:
             for p in pats:
                 self.hub.add_allow(p, scope)
         try:
+            if always is not None:   # 판 127: 승인 기록이 "늘 허용함"으로 적히게(hub.answer 가 이 표시를 지우지 않는다)
+                self.hub.answer_via[(name, seq)] = "web-always"
             self.hub.answer(name, seq, text, by="human", via="web")
         except RuntimeError as e:
             return self._json(h, 409, {"error": str(e)})

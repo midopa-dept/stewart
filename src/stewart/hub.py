@@ -251,6 +251,7 @@ class Hub:
         self._lock = threading.RLock()
         self.worktree_root = worktree_root   # "{repo}" 자리 글을 받는다. 없으면 default_worktree_dir
         self.main_answer = None              # 메인 세션의 답 받기(허브 프로세스 안 큐). HubMain 이 붙인다
+        self.answer_via: dict = {}           # 판 127: (세션, 승인 번호) → 답한 길(web·web-always·…)
         self.chat_answers: dict = {}         # 허브 안 대화(메인 말고 사람이 연 대화)의 답 받기: 이름 → 고리
         self.runs_dir = Path(runs_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -500,6 +501,7 @@ class Hub:
 
     def answer(self, name: str, seq: int, text: str, by: str = "human", via: str = "api") -> None:
         """사람의 답을 승인 통로로 보내고, 기록으로 answer/ 에 남긴다. 메인·작업자 도구에서는 부르지 않는다."""
+        self.answer_via.setdefault((name, seq), via)   # 판 127: 승인 기록이 "늘 허용"·"사람"·자동을 가른다(HubMainUI.ask 가 꺼내 간다)
         if name == "main":
             if self.main_answer is None:
                 raise RuntimeError("메인 세션이 붙어 있지 않다")

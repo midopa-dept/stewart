@@ -228,6 +228,29 @@ def TR_keep(mode: str, think, has_calls: bool) -> bool:
     return keep_reasoning(mode, think, has_calls)
 
 
+_TOKENIZE_OK: dict = {}   # 백엔드 이름 → tokenize 가 되는가(한 번 안 되면 다시 묻지 않는다)
+
+
+def _tokenize_count(backend, text: str) -> int | None:
+    """판 127: 서버의 tokenize 길(llama.cpp·vLLM 의 POST /tokenize)로 글의 토큰 수. 이 기계·사설망 서버만(바깥 API 는 부르지 않는다).
+    안 되면 None — 부르는 쪽이 글자 수 어림으로 떨어진다."""
+    import urllib.request
+    if not text or backend is None or backend.external() or _TOKENIZE_OK.get(backend.name) is False:
+        return None
+    root = backend.base_url.rstrip("/")
+    root = root[:-3] if root.endswith("/v1") else root
+    body = json.dumps({"content": text, "prompt": text, "model": backend.model}, ensure_ascii=False).encode("utf-8")
+    try:
+        req = urllib.request.Request(root + "/tokenize", data=body, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=2) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        n = d.get("count") if isinstance(d.get("count"), int) else len(d["tokens"]) if isinstance(d.get("tokens"), list) else None
+    except Exception:   # noqa: BLE001 — 없는 서버·꼴이 다르면 어림으로
+        n = None
+    _TOKENIZE_OK[backend.name] = n is not None
+    return n
+
+
 def _arg_summary(name: str, args: dict) -> str:
     if name == "run_shell":
         return "$ " + _one_line(args.get("command", ""), 140)
@@ -1479,6 +1502,12 @@ class ChatSession:
                 srec = {"elapsed_s": dt, "ttft_s": self._ttft, "content": content, "timings": tim, "usage": usage,
                         "finish_reason": choice.get("finish_reason"), "mode": None, "tool_calls": []}
                 think = msg.get("reasoning_content") or msg.get("reasoning")
+                su = getattr(self.ui, "step_usage", None)
+                if su is not None:   # 판 127: 걸음 숫자(입력·캐시·생성·생각 토큰·첫 토큰까지·생성 시간·tok/s) — 허브 화면만
+                    try:
+                        su(self._step_numbers(step, usage, tim, dt, think or "", content, bool(calls)))
+                    except Exception:   # noqa: BLE001 — 숫자 때문에 차례가 멈추지 않게
+                        pass
                 if think:
                     srec["reasoning_content"] = think
                     if not self.stream:   # 스트리밍이면 화면이 이미 생각을 보였다(허브 생각 블록·TUI 글자 수)
@@ -2072,6 +2101,28 @@ class ChatSession:
                              + (", ".join(os.path.relpath(f, self.profile.workdir) for f in files) or "없음")
                              + ". 그 뒤 네가 한 파일 변경은 지금 없다. 필요하면 다시 읽어라.]")
         return rep
+
+    def _step_numbers(self, step: int, usage: dict, tim: dict, dt: float, think: str, content: str, calls: bool) -> dict:
+        """판 127: 걸음 하나의 숫자. 서버가 준 것은 그대로, 안 준 것은 None(화면이 "서버가 주지 않음"),
+        생각 토큰은 usage 의 reasoning_tokens → 서버 tokenize(이 기계·사설망 서버만) → 글자 수 어림 순으로(어림이면 표시)."""
+        from .backend import cache_hit_tokens
+        det = usage.get("completion_tokens_details") or {}
+        rt, how = det.get("reasoning_tokens"), "server" if det.get("reasoning_tokens") is not None else None
+        if rt is None and think:
+            n = _tokenize_count(self.backend, think)
+            if n is not None:
+                rt, how = n, "tokenize"
+            else:
+                from .compact import est_tokens
+                rt, how = est_tokens(think), "estimate"
+        gen_ms = tim.get("predicted_ms")
+        ttft = self._ttft
+        gen_s = (gen_ms / 1000.0) if gen_ms else (max(0.0, dt - ttft) if ttft is not None else None)
+        comp = usage.get("completion_tokens")
+        return {"step": step, "prompt": usage.get("prompt_tokens"), "cached": cache_hit_tokens(usage), "completion": comp,
+                "reasoning": rt, "reasoning_how": how, "think_chars": len(think), "text_chars": len(content or ""),
+                "ttft_s": round(ttft, 2) if ttft is not None else None, "gen_s": round(gen_s, 2) if gen_s is not None else None,
+                "secs": round(dt, 2), "tps": round(comp / gen_s, 1) if comp and gen_s else None, "calls": calls}
 
     def set_budget(self, tokens: int | None) -> int:
         """판 105: 이 대화의 문맥 예산(압축 문턱을 재는 창). None 이면 백엔드 설정 그대로. 서버 창보다 크게는 못 한다. 지금 예산을 돌려준다."""

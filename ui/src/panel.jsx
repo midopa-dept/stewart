@@ -4,6 +4,7 @@ import { IconX } from './icons.jsx'
 import { get, post, fmtK, fmtSecs } from './lib.js'
 import { hub, panel, setPanel, sessions, toast, refresh, busy, cpost, chat } from './state.js'
 import { STATUS } from './side.jsx'
+import { usageLine } from './thread.jsx'
 
 export const TABS = [['board', '현황판'], ['memory', '기억'], ['steps', '단계'], ['plan', '계획'], ['rules', '늘 허용'], ['tokens', '토큰'], ['status', '상태']]
 
@@ -27,12 +28,13 @@ function Steps() {
     <div class="px-4 py-2 text-[14px]">
       {items.slice().reverse().map((m, i) => (
         <div key={i} class="py-2 border-b border-line/60">
-          <div class="text-[12px] text-mute mb-0.5">{m.ts}{m.kind === 'user' ? ' · 사람' : m.kind === 'assistant' ? ' · 모델' : m.kind === 'tool' ? ' · 도구' : ''}
+          <div class="text-[12px] text-mute mb-0.5">{m.ts}{m.kind === 'user' ? ' · 사람' : m.kind === 'assistant' ? ' · 모델' : m.kind === 'tool' ? ' · 도구' : m.kind === 'approval' ? ' · 승인' : ''}
             {m.kind === 'tool' && m.ok != null && <span class={m.ok ? 'text-ok' : 'text-bad'}> {m.ok ? '✓' : '✕'}</span>}
             {m.rep > 1 && <span class="text-bad"> · 같은 오류 {m.rep}번째</span>}</div>
           <div class={'min-w-0 break-words ' + (m.kind === 'tool' ? 'font-mono text-[13px]' : m.kind === 'warn' ? 'text-warn' : m.kind === 'info' ? 'text-mute text-[13px]' : m.kind === 'meta' ? 'text-mute font-mono text-[12px] whitespace-pre-wrap' : '')}>
-            {m.kind === 'diff' ? `± ${m.stat?.path || ''} +${m.stat?.plus ?? ''} −${m.stat?.minus ?? ''}` : m.kind === 'meta' ? m.text : m.text.slice(0, 300)}
+            {m.kind === 'diff' ? `± ${m.stat?.path || ''} +${m.stat?.plus ?? ''} −${m.stat?.minus ?? ''}` : m.kind === 'meta' ? m.text : m.kind === 'approval' ? `${m.text} — ${m.what || ''}${m.note ? ` ("${m.note}")` : ''}` : m.text.slice(0, 300)}
           </div>
+          {m.usage && <div class="text-[11.5px] text-mute mt-0.5">{usageLine(m.usage)}</div>}
           {m.out.length > 0 && <pre class="mt-1 bg-code rounded-lg px-2.5 py-1.5 font-mono text-[12px] text-mute whitespace-pre-wrap break-all max-h-40 overflow-auto">{m.out.join('\n').slice(0, 2000)}</pre>}
         </div>
       ))}

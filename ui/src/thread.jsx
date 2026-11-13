@@ -32,6 +32,7 @@ export function groupLog(log) {
       continue
     }
     if (m.kind === 'info' && !g && out.length && out[out.length - 1].type === 'todo') continue   // 목록 도구의 결과 줄
+    if (m.kind === 'approval' && g && g.steps.length) { g.steps[g.steps.length - 1].approval = m; continue }   // 판 127: 승인 기록은 그 도구 걸음에
     if (m.kind === 'tool' || m.kind === 'info' || m.kind === 'warn' || m.kind === 'files' || m.kind === 'reflect') {
       if (!g) g = { type: 'steps', key: m.ts + '|' + m.text.slice(0, 30), steps: [], notes: [], files: null }
       if (m.kind === 'tool' || m.kind === 'reflect') { g.steps.push({ ...m, out: [], think }); think = null }
@@ -125,6 +126,8 @@ function Step({ s, running, force }) {
           {(full || s.out).length > 0 && <button class="hover:underline" title="결과 전문 복사(잘리지 않은 것)" onClick={e => { const b = e.currentTarget; copyText(s.result || s.out.join('\n')).then(ok => flash(b, ok)) }}>결과 복사</button>}
           {running && <span>도는 중</span>}
         </div>
+        {s.approval && <ApprovalLine a={s.approval} />}
+        {(force || detail.value) && s.usage && <div class="text-[11.5px] text-mute mt-0.5 break-words">{usageLine(s.usage)}</div>}
         {s.think && <ThinkBlock text={s.think.text} secs={s.think.secs} chars={s.think.chars} cut={s.think.cut} force={force} />}
         {s.imgs?.length > 0 && <StepImgs names={s.imgs} />}
         {shown.length > 0 && <pre class="mt-1 bg-code rounded-lg px-2.5 py-1.5 font-mono text-xs text-mute whitespace-pre-wrap break-all max-h-60 overflow-auto"
@@ -133,6 +136,21 @@ function Step({ s, running, force }) {
       {s.rep > 1 && <span class="text-[11px] px-2 py-px rounded-full font-semibold whitespace-nowrap text-bad bg-bad/15" title="같은 도구가 같은 오류를 낸 횟수">같은 오류 {s.rep}번째</span>}
     </div>
   )
+}
+
+// 판 127: 걸음 숫자 — 서버가 준 값은 그대로, 안 준 값은 "서버가 주지 않음", 허브가 센 값은 어림·tokenize 를 밝힌다
+const NA = '서버가 주지 않음'
+export function usageLine(u) {
+  if (!u) return ''
+  const k = v => v == null ? NA : fmtK(v)
+  const th = u.reasoning == null ? (u.think_chars ? '' : '없음')
+    : u.reasoning_how === 'estimate' ? `≈${fmtK(u.reasoning)}(어림 — 글자 ${u.think_chars}자)` : u.reasoning_how === 'tokenize' ? `${fmtK(u.reasoning)}(서버 tokenize 로 셈)` : fmtK(u.reasoning)
+  return [`걸음 ${u.step ?? '?'}`, `입력 ${k(u.prompt)}`, `캐시 ${k(u.cached)}`, `생성 ${k(u.completion)}`, th && `생각 ${th}`,
+    `첫 토큰 ${u.ttft_s == null ? '모름(스트리밍 아님)' : u.ttft_s + '초'}`, `생성 ${u.gen_s == null ? NA : u.gen_s + '초'}`,
+    `${u.tps == null ? '속도 ' + NA : u.tps + ' tok/s'}`].filter(Boolean).join(' · ')
+}
+function ApprovalLine({ a }) {
+  return <div class="text-xs text-mute mt-0.5" title={a.what || ''}>{a.text}{a.via === 'web-always' ? '' : ''}{a.note ? ` — "${a.note}"` : ''}{a.replayed ? ' (기록)' : ''}</div>
 }
 
 // 도구가 본 그림(판 91): 작업 줄 아래 작은 그림 — 누르면 원래 크기로 새 창
@@ -281,11 +299,13 @@ function StepsCard({ g, last, force }) {
   const hidden = steps.length - show.length
   if (!steps.length && !g.notes.length && !g.files) return null
   const shot = lastShot(steps)
+  const lastAp = [...steps].reverse().find(x => x.approval)?.approval   // 판 127: 승인 시트가 닫힌 자리 — "허용함 · 12초"
   if (steps.length && !open) return (<>   {/* 판 124: 테두리 없는 한 줄 — 누르면 펼침(폰·데스크톱) */}
     <button class="w-full flex items-center gap-2 py-1.5 my-1 text-[14px] text-mute text-left min-h-[40px]" onClick={toggle}>
       {isLive ? <span class="spin" /> : fails ? <span class="text-bad text-[12px]">✕</span> : <span class="text-[12px]">✓</span>}
       <span class="truncate">{isLive && waiting() ? `승인을 기다리는 중 · ${waitSecs()}` :
-        <>{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{isLive ? ' 중' : ''}</>}</span>
+        <>{stepSummary(steps) || `작업 ${steps.length - reflects}단계`}{fails ? ` · 실패 ${fails}` : ''}{reflects ? ` · 되짚기 ${reflects}` : ''}{isLive ? ' 중' : ''}
+          {lastAp && !isLive ? ` · ${lastAp.text}` : ''}</>}</span>
       <span class="w-4 h-4 flex-none"><IconChev /></span>
     </button>
     {/* 판 124.3: 접혀도 도구가 본 마지막 그림(view_image 등)은 줄 아래에 바로 — 걸음이 이어지면 최신으로, 앞 그림은 펼치면 차례로 */}
@@ -554,6 +574,7 @@ function TrainBar({ m, meta, tix }) {
       {m.corrected && <button class="text-[11px] px-2 py-px rounded-full font-semibold whitespace-nowrap text-warn bg-warn/15"
         title="다음 말이 고치는 꼴이라 붙은 꼬리표 — 누르면 뗀다" onClick={() => send('uncorrect')}>교정됨 ✕</button>}
     </div>
+    {open && m.usage && <div class="text-[11.5px] text-mute mt-0.5 break-words">답 걸음 · {usageLine(m.usage)}</div>}
     {open && meta && <div class="text-[12.5px] text-mute mt-0.5">{metaLine(meta)}
       <div class="font-mono text-[11.5px] opacity-80 whitespace-pre-wrap break-all mt-0.5">{String(meta).trim()}</div></div>}
     </>
