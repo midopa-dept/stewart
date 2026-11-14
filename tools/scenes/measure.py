@@ -13,6 +13,7 @@
 - 걸음 상한 1(첫 걸음만 본다). 차선(--lanes 나 --backend 여럿)마다 일꾼 --per-lane 개가 일을 나눠 든다.
 - 장면 갈래: real = 실사용에서 겪은 말, dev = 개발 장면. 표 머리에 "개발 장면은 규칙을 고친 뒤 같은 장면으로 나아졌다고 말하지 않는다"를 적는다.
 - 기본 조건: 사용자 기억 파일(STEWART.md)이 든 임시 사용자 폴더(stewart.scenes.USER_MEMORY). --no-user-memory 로 끈다.
+  스킬·프로필 폴더는 늘 빈 시험 자리다(판 137) — 실행하는 사람의 실제 스킬·프로필이 실리지 않는다.
 - 모델을 부르니 비용·장비 시간이 든다.
 """
 
@@ -90,7 +91,8 @@ def lane_backends(a) -> list:
 def table_md(res: dict) -> str:
     """결과 표: 장면 × 첫 걸음 도구 × N 번, 맞음 수."""
     lines = [f"# 장면 실측 — {res['model']} · {res['when']} · 차선 {len(res['lanes'])} · 장면마다 {res['n']}번 · 걸음 상한 {res['max_steps']}"
-             f"{' · 도구 실행 안 함' if not res['run_tools'] else ''}{' · 사용자 기억 파일 있음' if res.get('user_memory') else ''}", "",
+             f"{' · 도구 실행 안 함' if not res['run_tools'] else ''}{' · 사용자 기억 파일 있음' if res.get('user_memory') else ''}"
+             " · 스킬·프로필 폴더는 빈 시험 자리", "",
              f"> {DEV_HEAD}", "",
              "| 갈래 | 장면 | 사람 말 | 맞음 | 첫 걸음 도구(횟수) |", "|---|---|---|---|---|"]
     for r in res["rows"]:
@@ -135,7 +137,9 @@ def main() -> int:
         ap.error("--lanes 에는 --model 이 필요하다")
     os.environ.setdefault("STEWART_MEMORY", "0")
     if not a.no_user_memory:   # 판 134: 기본 조건 — 사용자 기억 파일이 있는 사용자 폴더(실사용 허브처럼)
-        os.environ["STEWART_USER_DIR"] = str(SC.user_dir_with_memory())
+        os.environ.update(SC.scene_env())   # 판 137: 스킬·프로필 폴더도 시험 자리(빈 폴더) — 실제 사용자 설정이 실리지 않게
+    else:
+        os.environ.update({k: v for k, v in SC.scene_env().items() if k != "STEWART_USER_DIR"})
     if not a.run_tools:   # 웹 도구를 목록에 싣기만 한다(실행하지 않으므로 닿지 않는 자리)
         os.environ.setdefault("STEWART_SEARXNG_URL", "http://127.0.0.1:9/search")
         os.environ.setdefault("STEWART_WEB_FETCH", "1")

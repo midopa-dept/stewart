@@ -64,5 +64,17 @@ class TMeasure(unittest.TestCase):
         self.assertTrue(all(s["set"] == "real" for s in main if not s["id"].startswith("dev-")))   # 실사용 장면 여섯은 그대로 real
 
 
+class TSceneEnv(unittest.TestCase):
+    def test_scene_env_is_test_place(self):
+        """판 137: 장면 조건의 사용자·스킬·프로필 폴더는 한 시험 자리 안이고 스킬·프로필은 비어 있다(실행하는 사람의 설정이 안 실림)."""
+        env = SC.scene_env()
+        base = Path(env["STEWART_USER_DIR"])
+        self.assertTrue((base / "STEWART.md").is_file())
+        for k in ("STEWART_SKILLS_DIR", "STEWART_PROFILES_DIR"):
+            d = Path(env[k])
+            self.assertEqual(d.parent, base)
+            self.assertEqual(list(d.iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@
 - 두 길: 가짜 모델 대본으로 실행기 장치를 시험(tests/test_u98.py — CI), 진짜 모델로 N 번 중 몇 번 기대대로(tools/scenes/measure.py — 실사용에 닿는 판을 바꿀 때).
 - 규칙: 사용자가 실사용에서 겪은 문제는 고치기 전에 이 묶음에 장면으로 먼저 넣는다.
 - 기본 조건(판 134): 사용자 기억 파일이 있는 사용자 폴더(user_dir_with_memory) — 실측·시험 모두.
+  판 137: 스킬·프로필 폴더도 시험 자리(빈 폴더, scene_env) — 실행하는 사람의 실제 설정이 실리지 않게.
 """
 
 from __future__ import annotations
@@ -21,6 +22,15 @@ from pathlib import Path
 DIR = Path(__file__).resolve().parents[2] / "tests" / "scenes"
 # 판 134: 장면의 기본 조건 — 사용자 기억 파일(<사용자 폴더>/STEWART.md)이 있다(실사용 허브처럼). 없을 때만 가려지던 화면·동작이 있었다.
 USER_MEMORY = "# 사용자 기억(장면 기본 조건)\n\n- 답은 한국어로 짧게 쓴다.\n- 코드·명령은 원문 그대로 둔다.\n"
+
+
+def scene_env(base: Path | None = None) -> dict:
+    """판 137: 장면 조건의 사용자 자리 — 기억 파일이 든 사용자 폴더, 빈 스킬·프로필 폴더(시험 자리).
+    실행하는 사람의 실제 스킬·프로필이 지시문·도구에 실리지 않게 한다(결과가 그 사람 설정에 기대지 않게)."""
+    d = user_dir_with_memory(base)
+    for sub in ("skills", "profiles"):
+        (d / sub).mkdir(exist_ok=True)
+    return {"STEWART_USER_DIR": str(d), "STEWART_SKILLS_DIR": str(d / "skills"), "STEWART_PROFILES_DIR": str(d / "profiles")}
 
 
 def user_dir_with_memory(base: Path | None = None) -> Path:

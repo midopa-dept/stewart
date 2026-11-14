@@ -24,7 +24,8 @@ _SANDBOX = _tempfile.mkdtemp(prefix="stewart-tests-")
 for _k, _sub in (("XDG_STATE_HOME", "state"), ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"),
                  ("STEWART_RUNS_DIR", "state/stewart/runs"), ("STEWART_MEMORY_DIR", "data/stewart/memory"),
                  ("STEWART_SKILLS_DIR", "config/stewart/skills"), ("STEWART_PROFILES_DIR", "config/stewart/profiles"),
-                 ("STEWART_PRUNE_ROOT", "cache/stewart"), ("STEWART_CLOUD_DIR", "cloud")):
+                 ("STEWART_PRUNE_ROOT", "cache/stewart"), ("STEWART_CLOUD_DIR", "cloud"),
+                 ("STEWART_TALK_DIR", "data/stewart/talk")):   # 판 137: 대화 자리 폴더(~/.local/share/stewart/talk 고정 기본값)도
     os.environ.setdefault(_k, os.path.join(_SANDBOX, _sub))
 import atexit as _atexit
 import shutil as _shutil
