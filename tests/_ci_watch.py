@@ -20,14 +20,19 @@ NOW: dict = {"id": "", "t": 0.0}
 _ORIG = unittest.TestCase.run
 
 
+STACK: list = []   # 판 147.6: 시험 안에서 또 시험을 돌리는 꼴(겹침)에서도 바깥 시험의 시간이 그대로이게
+
+
 def _run(self, result=None):
-    tid = self.id()
-    NOW.update(id=tid, t=time.monotonic())
+    tid, t0 = self.id(), time.monotonic()
+    STACK.append((tid, t0))
+    NOW.update(id=tid, t=t0)
     try:
         return _ORIG(self, result)
     finally:
-        TIMES[tid] = round(time.monotonic() - NOW["t"], 2)
-        NOW.update(id="", t=0.0)
+        STACK.pop()
+        TIMES[tid] = round(time.monotonic() - t0, 2)
+        NOW.update(id=STACK[-1][0] if STACK else "", t=STACK[-1][1] if STACK else 0.0)
 
 
 def _esc(s: str) -> str:
@@ -90,6 +95,9 @@ def _done() -> None:
 
 
 def install(limit: int) -> None:
+    if os.environ.get("STEWART_CI_WATCH_PID"):   # 판 147.6: 시험이 띄운 하위 시험 프로세스에는 붙이지 않는다(겹쳐 세고 겹쳐 찍던 것)
+        return
+    os.environ["STEWART_CI_WATCH_PID"] = str(os.getpid())
     unittest.TestCase.run = _run
     threading.Thread(target=_watch, args=(float(limit),), daemon=True, name="ci-watch").start()
     atexit.register(_done)

@@ -26,6 +26,19 @@ import tempfile as _tempfile
 # (시험 하나에 서버 셋이면 1초 넘게) — 시험 프로세스에서만 0.05초로. 제품 허브의 기본값은 그대로다.
 _socketserver.BaseServer.serve_forever.__defaults__ = (0.05,)
 
+# 판 147.6: 시험 프로세스 안 HTTPServer 도 server_name 을 위해 socket.getfqdn(주소)(역 이름 풀이)를 부른다 — 이름 풀이가 느린 기계
+# (CI macOS 러너 ~35초)에서는 묶음에서 처음 서버를 띄우는 시험 하나가 그 값을 혼자 냈다. 시험 서버는 server_name 을 쓰지 않는다.
+import http.server as _hs
+
+
+def _bind_no_fqdn(self):
+    _socketserver.TCPServer.server_bind(self)
+    host, port = self.server_address[:2]
+    self.server_name, self.server_port = str(host), port
+
+
+_hs.HTTPServer.server_bind = _bind_no_fqdn
+
 # 판 147.2: CI(GitHub Actions)에서만 — 시험마다 걸린 시간을 재고, 묶음이 상한(기본 12분) 안에 안 끝나면 지금 도는 시험·모든 스레드
 # 스택 요약·느린 시험을 workflow 명령 줄(::error)로 찍고 실패로 끝낸다. 끝까지 가면 ::notice 로 느린 시험과 합.
 # 취소된 작업의 로그는 로그인 없이 못 읽지만 주석(annotation)은 공개 API 로 읽힌다 — macOS 러너에서만 멈추는 자리를 찾으려고.
