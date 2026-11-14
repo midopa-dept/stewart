@@ -12,6 +12,7 @@
   --run-tools 를 주면 예전처럼 도구를 실제로 돌린다(그때는 검색 주소를 STEWART_SEARXNG_URL 로 준다).
 - 걸음 상한 1(첫 걸음만 본다). 차선(--lanes 나 --backend 여럿)마다 일꾼 --per-lane 개가 일을 나눠 든다.
 - 장면 갈래: real = 실사용에서 겪은 말, dev = 개발 장면. 표 머리에 "개발 장면은 규칙을 고친 뒤 같은 장면으로 나아졌다고 말하지 않는다"를 적는다.
+- 기본 조건: 사용자 기억 파일(STEWART.md)이 든 임시 사용자 폴더(stewart.scenes.USER_MEMORY). --no-user-memory 로 끈다.
 - 모델을 부르니 비용·장비 시간이 든다.
 """
 
@@ -89,7 +90,7 @@ def lane_backends(a) -> list:
 def table_md(res: dict) -> str:
     """결과 표: 장면 × 첫 걸음 도구 × N 번, 맞음 수."""
     lines = [f"# 장면 실측 — {res['model']} · {res['when']} · 차선 {len(res['lanes'])} · 장면마다 {res['n']}번 · 걸음 상한 {res['max_steps']}"
-             f"{' · 도구 실행 안 함' if not res['run_tools'] else ''}", "",
+             f"{' · 도구 실행 안 함' if not res['run_tools'] else ''}{' · 사용자 기억 파일 있음' if res.get('user_memory') else ''}", "",
              f"> {DEV_HEAD}", "",
              "| 갈래 | 장면 | 사람 말 | 맞음 | 첫 걸음 도구(횟수) |", "|---|---|---|---|---|"]
     for r in res["rows"]:
@@ -126,12 +127,15 @@ def main() -> int:
     ap.add_argument("--scenes", nargs="*")
     ap.add_argument("--max-steps", type=int, default=1)
     ap.add_argument("--run-tools", action="store_true", help="도구를 실제로 돌린다(기본은 실행하지 않음)")
+    ap.add_argument("--no-user-memory", action="store_true", help="사용자 기억 파일 없이(기본은 임시 사용자 폴더에 기억 파일을 둔다)")
     ap.add_argument("--out", default="")
     ap.add_argument("--table", default="")
     a = ap.parse_args()
     if a.lanes and not a.model:
         ap.error("--lanes 에는 --model 이 필요하다")
     os.environ.setdefault("STEWART_MEMORY", "0")
+    if not a.no_user_memory:   # 판 134: 기본 조건 — 사용자 기억 파일이 있는 사용자 폴더(실사용 허브처럼)
+        os.environ["STEWART_USER_DIR"] = str(SC.user_dir_with_memory())
     if not a.run_tools:   # 웹 도구를 목록에 싣기만 한다(실행하지 않으므로 닿지 않는 자리)
         os.environ.setdefault("STEWART_SEARXNG_URL", "http://127.0.0.1:9/search")
         os.environ.setdefault("STEWART_WEB_FETCH", "1")
@@ -168,7 +172,7 @@ def main() -> int:
         rows.append({"id": sc["id"], "set": sc["set"], "said": sc["said"], "good": sum(1 for r in res if r[0]), "n": a.n,
                      "skipped": sum(1 for r in res if r[0] is None),
                      "runs": [{"ok": r[0], "why": r[1], "first": r[2]} for r in res]})
-    out = {"model": lanes[0].model if lanes else "", "lanes": [b.base_url for b in lanes], "n": a.n, "max_steps": a.max_steps,
+    out = {"model": lanes[0].model if lanes else "", "user_memory": not a.no_user_memory, "lanes": [b.base_url for b in lanes], "n": a.n, "max_steps": a.max_steps,
            "run_tools": a.run_tools, "think": a.think if a.lanes else "table", "when": time.strftime("%Y-%m-%d %H:%M"),
            "elapsed_s": round(time.time() - t0, 1), "dev_head": DEV_HEAD, "rows": rows}
     md = table_md(out)

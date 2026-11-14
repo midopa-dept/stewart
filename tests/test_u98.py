@@ -25,7 +25,8 @@ def session(scene, tmp):
 
 class TScenes(unittest.TestCase):
     def setUp(self):
-        e = mock.patch.dict(os.environ, {"STEWART_MEMORY": "0", "STEWART_SEARXNG_URL": "http://127.0.0.1:9/search"})
+        e = mock.patch.dict(os.environ, {"STEWART_MEMORY": "0", "STEWART_SEARXNG_URL": "http://127.0.0.1:9/search",
+                                         "STEWART_USER_DIR": str(SC.user_dir_with_memory())})   # 판 134: 기본 조건 — 사용자 기억 파일 있음
         e.start()
         self.addCleanup(e.stop)
 

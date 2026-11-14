@@ -3,6 +3,7 @@ import { useState, useMemo } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { mdHtml, fmtK, fmtSecs, estTokens, post } from './lib.js'
 import { diffRows } from './diffrows.js'
+import { talked } from './emptyconv.js'
 import { copyText, flash } from './copy.js'
 import { ThinkBlock } from './think.jsx'
 import { hub, tick, clockSkew, busy, refresh, toast, cpost, chat, composerFill } from './state.js'
@@ -632,14 +633,16 @@ export function Thread({ log, prior }) {
   const curTurn = busy.value ? Math.max(0, ...groups.filter(g => g.type === 'assistant' && g.m.turn).map(g => g.m.turn)) : 0
   const liveTodos = hub.value?.todos || []
   const tail = groups.length - 1
+  // 판 134: 빈 대화 = 사람·모델 말이 아직 없음. 시작 안내 줄(기억 파일·스킬 폴더·경고 등)이 있어도 첫 화면·고르기 줄을 그린다 — 안내 줄은 그 아래에 그대로
+  const said = talked(groups)
   return (
     <>
       {prior}
       <FileViewer />
       <UserMenu />
       <WorkerStrip />
-      {!groups.length && !busy.value && (
-        <div class="empty-hint text-center pt-[30vh] md:pt-[28vh]">
+      {!said && !busy.value && (
+        <div class={'empty-hint text-center ' + (groups.length ? 'pt-[14vh] md:pt-[16vh] pb-6' : 'pt-[30vh] md:pt-[28vh]')}>
           <div class="text-[17px] font-semibold"><PlaceName k={curKind()} /></div>
           <div class="text-[13px] text-mute mt-1">{emptySub()}</div>
           {hub.value?.backend?.external && <div class="text-[12.5px] text-warn mt-2 max-w-[34ch] mx-auto">이 대화의 글·올린 파일·읽은 파일 내용은 {String(hub.value.backend.external).replace(/\(.*\)/, '').trim()} 로 나간다</div>}

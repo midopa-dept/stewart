@@ -8,6 +8,7 @@
   · executor(가짜 모델로 볼 실행기 장치): note(첫 사람 말 뒤에 붙어야 할 엔진 글 조각)·fake_call(모델이 이 호출을 했다고 치면)·blocked(그 결과에 있어야 할 글)
 - 두 길: 가짜 모델 대본으로 실행기 장치를 시험(tests/test_u98.py — CI), 진짜 모델로 N 번 중 몇 번 기대대로(tools/scenes/measure.py — 실사용에 닿는 판을 바꿀 때).
 - 규칙: 사용자가 실사용에서 겪은 문제는 고치기 전에 이 묶음에 장면으로 먼저 넣는다.
+- 기본 조건(판 134): 사용자 기억 파일이 있는 사용자 폴더(user_dir_with_memory) — 실측·시험 모두.
 """
 
 from __future__ import annotations
@@ -18,6 +19,17 @@ import tomllib
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parents[2] / "tests" / "scenes"
+# 판 134: 장면의 기본 조건 — 사용자 기억 파일(<사용자 폴더>/STEWART.md)이 있다(실사용 허브처럼). 없을 때만 가려지던 화면·동작이 있었다.
+USER_MEMORY = "# 사용자 기억(장면 기본 조건)\n\n- 답은 한국어로 짧게 쓴다.\n- 코드·명령은 원문 그대로 둔다.\n"
+
+
+def user_dir_with_memory(base: Path | None = None) -> Path:
+    """사용자 기억 파일이 든 임시 사용자 폴더(STEWART_USER_DIR 로 가리킨다)."""
+    import tempfile
+    d = Path(base or tempfile.mkdtemp(prefix="scene-user-"))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "STEWART.md").write_text(USER_MEMORY, encoding="utf-8")
+    return d
 
 
 def profile_raw(scene: dict, raw: dict) -> dict:
