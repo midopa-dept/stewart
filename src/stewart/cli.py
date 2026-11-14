@@ -518,6 +518,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="엔진 안 시간 예산(판 128, 기본 끔 — 환경 변수 STEWART_TIME_BUDGET_S 로도). 그 비율(STEWART_TIME_BUDGET_FRAC, 기본 0.85)에 닿으면 "
                         "새 도구 걸음을 멈추고 지금까지 본 것으로 마지막 답을 받는다(끝 이유 time_budget). --once 는 프로세스 시작부터, 대화는 차례마다 잰다")
     c.add_argument("--tier", default=None, help="backends 표 [tiers.<이름>] 등급(백엔드·프로필·문맥 예산, slim = true 면 얇은 꼴) — 허브의 --tier 와 같은 뜻. 판 114")
+    c.add_argument("--worker", choices=["read", "write"], default=None,
+                   help="--once 와 함께: 메인 자리가 아니라 허브가 띄우는 작업자 꼴로 과제 하나를 돌린다(지시문·도구·문맥 창·생각이 허브 작업자와 같다). "
+                        "read = 도구를 적지 않은 일(읽기 도구만), write = 도구를 적은 일. --tier 는 작업자의 등급(없으면 표의 default_for). 판 138")
+    c.add_argument("--worker-tools", default=None, help="--worker 와 함께: 작업자에게 적어 줄 도구 이름(쉼표로). 없으면 read·write 기본")
     _resume_args(c)
     _common(c, task=False)
     rw = sub.add_parser("rewind", help="실행 기록의 체크포인트로 파일을 되돌린다(도구가 쓴 파일만)")
@@ -869,7 +873,14 @@ def main(argv: list[str] | None = None) -> int:
             if a.resume and not a.workdir:   # --resume 은 그 기록의 작업 폴더로 간다
                 a.workdir = run_meta(resolve_run(Path(a.runs_dir), a.resume)).get("workdir")
             wd = a.workdir or (None if prof_has_wd else os.getcwd())
-            if a.tier:   # 판 114: 허브와 같은 등급 풀이(얇은 꼴 포함)
+            if a.worker:   # 판 138: 작업자 꼴 — 부모(메인 자리)는 등급 없이, 등급은 작업자에게
+                if not a.once:
+                    print("stewart chat --worker: --once 와 함께 쓴다(사람 없이 과제 하나)", file=sys.stderr)
+                    return 2
+                from .hubmain import with_role
+                profile, backend = resolve(a.profile, a.backend, wd)
+                profile = with_role(profile)   # 허브 메인과 같은 부모 지시문(작업자는 부모 지시문을 물려받는다)
+            elif a.tier:   # 판 114: 허브와 같은 등급 풀이(얇은 꼴 포함)
                 from .hubmain import main_tier
                 profile, backend = main_tier(a, wd)
             else:
@@ -885,6 +896,23 @@ def main(argv: list[str] | None = None) -> int:
             if a.max_steps:
                 profile.max_steps = a.max_steps
             rec = Recorder(Path(a.runs_dir), "chat-" + profile.name)
+            if a.once and a.worker:   # 판 138: 허브 작업자와 같은 길(_spawn_run)로 한 번
+                sess = ChatSession(profile, backend, rec, confirm=a.confirm, history=history, resumed_from=resumed, stream=False,
+                                   mode=a.mode or "auto", default_mode="auto", think=a.think)
+                try:
+                    tools = [x.strip() for x in a.worker_tools.split(",") if x.strip()] if a.worker_tools else None
+                    w = sess.run_worker_once(first, write=a.worker == "write", tier=a.tier, tools=tools, max_steps=a.max_steps)
+                finally:
+                    sess.close()
+                ws = {}
+                try:
+                    ws = json.loads((Path(w["worker_run"]) / "summary.json").read_text(encoding="utf-8")) if w.get("worker_run") else {}
+                except (OSError, ValueError):
+                    pass
+                print(json.dumps({"run_dir": w.get("worker_run"), "parent_run": w["parent_run"], "stop_reason": w.get("stop_reason"),
+                                  "success": ws.get("success"), "tier": w.get("tier"), **({"note": w["note"]} if w.get("note") else {})},
+                                 ensure_ascii=False))
+                return 0 if w.get("stop_reason") in ("completed", "asked") else 1
             if a.once:   # 판 114: 사람 없이 한 차례 — 화면은 지금 화면, 모드는 주지 않으면 auto
                 sess = ChatSession(profile, backend, rec, confirm=a.confirm, history=history, resumed_from=resumed, stream=a.stream,
                                    mode=a.mode or ("auto" if a.confirm is None else None), default_mode="auto", think=a.think)

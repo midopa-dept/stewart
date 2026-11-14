@@ -45,8 +45,9 @@ SHAPE = {
 class FakeModel:
     """/v1/models 와 /v1/chat/completions(스트리밍 포함). 받은 요청 본문을 모두 남긴다."""
 
-    def __init__(self, answer="네, 안녕하세요."):
+    def __init__(self, answer="네, 안녕하세요.", route=None):
         self.requests: list[dict] = []
+        self.route = route   # 판 138: 요청 본문 → 응답(없으면 늘 answer)
         me = self
 
         class Hd(BaseHTTPRequestHandler):
@@ -61,7 +62,7 @@ class FakeModel:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 me.requests.append(body)
-                reply(self, body, msg(answer))
+                reply(self, body, me.route(body) if me.route else msg(answer))
 
             def log_message(self, *a):
                 pass
@@ -273,6 +274,74 @@ class TRealUseShape(unittest.TestCase):
         h.post("/api/main", {"text": "안녕", "chat": name})
         self.assertTrue(h.wait(lambda: len(self.model.requests) > n0 and not h.get(f"/api/state?chat={urllib.parse.quote(name)}")["busy"]))
         self.assertNotIn("reasoning_effort", self.model.requests[n0])                          # 등급 없는 대화는 그대로
+
+
+WORKER_HEAD = "너는 부모 에이전트가 맡긴 일 하나만 하는 작업자다"
+
+
+def is_worker(body: dict) -> bool:
+    return str((body.get("messages") or [{}])[0].get("content") or "").startswith(WORKER_HEAD)
+
+
+class TWorkerPath(unittest.TestCase):
+    """판 138: `chat --once --worker` 가 허브가 띄운 작업자와 같은 설정(지시문·도구·문맥 창·생각)으로 도는지 — 요청 본문 대조."""
+
+    TASK = "README.md 를 읽고 첫 줄을 그대로 적어라"
+    TOOLS = ["read_file", "write_file"]
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="realuse-worker-"))
+        self.spawned = False
+
+        def route(body):
+            if is_worker(body):
+                return msg("작업자 끝")
+            if not self.spawned and any(t["function"]["name"] == "workers" for t in body.get("tools") or []):
+                self.spawned = True
+                return msg(calls=[("workers", {"action": "spawn", "task": self.TASK, "tools": self.TOOLS})])
+            return msg("끝")
+        self.model = FakeModel(route=route)
+        self.addCleanup(self.model.close)
+        self.env = make_user_shape(self.root, self.model.url)
+        bt = self.root / "home" / ".config" / "stewart" / "backends.toml"   # moderato 한 칸(budget 없이) — 쓰기 작업자의 등급
+        bt.write_text(bt.read_text(encoding="utf-8") + '\n[tiers.moderato]\nuse = "코딩·대화의 기본"\ndefault_for = ["write"]\n', encoding="utf-8")
+        (self.root / "project").mkdir(exist_ok=True)
+        (self.root / "project" / "README.md").write_text("첫 줄\n", encoding="utf-8")
+
+    def first_worker(self, n0):
+        return next((b for b in self.model.requests[n0:] if is_worker(b)), None)
+
+    def test_cli_worker_matches_hub_worker(self):
+        hub = Hub(self.root, self.env)
+        try:
+            name = hub.post("/api/chat/new", {"how": "fresh", "kind": "code", "title": "새 대화", "from": "main"})["chat"]
+            n0 = len(self.model.requests)
+            hub.post("/api/main", {"text": "작업자에게 맡겨라", "chat": name})
+            hw = hub.wait(lambda: self.first_worker(n0))
+        finally:
+            hub.close()
+        self.assertIsNotNone(hw, "허브 작업자가 뜨지 않았다:\n" + (self.root / "hub.log").read_text(encoding="utf-8")[-2000:])
+        n1 = len(self.model.requests)
+        r = subprocess.run([sys.executable, "-m", "stewart", "chat", "-p", SHAPE["profile"], "--backend", SHAPE["main_backend"],
+                            "--workdir", str(self.root / "project"), "--once", "--mode", "edits", "--worker", "write",
+                            "--worker-tools", ",".join(self.TOOLS), self.TASK],
+                           env=self.env, cwd=self.root, capture_output=True, encoding="utf-8", errors="replace", timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr[-1500:])
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual((out["tier"], out["stop_reason"]), ("moderato", "completed"))
+        cw = self.first_worker(n1)
+        self.assertIsNotNone(cw)
+        tools = lambda b: sorted(t["function"]["name"] for t in b.get("tools") or [])
+        self.assertEqual(tools(cw), tools(hw))
+        self.assertEqual(cw["messages"][0]["content"], hw["messages"][0]["content"])                 # 지시문 그대로
+        for k in ("model", "reasoning_effort", "max_tokens", "chat_template_kwargs", "temperature"):
+            self.assertEqual(cw.get(k), hw.get(k), k)
+        self.assertEqual(cw.get("reasoning_effort"), "medium")
+        self.assertIn(self.TASK, json.dumps(cw["messages"][1:], ensure_ascii=False))
+        meta = json.loads((Path(out["run_dir"]) / "events.jsonl").read_text(encoding="utf-8").splitlines()[0])["meta"]
+        self.assertEqual(meta["worker"], {"depth": 1, "tier": "moderato"})                           # 작업자 표시
+        self.assertEqual(meta["think"]["source"].get("effort"), "default")
+        self.assertEqual(meta["features"]["tier"]["name"], "moderato")
 
 
 class TNoLeak(unittest.TestCase):

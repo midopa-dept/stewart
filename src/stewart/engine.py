@@ -477,6 +477,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
         "memory": ({"dir": str(mem.dir), "subjects": [x["key"] for x in mem.subjects], "injected": mem_inject} if mem else None), "check_on_stop": stop_cfg, "env_info": env_info, "skills": SK.meta_log(skill_list),
         **({"agents": PC.agents_log(agents)} if agents else {}),
         "resumed_from": resumed_from, "resumed_messages": len(messages) - 2 if history else 0,
+        **({"worker": {"depth": depth, "tier": tier.get("name") or None}} if parent else {}),   # 판 138: 작업자 표시(부모가 띄운 실행)
         **({"images": img_desc} if img_desc else {}),
         "started": datetime.now().isoformat(timespec="seconds"),
     }

@@ -276,6 +276,16 @@ NARRATE_NOTE = "[엔진] 사람은 말 없이 도구만 도는 것을 보고 있
 INTERJECT_NOTE = "[엔진] 사람이 일하는 중에 새로 말했다. 이 말이 지금 목표를 바꾸면 하던 걸음을 멈추고 이 말을 따른다."
 
 
+SPAWN_NO_ASK = ("[엔진] 동시 작업자는 사람에게 묻지 못해 이 행동({name})은 하지 않았다. 묻지 않고 되는 길로 하거나, "
+                "승인이 필요한 일이면 마지막 글에 무엇이 필요한지 적어 메인에게 넘긴다.")
+
+
+def _spawn_no_ask(n, name, args) -> str:
+    """판 138: 동시 작업자(workers)의 '묻기' 자리 — 사람에게 묻지 않고 늘 거절한다(묻는 모드 edits·ask 에서도 작업자가 뜨게).
+    전에는 묻는 함수가 없어 엔진이 무인 실행으로 보고, 메인 모드가 edits(허브 기본)면 작업자가 시작하자마자 실패했다."""
+    return SPAWN_NO_ASK.format(name=name)
+
+
 class _LockedProxy:
     """여러 실(동시 작업자)이 같은 체크포인트를 쓸 때 부르는 메서드를 잠금 안에서(판 108)."""
 
@@ -2149,7 +2159,7 @@ class ChatSession:
             args = {**args, "_tier": SP.tier_raw(tier, backend)}   # 판 116: 작업자 프로필 raw["tier"] — 압축 예산·생각 칸(판 132: 기본 생각 깊이)
         ctx = {"profile": self.profile, "backend": backend, "rec": self.rec, "cps": cps, "env": self.env,
                "exec_mode": self.mode, "tool_names": [t for t in self.all_tool_names if t not in (DG.NAME, SP.NAME)], "ledger": None,
-               "budget": self._dg_budget, "log": self.delegations, "ask": None, "on_call": on_call, "ask_cfg": None,
+               "budget": self._dg_budget, "log": self.delegations, "ask": _spawn_no_ask, "on_call": on_call, "ask_cfg": None,
                "bounds": self.bd, "projcfg": self.pfl, "read_default": True,
                "rule": lambda name, a, deny_only=False: self.shell_rule(a, True) if name == "run_shell" else (None, ""),
                "ask_outside": None}
@@ -2160,6 +2170,35 @@ class ChatSession:
             text += (f"\n(등급 {args.get('tier')} 의 백엔드 {tier['backend']} 에 닿지 못했다 — 기본 모델로 대신 돌리지 않았다. "
                      "서버를 켜거나, 등급의 backend 줄을 지우면 기본 모델로 돈다)")
         return ok, f"[작업자 {wid}" + (f" · {args.get('tier')}" if tier else "") + "] " + text   # 꼬리표 "자리 · 등급"(판 115)
+
+    def run_worker_once(self, task: str, write: bool = False, tier: str | None = None, tools: list | None = None,
+                        max_steps: int | None = None) -> dict:
+        """판 138: 허브가 띄우는 작업자와 같은 길(_spawn_run → delegate.run_child)로 작업자 하나를 돌린다 — 사람 없이 한 번.
+        이 세션은 부모(메인 자리)다. 등급은 tier 를 주면 그것, 없으면 허브처럼 default_for(write = 도구를 적은 일, read = 아닌 일).
+        write 면 도구를 부모 도구 전부로 적고(작업자 묶음이 거른다), read 면 적지 않는다(읽기 도구만). tools 를 주면 그것.
+        max_steps 를 주면 작업자에게도 그 상한을 적어 준다(작업자 상한 = min(30, max_steps), 하한 3 — 허브 작업자와 같은 규칙).
+        → {ok, text, tier, note, worker_run, parent_run, stop_reason, steps}(기록 경로는 절대 경로)"""
+        args: dict = {"task": task}
+        if max_steps:
+            args["max_steps"] = int(max_steps)
+        if tools:
+            args["tools"] = list(tools)
+        elif write:
+            args["tools"] = [t for t in self.all_tool_names if t not in (DG.NAME, SP.NAME)]
+        if tier:
+            args["tier"] = tier
+        self.tiers, self.manual_tiers = SP.split_manual(SP.load_tiers())   # _workers(spawn) 와 같은 고르기
+        note = SP.unknown_note(self.tiers, args.get("tier"), self.manual_tiers) if self.tiers or tier else ""
+        t = SP.pick_tier(self.tiers, args) if self.tiers else None
+        args = {**args, "tier": t} if t else {k: v for k, v in args.items() if k != "tier"}
+        self._pool()
+        self.rec.event("worker_once", tier=t, asked_tier=tier, write=bool(write), tools=args.get("tools"), note=note)
+        ok, text = self._spawn_run(dict(args), "w1")
+        last = self.delegations[-1] if self.delegations else {}
+        wr = last.get("dir")
+        return {"ok": ok, "text": text, "tier": t, "note": note, "worker_run": str(Path(wr).resolve()) if wr else None,
+                "parent_run": str(Path(self.rec.dir).resolve()),
+                "stop_reason": last.get("stop_reason"), "steps": last.get("steps")}
 
     def _workers(self, args: dict) -> tuple[bool, str]:
         act = str(args.get("action") or "")
