@@ -1126,7 +1126,9 @@ class HubMain:
         from . import tierview as TV
         root = self._root()
         inst = bool(os.environ.get("STEWART_INSTANCE"))
-        rows, bks = TV.load(instance_backend=root._backend.name if inst else None)
+        # 판 136: 표에 없는 등급의 "기본 모델" = 이 허브가 켜진 모델(-b). 백엔드 표의 default 가 아니다(화면 글 "허브의 기본 모델" 그대로)
+        rows, bks = TV.load(instance_backend=root._backend.name if inst else None,
+                            default_backend=None if inst else root._backend.name)
         if probe:
             cache = root.__dict__.setdefault("_tier_probe", {"t": 0.0, "st": {}})
             if time.monotonic() - cache["t"] > 60:

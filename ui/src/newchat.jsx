@@ -12,7 +12,7 @@ export const NEW_TITLE = '새 대화'
 export const workerOpen = signal(false)   // "+" 시트의 작업자 맡기기 판
 export const tiersSig = signal(null)
 export const loadTiers = () => get('/api/tiers').then(r => { tiersSig.value = r; return r }, () => { tiersSig.value = { rows: [] }; return tiersSig.value })
-const usable = r => r.connected && r.key !== '없음'
+const usable = r => r.connected && r.key !== '없음' && r.status !== 'auth'   // 판 136: 막는 것은 키 없음(바깥)·인증 거부(찔러 본 401·403)뿐
 const ST = { ok: '준비됨', down: '닿지 않음', auth: '인증 거부', nokey: '키 없음', none: '연결 없음', unset: '설정 없음', unchecked: '' }
 
 export const isDraft = c => !!c && c.name !== 'main' && c.title === NEW_TITLE && !c.first && !c.busy   // 아직 말하지 않은 새 대화

@@ -7,6 +7,8 @@
 - 바깥 백엔드(Backend.external())를 가리키는 등급은 기본이 사람만(manual) — 작업자·자동 분배가 스스로 부르지 않는다.
   돈 상한은 적지 않아도 하루 DEFAULT_USD_DAY·대화 DEFAULT_USD_CHAT 달러(0 이면 끔). 가격표가 없으면 돈을 셀 수 없다고 보인다.
 - 키 값은 읽어도 화면·기록에 내지 않는다(있음·없음만). 바깥 사람만 등급은 키 파일(api_key_file)을 쓰지 않는다.
+- 판 136: 안쪽(바깥 아닌) 백엔드는 키 자리를 적었는데 값이 비어도 등급을 막지 않는다 — 그때는 키 없이 보낸다(KEY_EMPTY_LOCAL).
+  막는 것은 찔러 본 서버가 401·403 을 낼 때(상태 "인증 거부")뿐이다. 바깥 백엔드의 "키 없음"은 그대로 막는다.
 - 판 132: 등급마다 생각 깊이(reasoning_effort)와 출처 — 표(등급 칸)·기본(spawn.TIER_DEFAULT_EFFORT)·환경(STEWART_REASONING_EFFORT).
   값 없음은 노력 값을 보내지 않는다는 뜻이다(서버 기본). 기본값을 싣지 못하면 그 까닭을 표 밑에 적는다.
 """
@@ -24,6 +26,7 @@ DEFAULT_USD_DAY = 3.0
 DEFAULT_USD_CHAT = 1.0
 
 EFFORT_SRC = {"default": "기본", "tier": "표", "env": "환경", "tier:off": "표", "env:off": "환경"}
+KEY_EMPTY_LOCAL = "키 없이 보냄"   # 판 136: 안쪽 백엔드의 키 자리가 비었다(막지 않는다)
 STATUS_LABEL = {"ok": "준비됨", "down": "닿지 않음", "auth": "인증 거부", "nokey": "키 없음", "none": "연결 없음",
                 "unset": "설정 없음", "unchecked": "확인 안 함"}
 
@@ -65,6 +68,8 @@ def key_state(b, manual: bool) -> tuple[str, str]:
                 return "있음", "키 파일"
         except OSError:
             pass
+    if not b.external():   # 판 136: 안쪽 서버 — 값이 비면 키 없이 보낸다(예시 표의 "비어 있으면 키 없이 보냄"). 막지 않는다
+        return KEY_EMPTY_LOCAL, " 또는 ".join(where) + " 가 비어 있음"
     return "없음", " 또는 ".join(where)
 
 
@@ -191,6 +196,8 @@ def text(rows_: list[dict], title: str = "") -> str:
     for r in rows_:
         if r.get("key") == "없음" and r.get("connected"):
             lines.append(f"· {r['tier']}: 키 없음 — {key_hint(r)}")
+        elif r.get("key") == KEY_EMPTY_LOCAL and r.get("connected"):
+            lines.append(f"· {r['tier']}: {r['key_where']} — 키 없이 보낸다(서버가 키를 요구하면 상태가 '인증 거부'로 바뀐다)")
     for r in rows_:
         if (r.get("effort") or {}).get("note"):
             lines.append(f"· {r['tier']} 생각 깊이: {r['effort']['note']}")
