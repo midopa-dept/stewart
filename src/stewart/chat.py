@@ -461,10 +461,6 @@ class ChatSession:
         eff_note = TH.check_effort(self.tks, backend)   # 판 123: 이 백엔드가 받지 않는 노력 낱말은 보내지 않고 시작할 때 알린다
         if eff_note:
             self.ui.warn("  " + eff_note)
-            rec.event("think_effort_rejected", **self.tks["effort_rejected"])
-        if self.tks.get("effort") or self.tks.get("effort_note"):   # 판 132: 생각 깊이와 출처(표·기본·환경) — 과정은 늘 닿게
-            rec.event("think_effort", value=self.tks.get("effort"), source=(self.tks.get("source") or {}).get("effort"),
-                      note=self.tks.get("effort_note"))
         if self.tks.get("effort_note"):
             self.ui.dim("  (" + self.tks["effort_note"] + ")")
         self._pmark = 0                   # 마지막 응답 때의 메시지 수(프롬프트 어림용)
@@ -515,11 +511,19 @@ class ChatSession:
                                    "agents": PC.agents_log(self.agents)}} if (self.commands or self.agents) else {}),
             "resumed_from": resumed_from, "resumed_messages": len(self.messages) - 1 if history else 0,
             "started": datetime.now().isoformat(timespec="seconds"),
+            # 판 139: 이 대화가 앉은 등급(다시 열 때 그 등급으로 — 같은 백엔드를 쓰는 등급은 백엔드 이름으로 가려낼 수 없다)
+            **({"tier": ((profile.raw or {}).get("tier") or {}).get("name")} if ((profile.raw or {}).get("tier") or {}).get("name") else {}),
         }
         from . import features as FT
         self.meta["features"] = FT.fingerprint(self.messages[0].get("content") if self.messages and self.messages[0].get("role") == "system" else "",
                                                self.tool_defs, "chat", {"toggled_off": sorted(getattr(self, "disabled_tools", ()))})
         rec.event("run_start", meta=self.meta, messages=self.messages)
+        # 판 139: 생각 깊이 사건은 run_start 뒤에(기록 첫 줄은 늘 run_start — 첫 줄로 meta 를 읽는 곳이 있다)
+        if self.tks.get("effort_rejected"):
+            rec.event("think_effort_rejected", **self.tks["effort_rejected"])
+        if self.tks.get("effort") or self.tks.get("effort_note"):   # 판 132: 생각 깊이와 출처(표·기본·환경) — 과정은 늘 닿게
+            rec.event("think_effort", value=self.tks.get("effort"), source=(self.tks.get("source") or {}).get("effort"),
+                      note=self.tks.get("effort_note"))
         if history:
             n_user = sum(1 for m in self.messages if m.get("role") == "user")
             self.ui.dim(f"이어 감: {resumed_from} (메시지 {len(self.messages) - 1}개, 사람 입력 {n_user}개)")

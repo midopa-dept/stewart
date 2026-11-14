@@ -110,3 +110,25 @@ class Recorder:
             self.md(f"## 최종 출력\n\n```\n{_short(final_output, 6000)}\n```\n")
         (self.dir / "transcript.md").write_text("\n".join(self._md), encoding="utf-8")
         self._ev.close()
+
+
+def head_meta(run_dir, lines: int = 20) -> dict:
+    """판 139: 기록 앞쪽에서 run_start 의 meta(없으면 {}). 첫 줄이 다른 사건이어도 찾는다(판 132–138 의 대화 기록은
+    생각 깊이 사건이 run_start 앞에 있다). 파일을 끝까지 읽지 않는다."""
+    import json as _json
+    from pathlib import Path as _Path
+    try:
+        with open(_Path(run_dir) / "events.jsonl", encoding="utf-8") as f:
+            for _ in range(lines):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    e = _json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("kind") == "run_start" or ("kind" not in e and isinstance(e.get("meta"), dict)):   # kind 없는 옛 꼴도
+                    return e.get("meta") or {}
+    except OSError:
+        pass
+    return {}

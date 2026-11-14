@@ -46,8 +46,8 @@ def _run_info(d: Path) -> dict | None:
     if hit and hit[0] == key:
         return hit[1]
     try:
-        with open(d / "events.jsonl", encoding="utf-8") as f:
-            meta = (json.loads(f.readline()).get("meta") or {})
+        from .record import head_meta
+        meta = head_meta(d)   # 판 139: 첫 줄이 run_start 가 아닌 기록도
         msgs = json.loads((d / "messages.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
@@ -319,8 +319,8 @@ def past_search(runs_dir: Path, project, q: str, limit: int = 30, scan: int = 30
         if n > scan:
             break
         try:
-            with open(d / "events.jsonl", encoding="utf-8") as f:
-                meta = (json.loads(f.readline()).get("meta") or {})
+            from .record import head_meta
+            meta = head_meta(d)   # 판 139: 첫 줄이 run_start 가 아닌 기록도
             msgs = json.loads((d / "messages.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue

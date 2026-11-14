@@ -519,11 +519,8 @@ def _conv_brief(sess) -> dict:
 def _run_kind(run_dir: Path, default: str) -> str:
     """지난 기록의 종류: 그 기록을 연 프로필의 자리(대화 프로필이면 talk)."""
     from . import surfaces as SF
-    try:
-        with open(Path(run_dir) / "events.jsonl", encoding="utf-8") as f:
-            meta = json.loads(f.readline()).get("meta") or {}
-    except (OSError, ValueError):
-        return default
+    from .record import head_meta
+    meta = head_meta(run_dir)   # 판 139: 첫 줄이 run_start 가 아닌 기록도
     return "talk" if meta.get("profile") == SF.TALK_PROFILE else "code" if meta.get("profile") else default
 
 
@@ -1174,12 +1171,18 @@ class HubMain:
         return back
 
     def run_tier(self, run_dir: Path) -> str | None:
-        """판 125: 지난 기록이 사람만 등급의 백엔드로 돌았으면 그 등급 이름(다시 열 때 같은 모델로). 아니면 None(그 자리의 기본)."""
-        try:
-            with open(Path(run_dir) / "events.jsonl", encoding="utf-8") as f:
-                bname = ((json.loads(f.readline()).get("meta") or {}).get("backend") or {}).get("name")
-        except (OSError, ValueError):
+        """판 125: 지난 기록이 사람만 등급의 백엔드로 돌았으면 그 등급 이름(다시 열 때 같은 모델로). 아니면 None(그 자리의 기본).
+        판 139: 기록 meta 에 등급이 있으면(그 등급이 지금도 고를 수 있으면) 그 등급 — moderato 처럼 허브 모델을 쓰는 등급도 되살린다."""
+        from .record import head_meta
+        meta = head_meta(run_dir)   # 판 139: 첫 줄이 run_start 가 아닌 기록도
+        if not meta:
             return None
+        bname = (meta.get("backend") or {}).get("name")
+        want = meta.get("tier")
+        if isinstance(want, str) and want:
+            r = next((x for x in self.tier_rows()["rows"] if x["tier"] == want), None)
+            if r and r.get("connected") and r.get("key") != "없음":
+                return want
         root = self._root()
         if not bname or bname == root._backend.name and not os.environ.get("STEWART_INSTANCE"):
             return None
