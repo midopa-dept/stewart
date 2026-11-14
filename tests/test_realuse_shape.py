@@ -130,7 +130,7 @@ timeout_s = 300
     (ud / "ntfy-token").write_text("test-only\n", encoding="utf-8")
     (ud / "hub.toml").write_text(f'''[hub]
 ntfy_url = "http://127.0.0.1:9/stewart-test"
-ntfy_token_file = "{ud / 'ntfy-token'}"
+ntfy_token_file = "{(ud / 'ntfy-token').as_posix()}"
 hub_url = "http://127.0.0.1:9/"
 
 [forge]
@@ -143,8 +143,11 @@ backend = "searxng"
 url = "http://127.0.0.1:9/search"
 fetch = true
 ''', encoding="utf-8")
-    keep = {k: v for k, v in os.environ.items() if not k.startswith("STEWART_") and not k.startswith("XDG_") and k != "HOME"}
-    return {**keep, "HOME": str(home), "STEWART_CLOUD_API_KEY": "", "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
+    # 설정 글(TOML)에 경로를 쓸 때는 as_posix — Windows 경로의 역슬래시(C:\\Users…)는 TOML 기본 문자열에서 이스케이프로 읽힌다.
+    # Windows: ~ 는 USERPROFILE 로 풀리므로 그것도 시험 자리로. 하위 허브는 런처처럼 UTF-8 모드(PYTHONUTF8=1)로 — 아니면 기록이 지역 인코딩으로 쓰인다.
+    keep = {k: v for k, v in os.environ.items() if not k.startswith("STEWART_") and not k.startswith("XDG_") and k not in ("HOME", "USERPROFILE")}
+    return {**keep, "HOME": str(home), "USERPROFILE": str(home), "STEWART_CLOUD_API_KEY": "", "PYTHONPATH": str(ROOT / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"}
 
 
 def free_port() -> int:
@@ -179,7 +182,7 @@ class Hub:
             time.sleep(0.3)
         else:
             raise RuntimeError("허브가 60초 안에 뜨지 않았다")
-        tok = next(root.rglob("hub-token")).read_text().strip()
+        tok = next(root.rglob("hub-token")).read_text(encoding="utf-8").strip()
         st, _, hd = self.req("POST", "/login", urllib.parse.urlencode({"token": tok}),
                              {"Content-Type": "application/x-www-form-urlencoded", "Origin": self.origin})
         self.cookie = (hd.get("Set-Cookie") or "").split(";")[0]
@@ -359,6 +362,19 @@ class TNoLeak(unittest.TestCase):
         for p in json.loads(r.stdout):
             if p:
                 self.assertTrue(p.startswith(home), p)
+
+    def test_windows_shape(self):
+        """Windows 에서만 드러나던 시험 쪽 꼴: 설정 글의 경로는 / 로(TOML 이스케이프), ~ 자리 USERPROFILE·UTF-8 모드도 시험 쪽."""
+        import tomllib
+        root = Path(tempfile.mkdtemp(prefix="realuse-win-"))
+        env = make_user_shape(root, "http://127.0.0.1:9")
+        self.assertEqual((env["USERPROFILE"], env["PYTHONUTF8"]), (env["HOME"], "1"))
+        for f in (root / "home").rglob("*.toml"):
+            text = f.read_text(encoding="utf-8")
+            tomllib.loads(text)
+            for line in text.splitlines():
+                if str(root.as_posix()) in line:
+                    self.assertNotIn("\\", line, f)
 
 
 if __name__ == "__main__":

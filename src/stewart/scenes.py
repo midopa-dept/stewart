@@ -3,6 +3,8 @@
 - 장면 파일(TOML, [[scene]]): id·said(사람이 한 말)·source(어디서 전해 들었나)·profile·tools_off(칩으로 꺼 둔 도구)·tools_on(칩으로 켜 둔 도구)
   · set: "real"(실사용에서 겪은 말, 기본) 또는 "dev"(개발 장면 — 규칙을 고친 뒤 같은 장면으로 나아졌다고 말하지 않는다)
   · requires: 이 장면에 있어야 하는 도구 이름들 — 그 판본·설정에 없으면 실측은 건너뛴다(맞음·틀림에 넣지 않는다)
+  · 판 141: max_steps(그 장면만 걸음 상한) · run_tools(실측에서 실제로 돌릴 읽기 도구 — 빈 작업 폴더라 바깥에 닿지 않는다)
+  · expect.hold_tools + expect.step2_any: 첫 걸음이 hold_tools 만이면 "보류" — 둘째 걸음까지 step2_any 가 나오면 맞음(까닭 글이 "보류:"로 시작)
   · expect: first_any(첫 걸음에 하나라도 불러야 할 도구)·first_none(첫 걸음에 부르면 안 되는 도구)
             ·say_any(도구 없이 답했으면 답에 있어야 할 말, 정규식)·no_host_gui(셸로 이 컴퓨터 화면을 여는 명령을 내면 실패)
   · executor(가짜 모델로 볼 실행기 장치): note(첫 사람 말 뒤에 붙어야 할 엔진 글 조각)·fake_call(모델이 이 호출을 했다고 치면)·blocked(그 결과에 있어야 할 글)
@@ -87,6 +89,26 @@ def first_step(messages: list[dict]) -> tuple[list[dict], str]:
     return [], ""
 
 
+def all_steps(messages: list[dict]) -> list[list[dict]]:
+    """첫 사람 말 뒤 모델 답마다의 도구 호출 [{name, args}] 목록(걸음 차례대로)."""
+    out, seen_user = [], False
+    for m in messages:
+        if m.get("role") == "user":
+            seen_user = True
+            continue
+        if seen_user and m.get("role") == "assistant":
+            calls = []
+            for tc in m.get("tool_calls") or []:
+                f = tc.get("function") or {}
+                try:
+                    args = json.loads(f.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                calls.append({"name": f.get("name"), "args": args})
+            out.append(calls)
+    return out
+
+
 def final_text(messages: list[dict]) -> str:
     for m in reversed(messages):
         if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip():
@@ -117,12 +139,20 @@ def judge(scene: dict, messages: list[dict]) -> tuple[bool, str]:
     if e.get("first_any"):
         if any(n in e["first_any"] for n in names):
             return True, f"첫 걸음 {', '.join(names)}"
+        hold = set(e.get("hold_tools") or [])
+        if hold and names and set(names) <= hold:   # 판 141: 첫 걸음이 폴더만 — 보류, 둘째 걸음까지 본다
+            later = [c["name"] for st in all_steps(messages)[1:2] for c in st]
+            want = e.get("step2_any") or e["first_any"]
+            if any(n in want for n in later):
+                return True, f"보류: 첫 걸음 {', '.join(names)} → 둘째 걸음 {', '.join(later)}"
+            return False, f"보류: 첫 걸음 {', '.join(names)} → 둘째 걸음까지 {', '.join(want)} 없음({', '.join(later) or '도구 없음'})"
         if not names and e.get("say_any"):
             pass   # 도구 없이 답한 경우는 아래 말로 본다
         else:
             return False, f"첫 걸음이 {', '.join(names) or '도구 없음'} — 기대 {', '.join(e['first_any'])}"
     if e.get("say_any"):
-        answer = text or final_text(messages)
+        asked = " ".join(str((c.get("args") or {}).get("question") or "") for c in calls if c["name"] == "ask_user")
+        answer = " ".join(x for x in (text or final_text(messages), asked) if x)   # 판 141: 되물음의 물음 글도 본다
         if not any(re.search(rx, answer) for rx in e["say_any"]):
             return False, f"답에 기대한 말이 없다: {answer[:80]!r}"
         return True, "기대한 말"

@@ -1,4 +1,4 @@
-# 실사용 장면 묶음(판 121) — 사용자가 실사용에서 겪은 장면. 사람이 한 말은 사용자가 메인에 전해 준 문장 그대로.
+# 실사용 장면 묶음(판 121) — 사용자가 실사용에서 겪은 장면. 사람이 한 말은 사용자가 전해 준 문장 그대로.
 # 규칙: 사용자가 실사용에서 겪은 문제는 고치기 전에 여기 장면으로 먼저 넣는다.
 
 [[scene]]
@@ -69,9 +69,12 @@ id = "dev-bare-name"
 set = "dev"
 said = "Ghostty"
 source = "개발 장면 11-14 — 처음 보는 고유 이름만 던짐"
+max_steps = 2                     # 판 141: 코드 자리는 폴더부터 보는 것도 읽는 법 — 첫 걸음이 폴더만이면 보류, 둘째 걸음까지 웹이면 맞음
+run_tools = ["list_dir", "search", "glob", "read_file"]
 [scene.expect]
 first_any = ["web_search", "web_fetch"]
-first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+hold_tools = ["list_dir", "search", "glob", "read_file"]
+step2_any = ["web_search", "web_fetch"]
 
 [[scene]]
 id = "dev-compare-two"
@@ -86,16 +89,118 @@ first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
 id = "dev-worth-it"
 set = "dev"
 said = "Bun 쓸 만해?"
-source = "개발 장면 11-14 — 써 볼 만한가"
+source = "개발 장면 11-14 — 써 볼 만한가(판 141: 웹이 첫 걸음에 있으면 맞음, 셸로 버전을 함께 보는 것은 됨, 셸만은 틀림)"
 [scene.expect]
 first_any = ["web_search", "web_fetch"]
-first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+first_none = ["search", "glob", "list_dir", "read_file"]
 
 [[scene]]
 id = "dev-which-one"
 set = "dev"
 said = "SvelteKit 이랑 Astro 중에 블로그엔 뭐가 나아"
 source = "개발 장면 11-14 — 둘 중 고르기"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+# ── parlando 짝(판 141) — 위 장면과 같은 말을 대화 자리에서. 바른 첫 걸음은 각 장면의 expect 대로.
+[[scene]]
+id = "talk-lookup-unknown-name"
+set = "real"
+profile = "talk"
+said = "claude fable 5.2 알아봐"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-lookup-find-out"
+set = "real"
+profile = "talk"
+said = "Fable 5.2 가 뭔지 찾아봐"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-latest-version"
+set = "real"
+profile = "talk"
+said = "오늘 기준으로 Python 최신 릴리스 버전이 뭐야?"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-web-named"
+set = "real"
+profile = "talk"
+said = "웹 검색해서 llama.cpp 최근 새 기능 찾아 줘"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-web-named-but-off"
+set = "real"
+profile = "talk"
+said = "웹 검색해서 llama.cpp 최근 새 기능 찾아 줘"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+tools_off = ["web_search", "web_fetch"]
+[scene.expect]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+say_any = ["꺼져", "켜"]
+
+[[scene]]
+id = "talk-open-browser-on-this-computer"
+set = "real"
+profile = "talk"
+said = "브라우저로 네이버 띄워 봐"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+no_host_gui = true
+first_none = ["run_shell"]
+
+[[scene]]
+id = "talk-dev-bare-name"
+set = "dev"
+profile = "talk"
+said = "Ghostty"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-dev-compare-two"
+set = "dev"
+profile = "talk"
+said = "uv 랑 pixi 차이가 뭐야"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-dev-worth-it"
+set = "dev"
+profile = "talk"
+said = "Bun 쓸 만해?"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "talk-dev-which-one"
+set = "dev"
+profile = "talk"
+said = "SvelteKit 이랑 Astro 중에 블로그엔 뭐가 나아"
+source = "판 141 — 같은 말을 parlando 자리에서(개발 장면)"
 [scene.expect]
 first_any = ["web_search", "web_fetch"]
 first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]

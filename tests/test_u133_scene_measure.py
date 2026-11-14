@@ -34,7 +34,7 @@ class TMeasure(unittest.TestCase):
             ok, why, first = M.one(sc, self.b, 1, run_tools=False)
         self.assertEqual((ok, first), (False, ["run_shell"]))
         self.assertIn("셸로 이 컴퓨터 화면", why)
-        with mock.patch.object(C, "chat", side_effect=[resp(calls=[("web_search", {"query": "Ghostty"})])]):
+        with mock.patch.object(C, "chat", side_effect=[resp(calls=[("web_search", {"query": "Ghostty"})]), resp("찾아봤다")]):   # 이 장면은 걸음 상한 2
             ok, why, first = M.one(self.by["dev-bare-name"], self.b, 1, run_tools=False)
         self.assertEqual((ok, first), (True, ["web_search"]))
 
@@ -50,7 +50,7 @@ class TMeasure(unittest.TestCase):
                  "runs": [{"ok": None, "why": "도구 없음: x", "first": []}] * 2}]
         md = M.table_md({"model": "m", "when": "t", "lanes": ["u"], "n": 2, "max_steps": 1, "run_tools": False, "rows": rows})
         self.assertIn(M.DEV_HEAD, md)
-        self.assertIn("| real | a | 가 | 1/2 | web_search 1 · 도구 없음 1 |", md)
+        self.assertIn("| real |  | a | 가 | 1/2 |  | web_search 1 · 도구 없음 1 |", md)
         self.assertIn("건너뜀 2 — 도구 없음: x", md)
         self.assertIn("- real 합: 1/2", md)
         self.assertIn("- dev 합: 0/0", md)
@@ -61,7 +61,7 @@ class TMeasure(unittest.TestCase):
         for s in dev:
             self.assertEqual(W.recent_hit(s["said"]), "", s["id"])
         main = [s for s in SC.load() if s["_file"] == "scenes.toml"]
-        self.assertTrue(all(s["set"] == "real" for s in main if not s["id"].startswith("dev-")))   # 실사용 장면 여섯은 그대로 real
+        self.assertTrue(all(s["set"] == "real" for s in main if "dev-" not in s["id"]))   # 실사용 장면 여섯(과 그 parlando 짝)은 real
 
 
 class TSceneEnv(unittest.TestCase):

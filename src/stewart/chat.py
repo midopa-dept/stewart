@@ -307,11 +307,43 @@ CHAT_DESC_ADD = {   # 판 117.1: 실사용(chat·허브)에서만 도구 설명 
     "search": " 작업 폴더 안의 파일만 찾는다 — 바깥 사실·최신·처음 보는 이름은 web_search.",
     "web_search": " 작업 폴더 밖의 사실·최신 소식·처음 보는 이름·제품을 찾을 때 쓴다 — 폴더 안 내용은 search.",
 }
+# 판 141: 자리 정체성 줄·도구 설명 덧붙임(실사용 chat 길만). 낱말 규칙(webnudge)을 늘리지 않고 자리가 고를 길을 말한다.
+# 환경 STEWART_PLACE_HINTS=0 이면 끈다(코딩 과제 회귀 짝을 잴 손잡이 — 기본 켬).
+PLACE_HINTS_ENV = "STEWART_PLACE_HINTS"
+CODE_PLACE_WEB = ("- 작업 폴더 밖의 것(도구·제품·사람·소식)에 대한 물음은 — 이름만 던졌거나, 평·비교·쓸 만한가를 물어도 — "
+                  "web_search 부터 한다. 폴더에 그 이름이 있을 까닭이 있으면 폴더도 함께 본다.")
+CODE_PLACE_SCREEN = ("- 이 컴퓨터의 앱·브라우저·창을 셸로 열지 않는다(open·xdg-open·osascript 등). 웹 페이지 내용이 필요하면 web_fetch 로 읽고, "
+                     "화면을 띄워 달라는 말에는 이 컴퓨터를 조작하지 않는다고 짧게 말한다.")
+TALK_PLACE_WEB = "- 이름만 던진 말도, 모르는 이름이면 기억으로 답하지 말고 web_search 부터 한다."
+PLACE_DESC_ADD = {
+    "list_dir": " 작업 폴더 안만 본다 — 바깥 도구·제품의 이름은 web_search.",
+    "glob": " 작업 폴더 안만 본다 — 바깥 도구·제품의 이름은 web_search.",
+    "run_shell": " 이 컴퓨터의 앱·브라우저를 열지 않는다. 바깥 도구의 평·쓸 만한가는 이 컴퓨터에 깔렸는지 셸로 보는 것이 답이 아니다 — web_search.",
+}
+
+
+def place_hints_on(env=None) -> bool:
+    return (os.environ if env is None else env).get(PLACE_HINTS_ENV, "1") != "0"
+
+
+def with_place_lines(system: str, kind: str, names) -> str:
+    """판 141: 지시문 첫 줄(자리 정체성) 바로 아래에 자리 줄을 넣는다. 그 도구가 없으면 그 줄도 넣지 않는다."""
+    names = set(names or ())
+    if kind == "talk":
+        lines = [TALK_PLACE_WEB] if "web_search" in names else []
+    else:
+        lines = ([CODE_PLACE_WEB] if "web_search" in names else []) + ([CODE_PLACE_SCREEN] if "run_shell" in names else [])
+    if not lines:
+        return system
+    head, _, rest = system.partition("\n")
+    return head + "\n" + "\n".join(lines) + ("\n" + rest if rest else "")
+
+
 OFF_TOOLS_NOTE = "꺼져 있는 도구(사람이 허브 머리의 도구 칩으로 켠다): {names}. 필요하면 다른 도구로 우회하지 말고 사람에게 켜 달라고 말한다."
 
 
 def _chat_desc(d: dict) -> dict:
-    add = CHAT_DESC_ADD.get(d["function"]["name"])
+    add = CHAT_DESC_ADD.get(d["function"]["name"], "") + (PLACE_DESC_ADD.get(d["function"]["name"], "") if place_hints_on() else "")
     if not add:
         return d
     return {**d, "function": {**d["function"], "description": d["function"]["description"] + add}}
@@ -435,7 +467,12 @@ class ChatSession:
         self.check = load_check(profile.action_check)
         mem_text, mem_log = memory_for(profile, interactive=True)
         self.env_info = envinfo.measure(profile.workdir)   # 세션 시작 때 한 번(이어 하기는 새로 잰다)
-        system = profile.system.strip() + (f"\n\n{mem_text}" if mem_text else "") \
+        base_sys = profile.system.strip()
+        self.place_hints = place_hints_on() and self.slim is None   # 판 141(얇은 꼴은 자기 짧은 지시를 쓴다)
+        if self.place_hints:
+            base_sys = with_place_lines(base_sys, "talk" if str((profile.raw or {}).get("surface") or "") == "talk" else "code",
+                                        self.tool_names)
+        system = base_sys + (f"\n\n{mem_text}" if mem_text else "") \
             + (f"\n\n{SL.skills_text(self.skills) if self.slim is not None else SK.list_text(self.skills)}" if self.skills else "") \
             + (f"\n\n{PC.agents_text(self.agents)}" if self.agents else "")
         self.mem_inject: list = []
@@ -511,6 +548,7 @@ class ChatSession:
                                    "agents": PC.agents_log(self.agents)}} if (self.commands or self.agents) else {}),
             "resumed_from": resumed_from, "resumed_messages": len(self.messages) - 1 if history else 0,
             "started": datetime.now().isoformat(timespec="seconds"),
+            "place_hints": bool(getattr(self, "place_hints", False)),   # 판 141: 자리 줄·도구 설명 덧붙임 켬·끔(STEWART_PLACE_HINTS)
             # 판 139: 이 대화가 앉은 등급(다시 열 때 그 등급으로 — 같은 백엔드를 쓰는 등급은 백엔드 이름으로 가려낼 수 없다)
             **({"tier": ((profile.raw or {}).get("tier") or {}).get("name")} if ((profile.raw or {}).get("tier") or {}).get("name") else {}),
         }
