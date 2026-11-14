@@ -4,10 +4,12 @@
 - 모델은 시험 안 가짜 서버다(요청 본문을 보고 대본으로 답한다). 화면은 허브 HTTP API(화면이 쓰는 것과 같은 길)로 누른다.
 - 묶음 1: 메인 한 마디 · 승인 셸(허락·거절) · 파일 편집과 diff · 작업자 둘(읽기·쓰기 동시)과 결과 모으기 · 위임(delegate)의 셸 승인.
 - 묶음 2: 새 대화(자리 둘 × 등급 넷) · 갈래 · 닫기 → 다시 열기 · 사진 붙이기.
+- 묶음 3: 기억 쓰기·읽기 · 스킬 하나 · 웹 도구 · 압축이 도는 긴 대화 · 멈춤 · 허브 다시 켠 뒤 이어 가기.
 """
 
 import json
 import tempfile
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -249,6 +251,114 @@ class T09PastPlaceTier(PathBase):
         again = self.hub.post("/api/chat/new", {"how": "reopen", "run_dir": run, "title": "파를란도에서 한 마디"})["chat"]
         row = next(c for c in self.state()["chats"] if c["name"] == again)
         self.assertEqual((row["kind"], row.get("tier") or ""), ("talk", "moderato"))
+
+
+MEMORY_HELPER = "너는 기억을 고르는 도우미다"
+
+
+def is_memory_helper(body) -> bool:
+    return str((body.get("messages") or [{}])[0].get("content") or "").startswith(MEMORY_HELPER)
+
+
+class T11Memory(PathBase):
+    def route(self, body):
+        if is_memory_helper(body):
+            return msg('{"op":"add","kind":"feedback","text":"답 끝에 늘 요약 한 줄을 붙인다 — 사용자가 바랐다"}')
+        return msg("알겠다")
+
+    def test_memory_write_then_new_chat_reads(self):
+        self.say("앞으로 답 끝에 늘 요약 한 줄을 붙여 줘. 기억해 둬.")
+        st = self.idle()
+        self.assertTrue(st, self.log_tail())
+        kinds = [m.get("kind") for m in st["main_log"]]
+        self.assertIn("memory", kinds)                                                           # 바로 기억함 줄
+        name = self.hub.post("/api/chat/new", {"how": "fresh", "kind": "code", "title": "새 대화", "from": "main"})["chat"]
+        n0 = len(self.model.requests)
+        self.say("안녕", name)
+        self.assertTrue(self.idle(name), self.log_tail())
+        body = next(b for b in self.model.requests[n0:] if b.get("tools"))
+        self.assertIn("요약 한 줄", text_of(body))                                               # 새 대화에 기억이 실린다
+
+
+class T12Skill(PathBase):
+    def route(self, body):
+        if is_memory_helper(body):
+            return msg("")
+        return msg(calls=[("load_skill", {"name": "skill-00"})]) if not tool_results(body) else msg("스킬 봤다")
+
+    def test_load_user_skill(self):
+        self.say("skill-00 써 봐")
+        self.assertTrue(self.idle(), self.log_tail())
+        res = [r for b in self.main_reqs() for r in tool_results(b)]
+        self.assertTrue(any("시험용 스킬 본문" in r for r in res), res)
+
+
+class T13WebTools(PathBase):
+    """이 꼴에는 웹 칩이 없다([web] 설정으로 늘 켬). 그래서 코드·parlando 자리 요청에 웹 도구가 실리는지 본다."""
+
+    def route(self, body):
+        return msg("") if is_memory_helper(body) else msg("네")
+
+    def test_web_tools_in_both_places(self):
+        for kind in ("code", "talk"):
+            with self.subTest(kind=kind):
+                name = self.hub.post("/api/chat/new", {"how": "fresh", "kind": kind, "title": "새 대화", "from": "main"})["chat"]
+                n0 = len(self.model.requests)
+                self.say("검색 좀", name)
+                self.assertTrue(self.idle(name), self.log_tail())
+                body = next(b for b in self.model.requests[n0:] if b.get("tools"))
+                names = {t["function"]["name"] for t in body["tools"]}
+                self.assertTrue({"web_search", "web_fetch"} <= names, sorted(names))
+
+
+class T14Compact(PathBase):
+    def route(self, body):
+        if is_memory_helper(body):
+            return msg("")
+        r = msg("긴 답")
+        r["usage"] = {"prompt_tokens": 62000, "completion_tokens": 5}                            # 창(65536) 가까이 찼다고 알린다
+        return r
+
+    def test_compaction_runs(self):
+        for i in range(3):
+            self.say(f"긴 말 {i}")
+            self.assertTrue(self.idle(), self.log_tail())
+        st = self.state()
+        self.assertIn("compact", [m.get("kind") for m in st["main_log"]], [m.get("kind") for m in st["main_log"]])
+
+
+class T15Stop(PathBase):
+    def route(self, body):
+        if is_memory_helper(body):
+            return msg("")
+        time.sleep(3)
+        return msg("늦은 답")
+
+    def test_stop_while_busy(self):
+        self.say("천천히 해")
+        time.sleep(0.8)
+        self.assertEqual(self.hub.post("/api/main/stop", {})["result"], "stopping")
+        st = self.idle()
+        self.assertTrue(st, self.log_tail())
+        ends = [m for m in st["main_log"] if m.get("kind") == "turn_end"]
+        self.assertIn("interrupted", ends[-1]["text"])
+
+
+class T16Restart(PathBase):
+    def route(self, body):
+        return msg("") if is_memory_helper(body) else msg("네")
+
+    def test_resume_after_restart(self):
+        self.say("다시 켜기 전 마지막 말")
+        self.assertTrue(self.idle(), self.log_tail())
+        self.hub.close()
+        self.hub = Hub(self.root, self.env)
+        self.addCleanup(self.hub.close)
+        n0 = len(self.model.requests)
+        self.say("다시 켠 뒤")
+        self.assertTrue(self.idle(), self.log_tail())
+        body = next(b for b in self.model.requests[n0:] if b.get("tools"))
+        self.assertIn("다시 켜기 전 마지막 말", text_of(body))
 
 
 if __name__ == "__main__":

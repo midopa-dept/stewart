@@ -4,6 +4,7 @@ import { signal } from '@preact/signals'
 import { mdHtml, fmtK, fmtSecs, estTokens, post } from './lib.js'
 import { diffRows } from './diffrows.js'
 import { talked } from './emptyconv.js'
+import { stepSummary } from './stepsum.js'
 import { copyText, flash } from './copy.js'
 import { ThinkBlock } from './think.jsx'
 import { hub, tick, clockSkew, busy, refresh, toast, cpost, chat, composerFill } from './state.js'
@@ -264,20 +265,7 @@ export function UserImgs({ names }) {
   )
 }
 
-// 묶음 제목 요약: "명령 3개 실행 · 파일 2개 읽음 · 파일 1개 고침"(꼴은 OpenHands event-group.tsx, MIT — ui/THIRD_PARTY.md)
-const VERB = [[/^run_shell$/, '명령', '실행'], [/^(read_file|view_image)$/, '파일', '읽음'], [/^(write_file|edit_file|multi_edit)$/, '파일', '고침'],
-  [/^(list_dir|glob|search|folder_scan|scan_read|scan_stats|peek)$/, '찾아보기', ''], [/^session_/, '작업자 일', ''], [/^memory_|^note_add$/, '기억', ''], [/^web_search$/, '검색', '번'], [/^web_fetch$/, '웹 글', '읽음'], [/^web_/, '웹', ''], [/^board$/, '현황판', ''], [/^forge_/, '저장소', '']]
-export function stepSummary(steps) {
-  const n = new Map()
-  for (const s of steps) {
-    if (s.kind === 'reflect') continue
-    const name = s.text.split(' ')[0]
-    const v = VERB.find(([re]) => re.test(name))
-    const k = v ? v[1] + '\0' + v[2] : name + '\0'
-    n.set(k, (n.get(k) || 0) + 1)
-  }
-  return [...n].map(([k, c]) => { const [w, verb] = k.split('\0'); return `${w} ${c}개${verb ? ' ' + verb : ''}` }).join(' · ')
-}
+export { stepSummary } from './stepsum.js'   // 판 139: 요약은 node 로 시험할 수 있게 따로
 export const exitOf = s => { const m = /^\[exit (-?\d+)\]/.exec(s.result || (s.out || [])[0] || ''); return m ? +m[1] : null }
 
 // 승인 대기 중이면 도구 한 줄이 "승인을 기다리는 중 · 6초" 하나로 말하고, 아래 진행 줄은 겹치므로 숨긴다(판 124)
