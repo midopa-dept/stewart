@@ -392,7 +392,7 @@ def main_tier(a, workdir: str):
     profile, backend = resolve(t.get("profile") or a.profile, t.get("backend") or a.backend, workdir)
     if t.get("budget"):
         backend = dataclasses.replace(backend, context_budget=max(4096, min(int(t["budget"]), backend.max_context)))
-    profile = dataclasses.replace(profile, raw={**(profile.raw or {}), "tier": SP.tier_raw(t)})   # 판 116: 생각 칸 등
+    profile = dataclasses.replace(profile, raw={**(profile.raw or {}), "tier": SP.tier_raw(t, backend)})   # 판 116: 생각 칸 등(판 132: 기본 생각 깊이)
     if t.get("backend"):
         why = _reach(backend)
         if why:
@@ -1157,7 +1157,7 @@ class HubMain:
         t = {**(SP.load_tiers().get(tier) or {}), "name": tier}
         if t.get("budget"):
             back = dataclasses.replace(back, context_budget=max(4096, min(int(t["budget"]), back.max_context)))
-        prof = dataclasses.replace(prof, raw={**(prof.raw or {}), "tier": SP.tier_raw(t)})
+        prof = dataclasses.replace(prof, raw={**(prof.raw or {}), "tier": SP.tier_raw(t, back)})   # 판 132: 기본 생각 깊이
         if r.get("manual") and r.get("external"):
             back = self.guard_outside(back, tier, t)
         return prof, back
@@ -1382,8 +1382,16 @@ class HubMain:
                 "web": getattr(self.sess, "web_status", None),
                 "bans": [b.view() for b in getattr(self.sess, "bans", [])], "board": self.hub.board.view(),
                 "chats": self._chat_list(), "mode": self.sess.mode, "mode_max": getattr(self._root(), "_mode", "edits"),
-                "think": self.sess.think, "workers": self.workers_view(), "budget": self.sess.backend.budget(), "budget_set": getattr(self.sess, "_backend0", None) is not None
+                "think": self.sess.think, "effort": self._effort_state(), "workers": self.workers_view(), "budget": self.sess.backend.budget(), "budget_set": getattr(self.sess, "_backend0", None) is not None
                 and self.sess.backend is not self.sess._backend0, **self._tool_ui()}
+
+    def _effort_state(self) -> dict:
+        """판 132: 이 대화의 생각 깊이(reasoning_effort)와 출처 — "이 대화" 판. value None = 보내지 않음(서버 기본)."""
+        tks = getattr(self.sess, "tks", None) or {}
+        rej = tks.get("effort_rejected")
+        note = tks.get("effort_note") or (f"{rej['value']} 은 백엔드 {rej.get('backend', '')} 가 받는 낱말"
+                                          f"({'·'.join(rej.get('allowed') or [])})이 아니라 보내지 않는다" if rej else "")
+        return {"value": tks.get("effort"), "source": (tks.get("source") or {}).get("effort") or "", "note": note}
 
     def _tool_ui(self) -> dict:
         """판 99: 켬·끔 손잡이(프로필에 toggle_tools 가 없으면 비어 있다)."""

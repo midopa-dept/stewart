@@ -4,7 +4,7 @@ import './copy.js'
 import { render, Component } from 'preact'
 import { useEffect, useRef, useState, useLayoutEffect } from 'preact/hooks'
 import './app.css'
-import { get, post, fmtK, fmtSecs, estTokens } from './lib.js'
+import { get, post, fmtK, fmtSecs, estTokens, effortLabel } from './lib.js'
 import { hub, view, panel, setPanel, drawer, sideOpen, toggleSide, toasts, connect, refresh, sessions, toast, chat, cpost, openChat } from './state.js'
 import { Thread, Md, TodoItems, UserImgs } from './thread.jsx'
 import { Approvals, AskSheet, Composer } from './dock.jsx'
@@ -230,6 +230,9 @@ function ModeRows({ st, talk }) {
       </select></label>}
     <button class="row-btn" onClick={setThink} title={'누르면 ' + (nextThink == null ? '백엔드 기본' : nextThink ? '켬' : '끔')}>
       <span>생각</span><span class="sub">{st.think == null ? '백엔드 기본' : st.think ? '켬' : '끔'}</span></button>
+    {st.effort && <div class="row-btn" title="출처: 표 = 등급 칸 reasoning_effort · 기본 = 등급 기본값 · 환경 = STEWART_REASONING_EFFORT · 값 없음 = 보내지 않음(서버 기본)">
+      <span>생각 깊이</span><span class={'sub ' + (st.effort.note ? '!text-warn' : '')}>{effortLabel(st.effort)}{st.think === false && st.effort.value ? ' · 생각 끔이라 보내지 않음' : ''}</span></div>}
+    {st.effort?.note && <div class="text-[12px] text-mute pb-2 border-b border-line">{st.effort.note}</div>}
     {st.budget && <button class="row-btn" onClick={setBudget}><span>문맥 크기</span><span class={'sub ' + (st.budget_set ? '!text-warn' : '')}>{Math.round(st.budget / 1000)}k 토큰</span></button>}
   </>
 }

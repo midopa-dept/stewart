@@ -94,6 +94,9 @@ export const post = (path, body) => call(path, {
   method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Stewart-Token': CSRF }, body: JSON.stringify(body || {}),
 })
 
+// 판 132: 생각 깊이(reasoning_effort) '낱말 (출처)' — 값 없음 = 노력 값을 보내지 않는다(서버 기본)
+const EFFORT_SRC = { default: '기본', tier: '표', env: '환경', 'tier:off': '표', 'env:off': '환경' }
+export const effortLabel = e => !e ? '' : (e.value || '값 없음') + (EFFORT_SRC[e.source] ? ` (${EFFORT_SRC[e.source]})` : '')
 export const fmtK = n => n == null ? '—' : n >= 100000 ? Math.round(n / 1000) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)
 export const fmtSecs = s => {
   s = Math.max(0, Math.round(s))

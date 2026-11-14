@@ -9,6 +9,8 @@
   그래도 넘치면 문맥 넘침 재시도가 받는다).
 - 샘플링 묶음은 백엔드 params 위에 덮어쓴다. 서버가 어떤 칸을 모른다고 400 으로 거절하면 그 칸을 빼고 한 번 다시 보내고,
   그 백엔드에서는 이후에도 뺀다(backend.dropped_params).
+- 판 132: 등급 기본 생각 깊이(spawn.TIER_DEFAULT_EFFORT, moderato = medium)는 spawn.tier_raw 가 생각 칸에 싣는다(출처 default).
+  등급 칸 reasoning_effort = "none"(또는 "off"·빈 글)은 노력 값을 보내지 않는다(서버 기본). 환경 STEWART_REASONING_EFFORT 가 늘 이긴다.
 - 판 123: thinking_token_budget(서버 생각 예산, 생각 켬 요청만) — 등급 think 칸 또는 STEWART_THINKING_TOKEN_BUDGET(0 = 끔).
   노력(effort)을 template 자리에 실었는데 틀이 그 낱말을 모른다고 400 이면 chat_template_kwargs 의 reasoning_effort 를 빼고 다시 보낸다.
   백엔드 effort_values(그 틀이 받는 낱말)를 적으면 밖의 값은 시작할 때 알리고 보내지 않는다(check_effort). 적지 않으면 그대로 보내는데,
@@ -49,8 +51,11 @@ def settings(profile, env=None) -> dict:
         mx, src["max_tokens"] = tt["think_max_tokens"], "tier"
     if isinstance(tt.get("think_max_tokens_first"), int) and tt["think_max_tokens_first"] >= 256:
         first, src["max_first"] = tt["think_max_tokens_first"], "tier"
-    if isinstance(tt.get("reasoning_effort"), str) and re.match(EFFORT_RX, tt["reasoning_effort"]):
-        effort, src["effort"] = tt["reasoning_effort"], "tier"
+    te = tt.get("reasoning_effort")
+    if isinstance(te, str) and te.strip().lower() in ("", "none", "off"):   # 판 132: 등급 칸에 "none" = 보내지 않음(서버 기본)
+        effort, src["effort"] = None, "tier:off"
+    elif isinstance(te, str) and re.match(EFFORT_RX, te):
+        effort, src["effort"] = te, "default" if tt.get("effort_default") else "tier"   # 판 132: 등급 기본값에서 온 값
     if tt.get("reasoning_effort_at") in ("body", "template"):
         at = tt["reasoning_effort_at"]
     budget = None
@@ -109,6 +114,9 @@ def settings(profile, env=None) -> dict:
             bad.append(ENV_EFFORT_AT)
     out = {"max_tokens": mx, "sampling": samp, "params": dict(params) if params is not None else (dict(PRESETS[samp]) if samp else {}),
            "source": src, "ignored": bad}
+    skipped = ((getattr(profile, "raw", None) or {}).get("tier") or {}).get("effort_default_skipped")
+    if skipped and src.get("effort") is None:   # 판 132: 등급 기본 생각 깊이를 싣지 못한 까닭(환경 값이 있으면 뜻 없다)
+        out["effort_note"] = skipped
     if first:
         out["max_first"] = first
     if effort:

@@ -187,18 +187,39 @@ uv run stewart hub --project ~/my-project
   - Effort words differ by the server's chat template. If a backend lists `effort_values = [...]` (the words that template accepts), other values are reported at startup and not sent. If it does not, the value is sent as is, and a template that does not know it may silently treat it as another level.
   - Experimental knobs: `thinking_token_budget` (server thinking budget, as a tier field or `STEWART_THINKING_TOKEN_BUDGET`) and `reasoning_passback` (tier field; the `STEWART_REASONING_PASSBACK` environment variable wins).
 - A tier's context budget is the compaction window for both a main seated with `--tier` and workers started on that tier. Runs without a tier behave as before.
+
+#### Default thinking depth for moderato
+- A main or worker running on `moderato` defaults to a thinking depth (`reasoning_effort`) of `medium`, even when the tier field is left empty.
+  - This covers: a `--tier moderato` main, a conversation where moderato was picked under "+ New conversation" in the hub, and workers started on moderato.
+  - A worker whose tier the model did not pick gets one from `default_for`. If the table's `[tiers.moderato]` has `default_for = ["write"]`, workers that list tools also land on moderato and get this default.
+  - With no tier table, or no such field, workers have no tier and behave as before.
+- What does not change
+  - `presto`, `largo` and `rubato` stay as they were (no effort value sent = server default).
+  - Runs without a tier (`stewart run`, `chat`, and "default" in a new hub conversation) stay as they were.
+- It is sent only when that tier's backend chat template accepts `medium`: the backend's `effort_values` must include `medium`.
+  - With no list, or no `medium` in it, nothing is sent (as before).
+  - The reason shows in `stewart tiers`, the Settings sheet and the conversation's start line.
+- Precedence: the `STEWART_REASONING_EFFORT` environment variable > the tier field `reasoning_effort` > the tier default.
+- Where to see it: the "thinking depth" column of `stewart tiers`, the tier line in the hub's Settings sheet, and the conversation's "This conversation" panel.
+  - Each shows the value with its source: table, default or environment.
+  - "No value" means no effort value is sent (server default).
+- Reverting (deepest, with no effort value sent) takes one line.
+  - In the tier table: `reasoning_effort = "none"` under `[tiers.moderato]`.
+  - Or the environment variable `STEWART_REASONING_EFFORT=none` (applies to every tier).
+  - When measuring a "no value" cell in a comparison experiment, also set `STEWART_REASONING_EFFORT=none` explicitly. Left empty, moderato is now `medium`.
+
 - Tags read "seat · tier" (worker 3 · `presto` / main · `largo`).
 
 | Tier | What it does |
 |---|---|
 | `presto` | Light work such as finding, reading and summarizing. A thin prompt, read tools and a short context make it good for running several as workers. With `slim = true`, seating it as the main gives the slim hub. Its results get double-checked |
-| `moderato` | The default for coding and conversation; the default tier for work that lists tools (writes) |
+| `moderato` | The default for coding and conversation; the default tier for work that lists tools (writes). Its thinking depth defaults to `medium` (section above) |
 | `largo` | Planning, dispatching and review. Seated as the main with every tool and a wide context (`stewart hub --tier largo`) |
 | `rubato` | An external API (paid). Put it in the tier table with a key, and it is used only when a person picks it under "+ New conversation" (workers and automatic dispatch never call it). The default model is never used in its place |
 
 ### Tier table at a glance · outside tier
 
-- `stewart tiers` shows in one table which server and model each of the four tiers (presto, moderato, largo, rubato) points to, whether it is reachable, its concurrency, its key (present or not, never the value) and its spending caps.
+- `stewart tiers` shows in one table which server and model each of the four tiers (presto, moderato, largo, rubato) points to, whether it is reachable, its concurrency, its thinking depth (value and source), its key (present or not, never the value) and its spending caps.
   - `--no-check` skips probing the servers, `--json` gives the same fields as the hub screen, and `--instance <name>` shows a separately run hub's table.
   - presto, moderato and largo fall back to the default model when they are not in the table. rubato is "not set" when it is not in the table.
 - "+ New conversation" in the hub opens an empty conversation straight away. On its first screen you pick the place (stewart · *parlando*) and the model tier (default, presto, moderato, largo, rubato).

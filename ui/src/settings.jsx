@@ -2,7 +2,7 @@
 // 파일(backends.toml)이 정본이고 시트는 그 파일의 고칠 줄만 바꾼다(서버가 백업·검사). 새 대화·새 작업자부터 적용.
 import { useEffect, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
-import { get, post } from './lib.js'
+import { get, post, effortLabel } from './lib.js'
 import { toast } from './state.js'
 import { narrow } from './mobile.js'
 import { tiersSig } from './newchat.jsx'
@@ -14,7 +14,7 @@ const ST = { ok: '준비됨', down: '닿지 않음', auth: '인증 거부', noke
 function rowSub(r) {
   if (!r.connected) return ST[r.status] || r.source
   const where = r.external ? '바깥 API · ' + r.provider : r.model + (r.source === '기본 모델' ? ' (기본)' : '')
-  return [where, r.key === '없음' ? '키 없음' : ST[r.status]].filter(Boolean).join(' · ')
+  return [where, r.effort ? '생각 ' + effortLabel(r.effort) : '', r.key === '없음' ? '키 없음' : ST[r.status]].filter(Boolean).join(' · ')
 }
 
 function Field({ label, children, note }) {
@@ -86,6 +86,10 @@ function Edit({ v, r, back, reload }) {
       </Field>
       <Field label="동시 요청 수"><input class={inp} type="number" min="1" disabled={dis} value={f.concurrency} onInput={e => setF({ ...f, concurrency: e.currentTarget.value })} /></Field>
     </>}
+    {r.effort && <div class="py-2 border-b border-line"><span class="text-[13px] text-mute">생각 깊이</span>
+      <div class={'mt-1 text-[15px] ' + (r.effort.note ? 'text-warn' : '')}>{effortLabel(r.effort)}</div>
+      <div class="text-[12px] text-mute mt-1">{r.effort.note ? r.effort.note + ' · ' : ''}표 = 등급 칸 reasoning_effort · 기본 = 등급 기본값 · 환경 = STEWART_REASONING_EFFORT · 값 없음 = 보내지 않음(서버 기본).
+        바꾸려면 이 등급 칸에 reasoning_effort = "low" 처럼, 보내지 않으려면 reasoning_effort = "none" 을 적는다.</div></div>}
     {ext && r.connected && <Field label={`키 — ${r.key === '있음' ? '있음' : '없음'}`} note="값은 키체인에만 들어가고 다시 보이지 않는다">
       <div class="flex gap-2"><input class={inp} type="password" autocomplete="off" disabled={dis} placeholder={r.key === '있음' ? '바꾸려면 새 키' : '키 붙여 넣기'} value={key} onInput={e => setKey(e.currentTarget.value)} />
         <button class="text-[13px] text-mute hover:text-fg flex-none disabled:opacity-40" disabled={dis || !key} onClick={e => { e.preventDefault(); putKey() }}>넣기</button></div>

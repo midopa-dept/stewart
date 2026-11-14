@@ -452,6 +452,11 @@ class ChatSession:
         if eff_note:
             self.ui.warn("  " + eff_note)
             rec.event("think_effort_rejected", **self.tks["effort_rejected"])
+        if self.tks.get("effort") or self.tks.get("effort_note"):   # 판 132: 생각 깊이와 출처(표·기본·환경) — 과정은 늘 닿게
+            rec.event("think_effort", value=self.tks.get("effort"), source=(self.tks.get("source") or {}).get("effort"),
+                      note=self.tks.get("effort_note"))
+        if self.tks.get("effort_note"):
+            self.ui.dim("  (" + self.tks["effort_note"] + ")")
         self._pmark = 0                   # 마지막 응답 때의 메시지 수(프롬프트 어림용)
         self.summary_on = os.environ.get("STEWART_SUMMARY") != "0"   # 요약 접기 자동(판 65, chat·허브). 시험 묶음은 끔
         self.ctx = sync_context(backend)    # 실제 문맥 길이 = 서버 max_model_len(있으면). 다르면 시작 화면에 경고
@@ -2141,7 +2146,7 @@ class ChatSession:
                 args = {**args, "kind": tier["profile"]}
             if tier.get("budget"):
                 backend = dataclasses.replace(backend, context_budget=int(tier["budget"]))
-            args = {**args, "_tier": SP.tier_raw(tier)}   # 판 116: 작업자 프로필 raw["tier"] — 압축 예산·생각 칸
+            args = {**args, "_tier": SP.tier_raw(tier, backend)}   # 판 116: 작업자 프로필 raw["tier"] — 압축 예산·생각 칸(판 132: 기본 생각 깊이)
         ctx = {"profile": self.profile, "backend": backend, "rec": self.rec, "cps": cps, "env": self.env,
                "exec_mode": self.mode, "tool_names": [t for t in self.all_tool_names if t not in (DG.NAME, SP.NAME)], "ledger": None,
                "budget": self._dg_budget, "log": self.delegations, "ask": None, "on_call": on_call, "ask_cfg": None,

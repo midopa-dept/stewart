@@ -189,18 +189,39 @@ uv run stewart hub --project ~/my-project
   - 노력 낱말은 서버의 대화 틀마다 다릅니다. 백엔드에 `effort_values = [...]`(그 틀이 받는 낱말)를 적으면 밖의 값은 시작할 때 알리고 보내지 않습니다. 적지 않으면 그대로 보내는데, 틀이 모르는 값은 오류 없이 다른 수준으로 처리될 수 있습니다.
   - 실험 손잡이: `thinking_token_budget`(서버 생각 예산 — 등급 칸 또는 `STEWART_THINKING_TOKEN_BUDGET`), `reasoning_passback`(등급 칸 — 환경 변수 `STEWART_REASONING_PASSBACK` 이 이깁니다).
 - 등급의 문맥 예산은 그 등급의 메인(`--tier`)과 작업자 모두의 압축 창입니다. 등급 없이 도는 실행은 예전 그대로입니다.
+
+#### moderato 의 기본 생각 깊이
+- `moderato` 로 도는 메인·작업자는 생각 깊이(`reasoning_effort`) 기본이 `medium` 입니다. 등급 칸에 값을 적지 않아도 그렇습니다.
+  - 해당하는 자리: `--tier moderato` 메인, 허브 「＋ 새 대화」에서 moderato 를 고른 대화, moderato 로 띄운 작업자.
+  - 모델이 등급을 안 고른 작업자는 `default_for` 로 등급이 정해집니다. 표의 `[tiers.moderato]` 에 `default_for = ["write"]` 가 있으면 도구를 적은 작업자도 moderato 가 되어 이 기본을 받습니다.
+  - 등급 표가 없거나 그 칸이 없으면 작업자에게는 등급이 없고, 예전 그대로입니다.
+- 바뀌지 않는 것
+  - `presto`·`largo`·`rubato` 는 그대로입니다(노력 값을 보내지 않음 = 서버 기본).
+  - 등급 없이 도는 실행(`stewart run`·`chat`, 허브 새 대화의 "기본")도 그대로입니다.
+- 그 등급 백엔드의 대화 틀이 `medium` 을 받을 때만 싣습니다. 백엔드 칸 `effort_values` 에 `medium` 이 있어야 합니다.
+  - 목록이 없거나 `medium` 이 없으면 보내지 않습니다(예전 그대로).
+  - 그 까닭은 `stewart tiers`·설정 시트·대화 시작 줄에 보입니다.
+- 우선순위: 환경 변수 `STEWART_REASONING_EFFORT` > 등급 칸 `reasoning_effort` > 등급 기본값.
+- 보는 곳: `stewart tiers` 의 "생각 깊이" 칸, 허브 설정 시트의 등급 줄, 대화의 "이 대화" 판.
+  - 값과 출처를 함께 보입니다. 출처는 표·기본·환경입니다.
+  - "값 없음"은 노력 값을 보내지 않는다는 뜻입니다(서버 기본).
+- 되돌리기(가장 깊게 — 노력 값을 보내지 않음)는 한 줄이면 됩니다.
+  - 등급 표: `[tiers.moderato]` 에 `reasoning_effort = "none"`.
+  - 또는 환경 변수: `STEWART_REASONING_EFFORT=none`(모든 등급에 걸립니다).
+  - 비교 실험에서 "값 없음" 칸을 잴 때도 `STEWART_REASONING_EFFORT=none` 을 명시로 적습니다. 비워 두면 이제 moderato 는 `medium` 입니다.
+
 - 꼬리표는 "자리 · 등급"으로 읽습니다(작업자 3 · `presto` / 메인 · `largo`).
 
 | 등급 | 하는 일 |
 |---|---|
 | `presto` | 찾기·읽기·요약처럼 가벼운 일. 얇은 지시문·읽기 도구·짧은 문맥이라 작업자로 여럿 띄우기 좋습니다. `slim = true` 라 메인으로 앉히면 얇은 허브입니다. 결과는 검산합니다 |
-| `moderato` | 코딩·대화의 기본. 도구를 적은(쓰는) 작업의 기본 등급입니다 |
+| `moderato` | 코딩·대화의 기본. 도구를 적은(쓰는) 작업의 기본 등급입니다. 생각 깊이 기본은 `medium`(위 절) |
 | `largo` | 계획·분배·검토. 모든 도구와 넓은 문맥을 쓰는 메인으로 앉힙니다(`stewart hub --tier largo`) |
 | `rubato` | 바깥 API(유료). 등급 표에 적고 키를 넣으면, 사람이 「＋ 새 대화」에서 고를 때만 씁니다(작업자·자동 분배는 부르지 않습니다). 기본 모델로 대신하는 일은 없습니다 |
 
 ### 등급 표 한눈에 · 바깥 등급
 
-- `stewart tiers` 는 등급 넷(presto·moderato·largo·rubato)이 어느 서버·모델을 가리키는지, 닿는지, 동시 수, 키(있음·없음만), 돈 상한을 한 표로 보입니다.
+- `stewart tiers` 는 등급 넷(presto·moderato·largo·rubato)이 어느 서버·모델을 가리키는지, 닿는지, 동시 수, 생각 깊이(값·출처), 키(있음·없음만), 돈 상한을 한 표로 보입니다.
   - `--no-check` 는 서버를 찔러 보지 않고, `--json` 은 허브 화면과 같은 칸을 냅니다. `--instance <이름>` 은 따로 도는 허브의 표입니다.
   - 표에 없는 presto·moderato·largo 는 기본 모델을 씁니다. rubato 는 표에 없으면 "설정 없음"입니다.
 - 허브의 「＋ 새 대화」는 바로 빈 대화를 엽니다. 빈 대화 첫 화면에서 자리(stewart · *parlando*)와 모델 등급(기본·presto·moderato·largo·rubato)을 고릅니다.

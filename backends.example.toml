@@ -76,7 +76,7 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # 메인으로 앉히려면 stewart hub --tier <이름> (chat --tier 도 같다). slim = true 면 그때 얇은 꼴(짧은 지시·핵심 도구, 나머지는 허브 칩).
 # 동시에 몇을 돌릴지는 그 백엔드의 concurrency(서버의 동시 요청 수)가 정한다. max 로 더 줄일 수 있다.
 # 생각 칸(안 적으면 지금과 같다): think = true|false · think_max_tokens · think_max_tokens_first(차례 첫 걸음) ·
-#   reasoning_effort = "<낱말>" · reasoning_effort_at = "body"|"template" · think_sampling = "<묶음>" 또는 { temperature = … }
+#   reasoning_effort = "<낱말>"("none" = 보내지 않음) · reasoning_effort_at = "body"|"template" · think_sampling = "<묶음>" 또는 { temperature = … }
 # [tiers.presto]
 # # backend = "<다른 모델이 있으면 그 백엔드 이름>"
 # budget = 24000
@@ -87,6 +87,9 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # budget = 32000               # 잠정값 — 개발 실측(압축 창·대화 몫) 결과로 다시 정한다. 등급을 안 고르면 지금 동작 그대로
 # use = "코딩·대화의 기본"
 # default_for = ["write"]
+# # 생각 깊이 기본은 medium 이다(판 132 — 적지 않아도, 백엔드 effort_values 에 medium 이 있을 때만).
+# # 되돌리기(가장 깊게 — 노력 값을 보내지 않음): reasoning_effort = "none"   또는 환경 STEWART_REASONING_EFFORT=none
+# # reasoning_effort = "none"
 # [tiers.largo]
 # max = 1                      # 서버 창 전부(budget 없음) — 모든 기능의 메인: stewart hub --tier largo
 # use = "계획·분배·검토"

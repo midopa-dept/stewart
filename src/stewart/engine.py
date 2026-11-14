@@ -418,6 +418,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     eff_note = TH.check_effort(tks, backend)   # 판 123: 이 백엔드가 받지 않는 노력 낱말은 보내지 않고 알린다
     if eff_note:
         print(f"stewart: 경고 — {eff_note}", file=sys.stderr)
+    if tks.get("effort_note"):   # 판 132: 등급 기본 생각 깊이를 싣지 못한 까닭(지금 동작 그대로)
+        print(f"stewart: {tks['effort_note']}", file=sys.stderr)
     ctx = sync_context(backend)          # 실제 문맥 길이 = 서버 max_model_len(있으면) — 접기 판단·기록 모두 이 값
     if ctx["warn"]:
         print(f"stewart: 경고 — {ctx['warn']}", file=sys.stderr)

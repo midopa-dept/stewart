@@ -49,6 +49,55 @@ THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_
               "thinking_token_budget", "reasoning_passback")
 
 
+# 판 132: 등급의 기본 생각 깊이(reasoning_effort). 표·환경에 값이 없을 때만, 그 등급 백엔드의 대화 틀이 그 낱말을 받을 때만
+# (backends.<이름>.effort_values 에 있을 때만) 싣는다. 목록이 없거나 그 낱말이 없으면 지금처럼 보내지 않고, 그 까닭을 보인다.
+# 되돌리기: 등급 칸에 reasoning_effort = "none"(보내지 않음) 또는 환경 STEWART_REASONING_EFFORT=none.
+TIER_DEFAULT_EFFORT = {"moderato": "medium"}
+EFFORT_OFF = ("", "none", "off")   # 등급 칸·환경에 적으면 노력 값을 보내지 않는다(서버 기본)
+EFFORT_ENV = "STEWART_REASONING_EFFORT"
+
+
+def default_effort(name, think: dict | None, backend) -> tuple[str | None, str]:
+    """등급 기본 생각 깊이를 실을지 → (낱말 또는 None, 싣지 않은 까닭). 표에 reasoning_effort 를 적었으면 싣지 않는다(까닭 빈 글)."""
+    want = TIER_DEFAULT_EFFORT.get(str(name or ""))
+    if not want or "reasoning_effort" in (think or {}):
+        return None, ""
+    allowed = getattr(backend, "effort_values", None) if backend is not None else None
+    bname = getattr(backend, "name", "") if backend is not None else ""
+    if not allowed:
+        return None, (f"기본 {want} 을 싣지 않았다 — 백엔드 {bname} 에 effort_values(대화 틀이 받는 낱말)가 없다. "
+                      f"그 틀이 {want} 을 받으면 백엔드 칸에 effort_values 를 적는다")
+    if want not in allowed:
+        return None, f"기본 {want} 을 싣지 않았다 — 백엔드 {bname} 의 대화 틀이 받는 낱말({'·'.join(allowed)})에 {want} 이 없다"
+    return want, ""
+
+
+def effort_view(name, think: dict | None, backend, env=None) -> dict:
+    """등급의 생각 깊이와 그 출처(표·기본·환경) — stewart tiers 표·허브 설정 시트가 보인다.
+    → {"value": 낱말 또는 None(보내지 않음 = 서버 기본), "source": "env"|"env:off"|"tier"|"tier:off"|"default"|"", "note": 글}."""
+    import re
+    from .think import EFFORT_RX
+    env = os.environ if env is None else env
+    think = think or {}
+    d, why = default_effort(name, think, backend)
+    out = {"value": d, "source": "default" if d else "", "note": why}
+    tv = think.get("reasoning_effort")
+    if isinstance(tv, str) and tv.strip().lower() in EFFORT_OFF:
+        out = {"value": None, "source": "tier:off", "note": ""}
+    elif isinstance(tv, str) and re.match(EFFORT_RX, tv):
+        out = {"value": tv, "source": "tier", "note": ""}
+    v = env.get(EFFORT_ENV)
+    if v is not None and v.strip().lower() in EFFORT_OFF:
+        out = {"value": None, "source": "env:off", "note": out["note"] if out["source"] == "" else ""}
+    elif v is not None and re.match(EFFORT_RX, v.strip().lower()):
+        out = {"value": v.strip().lower(), "source": "env", "note": ""}
+    allowed = getattr(backend, "effort_values", None) if backend is not None else None
+    if out["value"] and allowed and out["value"] not in allowed:
+        out = {"value": None, "source": out["source"],
+               "note": f"{out['value']} 은 백엔드 {getattr(backend, 'name', '')} 가 받는 낱말({'·'.join(allowed)})이 아니라 보내지 않는다"}
+    return out
+
+
 def load_tiers(path=None, main: bool = False) -> dict:
     """backends 표에서 등급. 없으면 {}(등급 없이 지금 백엔드). slim 은 메인(--tier)으로 앉힐 때만 뜻이 있다 — 작업자 목록에도 남는다(판 115).
     판 116: 아는 칸이 하나라도 있으면 등급이다 — backend 를 안 적으면 기본 모델을 물려받는다. max 를 안 적으면 None(그 백엔드의 동시 수를 따른다).
@@ -94,9 +143,16 @@ def split_manual(tiers: dict, backends: dict | None = None) -> tuple[dict, set]:
     return auto, manual
 
 
-def tier_raw(t: dict) -> dict:
-    """프로필 raw["tier"] 에 싣는 꼴(엔진·chat·생각 손잡이가 같이 읽는다)."""
-    return {"name": t.get("name"), "budget": t.get("budget"), **({"think": t["think"]} if t.get("think") else {})}
+def tier_raw(t: dict, backend=None) -> dict:
+    """프로필 raw["tier"] 에 싣는 꼴(엔진·chat·생각 손잡이가 같이 읽는다).
+    판 132: 그 등급의 기본 생각 깊이(TIER_DEFAULT_EFFORT)를 표에 값이 없고 백엔드 틀이 받을 때 생각 칸에 싣는다(effort_default 표시).
+    싣지 못하면 그 까닭(effort_default_skipped)을 남긴다. 환경 STEWART_REASONING_EFFORT 는 think.settings 에서 이긴다."""
+    think = dict(t.get("think") or {})
+    d, why = default_effort(t.get("name"), think, backend)
+    if d:
+        think.update(reasoning_effort=d, effort_default=True)
+    return {"name": t.get("name"), "budget": t.get("budget"), **({"think": think} if think else {}),
+            **({"effort_default_skipped": why} if why else {})}
 
 
 def unknown_note(tiers: dict, asked, manual: set | frozenset = frozenset()) -> str:
