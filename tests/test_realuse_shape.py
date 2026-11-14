@@ -1,19 +1,21 @@
-"""실사용 꼴 통시험(판 136): 실사용 설정과 같은 꼴(값이 아니라 항목의 꼴)로 허브를 실제로 띄워, 사람이 화면에서 하는 길을 한 번씩 누른다.
+"""실사용 꼴 통시험(판 136): 실사용에서 흔한 설정의 꼴로 허브를 실제로 띄워, 사람이 화면에서 하는 길을 한 번씩 누른다.
 
-- 왜: 시험 설정이 실사용과 달라서 실사용에서만 깨진 일이 하루에 세 번 있었다.
+- 왜: 시험 설정이 실사용과 달라서, 시험은 통과하는데 실사용에서만 깨지는 일이 있었다.
   - 사용자 기억 파일이 있으면 새 대화 첫 화면이 안 그려졌다(판 134).
-  - 백엔드에 effort_values 가 없어 기본 생각 깊이가 안 실렸다(판 132).
-  - 안쪽 백엔드의 키 자리가 비어 있다고 등급이 막혔다(판 136).
-- 꼴(이 파일의 USER_SHAPE·make_user_shape)
-  - backends = mac·cloud·box, default = cloud(사용자 화면의 "키 없음" 셋이 cloud 를 가리켰다), [tiers.*] 표 없음.
-  - cloud 에 effort_values·api_key_env(빈 환경 변수)·vision·concurrency·max_context·timeout_s·params(temperature·chat_template_kwargs.enable_thinking·max_tokens).
-  - 사용자 프로필 ops 하나.
-  - hub.toml 에 [hub](ntfy_url·ntfy_token_file·hub_url)·[forge]·[web](backend·url·fetch).
-  - 사용자 수준 STEWART.md(707자)·사용자 스킬 19개.
-  - 켜는 인자 `hub --project <폴더> -b cloud -p ops`(포트만 시험용으로 비운 자리).
-- 하는 일: 허브를 하위 프로세스로 띄운다(사용자 셸처럼) → 로그인 → 등급 표 → 새 대화(moderato) → 첫 화면 기록 →
+  - 백엔드에 effort_values 가 없으면 기본 생각 깊이가 안 실렸다(판 132).
+  - 안쪽 백엔드의 키 자리가 비어 있으면 등급이 막혔다(판 136).
+- 꼴(이 파일의 SHAPE·make_user_shape) — 값은 둥근 시험 값이고, 판정은 꼴에만 기댄다.
+  - 백엔드 여럿(local·cloud·spare). default 가 허브를 켜는 백엔드와 같다. [tiers.*] 표는 없다(표 없는 등급 = 기본 모델).
+  - 허브를 켜는 백엔드(cloud): effort_values · 키 자리(api_key_env, 빈 환경 변수 = 키 없이 보냄) · vision · concurrency ·
+    max_context · timeout_s · params(temperature · chat_template_kwargs.enable_thinking · max_tokens).
+  - 사용자 프로필 하나(work). hub.toml 에 [hub](ntfy_url · ntfy_token_file · hub_url) · [forge] · [web](backend · url · fetch).
+  - 사용자 기억 파일(STEWART.md) · 사용자 스킬 여럿.
+  - 켜는 인자 `hub --project <폴더> -b cloud -p work`(포트만 시험용).
+- 홈: 허브 하위 프로세스의 HOME 은 시험 자리이고 XDG_* · STEWART_* 는 비운다(판 136.1).
+  기본 자리(~/.config/stewart 등)를 그대로 쓰되 그 ~ 가 시험 자리라, 이 시험은 실행하는 사람의 홈 설정을 읽지 않는다.
+- 하는 일: 허브를 하위 프로세스로 띄운다(셸에서 켜듯) → 로그인 → 등급 표 → 새 대화(moderato) → 첫 화면 기록 →
   한 마디 → 모델이 받은 요청 본문(reasoning_effort=medium 등) → 답이 옴 → parlando 새 대화.
-- 다음 판부터 올리기 전에 이 시험을 돌린다(전체 시험에 들어 있다). 사용자 설정의 꼴이 바뀌면 USER_SHAPE 를 고친다.
+- 올리기 전 전체 시험에 들어 있다. 실사용에서 새 꼴이 깨지면 그 꼴을 make_user_shape 에 먼저 넣고 고친다.
 """
 
 import json
@@ -34,9 +36,9 @@ from pathlib import Path
 from tests.test_hub import msg, reply
 
 ROOT = Path(__file__).resolve().parents[1]
-USER_SHAPE = {
-    "backends": ("mac", "cloud", "box"), "default": "cloud", "main_backend": "cloud", "profile": "ops",
-    "memory_chars": 707, "skills": 19,
+SHAPE = {
+    "backends": ("local", "cloud", "spare"), "default": "cloud", "main_backend": "cloud", "profile": "work",
+    "memory_chars": 600, "skills": 12,
 }
 
 
@@ -73,16 +75,19 @@ class FakeModel:
 
 
 def make_user_shape(root: Path, model_url: str) -> dict:
-    """실사용 꼴 설정을 root 아래에 만든다 → 허브를 띄울 환경 변수. 값은 시험용(주소는 가짜 모델)."""
-    cfg, state, cache, data = root / "config", root / "state", root / "cache", root / "share"
+    """실사용 꼴 설정을 root 아래에 만든다 → 허브를 띄울 환경 변수. 값은 시험용(주소는 가짜 모델).
+    판 136.1: HOME 을 시험 자리(root/home)로 바꾸고 XDG_*·STEWART_* 는 비운다 — 사용자처럼 기본 자리(~/.config/stewart 등)를 쓰되,
+    그 ~ 가 시험 자리다. 그래서 XDG 를 따르지 않는 기본값(프로필·스킬·기억·대화 자리)도 실제 사용자 폴더로 새지 않는다."""
+    home = root / "home"
+    cfg, state, cache, data = home / ".config", home / ".local" / "state", home / ".cache", home / ".local" / "share"
     ud = cfg / "stewart"
     for d in (ud / "profiles", ud / "skills", state, cache, data):
         d.mkdir(parents=True, exist_ok=True)
-    (ud / "backends.toml").write_text(f'''default = "{USER_SHAPE['default']}"
+    (ud / "backends.toml").write_text(f'''default = "{SHAPE['default']}"
 
-[backends.mac]
-base_url = "{model_url}/mac/v1"
-model = "m-mac"
+[backends.local]
+base_url = "{model_url}/local/v1"
+model = "m-local"
 precision = "Q4"
 max_context = 32768
 concurrency = 1
@@ -106,18 +111,18 @@ temperature = 0.2
 max_tokens = 8192
 chat_template_kwargs = {{ enable_thinking = true }}
 
-[backends.box]
-base_url = "{model_url}/box/v1"
-model = "m-box"
+[backends.spare]
+base_url = "{model_url}/spare/v1"
+model = "m-spare"
 precision = "Q8"
 max_context = 32768
 concurrency = 2
 timeout_s = 300
 ''', encoding="utf-8")
-    (ud / "profiles" / "ops.toml").write_text('name = "ops"\nextends = "chat"\n', encoding="utf-8")
+    (ud / "profiles" / f"{SHAPE['profile']}.toml").write_text(f'name = "{SHAPE["profile"]}"\nextends = "chat"\n', encoding="utf-8")
     mem = "# 사용자 기억\n\n" + "".join(f"- 규칙 {i:02d}: 답은 한국어로 짧게, 코드·명령은 원문 그대로 둔다.\n" for i in range(40))
-    (ud / "STEWART.md").write_text(mem[:USER_SHAPE["memory_chars"]], encoding="utf-8")
-    for i in range(USER_SHAPE["skills"]):
+    (ud / "STEWART.md").write_text(mem[:SHAPE["memory_chars"]], encoding="utf-8")
+    for i in range(SHAPE["skills"]):
         sd = ud / "skills" / f"skill-{i:02d}"
         sd.mkdir(exist_ok=True)
         (sd / "SKILL.md").write_text(f"---\nname: skill-{i:02d}\ndescription: 시험용 스킬 {i:02d}\n---\n\n시험용 스킬 본문.\n", encoding="utf-8")
@@ -137,11 +142,8 @@ backend = "searxng"
 url = "http://127.0.0.1:9/search"
 fetch = true
 ''', encoding="utf-8")
-    keep = {k: v for k, v in os.environ.items() if not k.startswith("STEWART_") and not k.startswith("XDG_")}
-    return {**keep, "XDG_CONFIG_HOME": str(cfg), "XDG_STATE_HOME": str(state), "XDG_CACHE_HOME": str(cache),
-            "XDG_DATA_HOME": str(data), "STEWART_CLOUD_API_KEY": "", "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1",
-            # 기억 폴더·대화 자리 폴더는 XDG 를 따르지 않는 기본값(~/.local/share/stewart/…)이라 시험 자리로 돌린다
-            "STEWART_MEMORY_DIR": str(data / "stewart" / "memory"), "STEWART_TALK_DIR": str(data / "stewart" / "talk")}
+    keep = {k: v for k, v in os.environ.items() if not k.startswith("STEWART_") and not k.startswith("XDG_") and k != "HOME"}
+    return {**keep, "HOME": str(home), "STEWART_CLOUD_API_KEY": "", "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def free_port() -> int:
@@ -160,7 +162,7 @@ class Hub:
         self.project = root / "project"
         self.project.mkdir(exist_ok=True)
         self.log = open(root / "hub.log", "w", encoding="utf-8")
-        self.p = subprocess.Popen([sys.executable, "-m", "stewart", "hub", "--project", str(self.project), "-b", "cloud", "-p", "ops",
+        self.p = subprocess.Popen([sys.executable, "-m", "stewart", "hub", "--project", str(self.project), "-b", SHAPE["main_backend"], "-p", SHAPE["profile"],
                                    "--port", str(self.port), *extra_args], env=env, cwd=root, stdin=subprocess.DEVNULL,
                                   stdout=self.log, stderr=subprocess.STDOUT)
         self.root, self.origin = root, f"http://127.0.0.1:{self.port}"
@@ -176,7 +178,7 @@ class Hub:
             time.sleep(0.3)
         else:
             raise RuntimeError("허브가 60초 안에 뜨지 않았다")
-        tok = next((root / "state").rglob("hub-token")).read_text().strip()
+        tok = next(root.rglob("hub-token")).read_text().strip()
         st, _, hd = self.req("POST", "/login", urllib.parse.urlencode({"token": tok}),
                              {"Content-Type": "application/x-www-form-urlencoded", "Origin": self.origin})
         self.cookie = (hd.get("Set-Cookie") or "").split(";")[0]
@@ -271,6 +273,23 @@ class TRealUseShape(unittest.TestCase):
         h.post("/api/main", {"text": "안녕", "chat": name})
         self.assertTrue(h.wait(lambda: len(self.model.requests) > n0 and not h.get(f"/api/state?chat={urllib.parse.quote(name)}")["busy"]))
         self.assertNotIn("reasoning_effort", self.model.requests[n0])                          # 등급 없는 대화는 그대로
+
+
+class TNoLeak(unittest.TestCase):
+    """시험 설정이 실제 사용자 폴더에 기대지 않는다(판 136.1: 프로필이 실제 ~/.config 에서 읽혀 이 맥에서만 통과했다)."""
+
+    def test_defaults_resolve_inside_test_home(self):
+        root = Path(tempfile.mkdtemp(prefix="realuse-leak-"))
+        env = make_user_shape(root, "http://127.0.0.1:9")
+        home = str(root / "home")
+        code = ("import json; from stewart import config as C, skills as S, memory as M, projcfg as P, forge as F; "
+                "print(json.dumps([str(C.user_profiles_dir()), str(S.user_dir()), str(M.memory_dir({})) if hasattr(M, 'memory_dir') else '', "
+                "str(P.user_dir()), str(F.config_path()), str(C.backends_path())]))")
+        r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+        for p in json.loads(r.stdout):
+            if p:
+                self.assertTrue(p.startswith(home), p)
 
 
 if __name__ == "__main__":

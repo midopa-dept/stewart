@@ -153,7 +153,8 @@ class TParlando(unittest.TestCase):
         from stewart import cli, surfaces as SF
         tmp = Path(tempfile.mkdtemp())
         # 인자 바꿈만 본다(resolve 에 넘어가는 프로필 이름)
-        with mock.patch.object(cli, "resolve", side_effect=SystemExit(7)) as r:
+        with mock.patch.object(cli, "resolve", side_effect=SystemExit(7)) as r, \
+                mock.patch.dict(os.environ, {"STEWART_TALK_DIR": str(tmp / "talk")}):   # 판 136.1: 진짜 홈의 대화 자리 폴더를 만들지 않게
             with self.assertRaises(SystemExit):
                 cli.main([SF.TALK_COMMAND, "--once", "--workdir", str(tmp), "안녕"])
         self.assertEqual(r.call_args[0][0], SF.TALK_PROFILE)
