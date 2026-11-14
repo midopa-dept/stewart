@@ -80,6 +80,49 @@ def load_messages(run_dir: Path) -> list[dict]:
     return rebuild_from_events(run_dir)
 
 
+def _text(c) -> str:
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return "\n".join(str(p.get("text") or "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+    return ""
+
+
+def cut_turn_text(run_dir: Path, messages: list[dict]) -> str | None:
+    """판 148: 옛 판(143 전 — meta 에 saves_turn_start 가 없는 기록)은 대화를 차례 끝에만 저장해, 차례 도중 허브가 꺼지면(승인 대기 등)
+    그 차례의 사람 말이 messages.json 에 없다. 그 말을 돌려준다 — 대화에 넣지 않는다(옛 지시가 다시 실행되지 않게).
+    허브는 화면에 "끊긴 말 — 다시 보내기" 칸으로만 보인다(사람이 눌러야 보낸다).
+    조건(모두): 옛 기록 · 마지막 사람 말 뒤에 차례 끝(turn_end)이 없다 · /clear(reset) 뒤의 말이다 · messages 의 사람 말 가운데 그 글이 없다."""
+    from .record import head_meta
+    if head_meta(run_dir).get("saves_turn_start"):
+        return None
+    last, ended = None, True
+    try:
+        with open(Path(run_dir) / "events.jsonl", encoding="utf-8") as fh:
+            for line in fh:
+                if '"user"' not in line and '"reset"' not in line and '"turn_end"' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                k = e.get("kind")
+                if k == "reset":
+                    last, ended = None, True
+                elif k == "turn_end":
+                    ended = True
+                elif k == "user" and isinstance(e.get("content"), str) and e["content"].strip():
+                    last, ended = (e.get("raw") if isinstance(e.get("raw"), str) and e["raw"].strip() else e["content"]), False
+    except OSError:
+        return None
+    if last is None or ended:
+        return None
+    for m in messages:
+        if m.get("role") == "user" and last.strip() in _text(m.get("content")):
+            return None
+    return last
+
+
 def close_dangling(messages: list[dict], note: str = "(이전 세션이 끝나 결과가 없다)") -> list[dict]:
     """모든 assistant tool_calls 뒤에 그 id 의 tool 결과가 있게 채운다."""
     out: list[dict] = []

@@ -548,6 +548,7 @@ class ChatSession:
                                                 for c in self.commands],
                                    "agents": PC.agents_log(self.agents)}} if (self.commands or self.agents) else {}),
             "resumed_from": resumed_from, "resumed_messages": len(self.messages) - 1 if history else 0,
+            "saves_turn_start": True,   # 판 148: 사람 말을 붙인 직후에도 대화를 저장하는 판(143–)이 쓴 기록 — 옛 기록의 끊긴 말 찾기가 이 기록은 건너뛴다
             "started": datetime.now().isoformat(timespec="seconds"),
             "place_hints": bool(getattr(self, "place_hints", False)),   # 판 141: 자리 줄·도구 설명 덧붙임 켬·끔(STEWART_PLACE_HINTS)
             # 판 139: 이 대화가 앉은 등급(다시 열 때 그 등급으로 — 같은 백엔드를 쓰는 등급은 백엔드 이름으로 가려낼 수 없다)

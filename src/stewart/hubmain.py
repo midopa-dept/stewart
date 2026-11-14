@@ -456,6 +456,21 @@ def _chain_events(run_dir, kind: str) -> list[dict]:
     return out
 
 
+def _cut_card(ui, run_dir, history) -> None:
+    """판 148: 옛 기록의 끊긴 차례 말 — 대화에는 넣지 않고 화면에 "다시 보내기" 칸으로(사람이 눌러야 보낸다)."""
+    if not run_dir or not history:
+        return
+    from .resume import cut_turn_text
+    try:
+        text = cut_turn_text(Path(run_dir), history)
+    except Exception:   # noqa: BLE001 — 옛 기록을 못 읽어도 이어 받기는 그대로
+        text = None
+    if text:
+        ui._add("error", "앞 판에서 허브가 꺼져 끝나지 않은 차례의 말이 있다(대화에는 넣지 않았다) — 다시 하려면 [다시 보내기]: "
+                + text.strip()[:200])
+        ui.log[-1].update(cls="cut_turn", retry=text)
+
+
 def _replay(ui, messages: list | None, run_dir=None) -> None:
     """판 124.2: 이어 받은 대화(다시 열기·갈래·허브 다시 켜기)의 앞 내용을 화면 기록에 다시 그린다 — 사람 말·도구 한 줄·답.
     모델 문맥은 그대로(sess.messages), 화면 줄만 만든다. 도구 결과 본문은 다시 그리지 않는다(기록 폴더에 있다).
@@ -594,6 +609,7 @@ class HubMain:
         if history:
             _replay(self.ui, history, resumed_from)
             self.ui._add("meta", f"앞 메인 대화를 이어 받았다({resumed_from}). 새로 시작하려면 허브를 --new-main 으로 띄운다.")
+            _cut_card(self.ui, resumed_from, history)
         self.ui.env = self.sess.env
         self.ui.run_rec = self.sess.rec   # 판 127: 승인 기록을 이 대화 기록 폴더에도
         self.sess.env.on_quota = self._quota_alert   # brave 이달 80%·한도 도달 → 폰·화면(판 61)
@@ -860,6 +876,7 @@ class HubMain:
                 self.ui.log.clear()
             _replay(self.ui, hist, run_dir)
             self.ui._add("info", f"지난 메인 대화를 다시 열었다({run_dir}).")
+            _cut_card(self.ui, run_dir, hist)
             return new
         finally:
             self._busy.release()
@@ -1179,6 +1196,8 @@ class HubMain:
             return None
         bname = (meta.get("backend") or {}).get("name")
         want = meta.get("tier")
+        if "tier" not in meta and _old_moderato(run_dir):   # 판 148: 판 132–138 의 기록은 meta 에 등급이 없다 — moderato 만 남긴 흔적으로
+            want = "moderato"
         if isinstance(want, str) and want:
             r = next((x for x in self.tier_rows()["rows"] if x["tier"] == want), None)
             if r and r.get("connected") and r.get("key") != "없음":
@@ -1531,6 +1550,8 @@ class HubChat(HubMain):
                                  "이제부터는 원래 대화와 서로 독립이다.")
             if origin == "fork":   # 갈래는 원래 대화가 따로 이어지므로 화면에 한 줄 남긴다(다시 열기는 같은 대화처럼 그대로 이어 쓴다)
                 self.ui._add("info", "여기서 갈라졌다 — 이제부터 원래 대화와 서로 독립이다.")
+            else:
+                _cut_card(self.ui, resumed_from, history)
         self.ui.env = self.sess.env
         self.ui.run_rec = self.sess.rec   # 판 127: 승인 기록을 이 대화 기록 폴더에도
         self.sess.env.on_quota = main._quota_alert
@@ -1604,6 +1625,29 @@ def _strip_env(text: str) -> str:
             return t.splitlines()[1].strip() if first.endswith("]") and len(t.splitlines()) > 1 else ""
         t = rest.strip()
     return t.splitlines()[0].strip() if t else ""
+
+
+def _old_moderato(run_dir) -> bool:
+    """판 148: 판 132–138 의 대화 기록은 meta 에 등급 이름을 남기지 않았다. 그때 기본 생각 깊이(medium, source default)는
+    moderato 대화에만 붙어 run_start 앞에 think_effort 사건으로 남았다 — 그것이 있으면 moderato 로 연 대화로 본다."""
+    from pathlib import Path
+    try:
+        with open(Path(run_dir) / "events.jsonl", encoding="utf-8") as f:
+            for _ in range(5):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("kind") == "run_start":
+                    return False
+                if e.get("kind") == "think_effort" and e.get("source") == "default" and e.get("value") == "medium":
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 def last_main(hub: Hub) -> tuple[list | None, str | None]:
