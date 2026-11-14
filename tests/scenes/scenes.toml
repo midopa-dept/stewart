@@ -61,3 +61,41 @@ no_host_gui = true
 [scene.executor]
 fake_call = { tool = "run_shell", args = { command = "open https://www.naver.com" } }
 blocked = "실행 안 함"
+
+# ── 개발 장면(11-14) — 실사용에서 겪은 말이 아니라, 웹 넛지 낱말 규칙(최신·요즘·알아봐·처음 보는 이름+물음)에 안 걸리는 꼴로 만든 장면.
+#    결과를 보고 지시문·규칙을 고쳤으면 같은 장면으로 "나아졌다"를 말하지 않는다(결과 표 머리에 적힌다).
+[[scene]]
+id = "dev-bare-name"
+set = "dev"
+said = "Ghostty"
+source = "개발 장면 11-14 — 처음 보는 고유 이름만 던짐"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "dev-compare-two"
+set = "dev"
+said = "uv 랑 pixi 차이가 뭐야"
+source = "개발 장면 11-14 — 둘의 차이"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "dev-worth-it"
+set = "dev"
+said = "Bun 쓸 만해?"
+source = "개발 장면 11-14 — 써 볼 만한가"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]
+
+[[scene]]
+id = "dev-which-one"
+set = "dev"
+said = "SvelteKit 이랑 Astro 중에 블로그엔 뭐가 나아"
+source = "개발 장면 11-14 — 둘 중 고르기"
+[scene.expect]
+first_any = ["web_search", "web_fetch"]
+first_none = ["search", "glob", "list_dir", "read_file", "run_shell"]

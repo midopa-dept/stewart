@@ -1,6 +1,8 @@
 """판 121: 실사용 장면 묶음 — 사용자가 실사용에서 겪은 장면 하나 = 대본 하나(사람이 한 말 그대로) + 기대하는 첫 행동 + 기계 판정.
 
 - 장면 파일(TOML, [[scene]]): id·said(사람이 한 말)·source(어디서 전해 들었나)·profile·tools_off(칩으로 꺼 둔 도구)·tools_on(칩으로 켜 둔 도구)
+  · set: "real"(실사용에서 겪은 말, 기본) 또는 "dev"(개발 장면 — 규칙을 고친 뒤 같은 장면으로 나아졌다고 말하지 않는다)
+  · requires: 이 장면에 있어야 하는 도구 이름들 — 그 판본·설정에 없으면 실측은 건너뛴다(맞음·틀림에 넣지 않는다)
   · expect: first_any(첫 걸음에 하나라도 불러야 할 도구)·first_none(첫 걸음에 부르면 안 되는 도구)
             ·say_any(도구 없이 답했으면 답에 있어야 할 말, 정규식)·no_host_gui(셸로 이 컴퓨터 화면을 여는 명령을 내면 실패)
   · executor(가짜 모델로 볼 실행기 장치): note(첫 사람 말 뒤에 붙어야 할 엔진 글 조각)·fake_call(모델이 이 호출을 했다고 치면)·blocked(그 결과에 있어야 할 글)
@@ -37,6 +39,7 @@ def load(paths=None) -> list[dict]:
             s.setdefault("tools_off", [])
             s.setdefault("tools_on", [])
             s.setdefault("profile", "chat")
+            s.setdefault("set", "real")
             s["_file"] = Path(p).name
             out.append(s)
     return out
