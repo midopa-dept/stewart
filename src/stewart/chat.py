@@ -487,8 +487,9 @@ class ChatSession:
             system += "\n\n" + FG.note(self.forge)
         if self.code_off:   # 판 118: 코드 실행이 꺼진 까닭(사람에게 그대로 말하게)
             system += f"\n\n{self.code_off}(run_code 없음). 계산·그래프를 부탁받으면 그렇다고 말하고 손으로 계산하거나 표로 답한다."
-        if self.disabled_tools:   # 판 117.1: 꺼진 도구 이름을 모델이 알게(말없이 안 쓰는 대신 켜 달라고 말하게)
-            system += "\n\n" + OFF_TOOLS_NOTE.format(names=", ".join(sorted(self.disabled_tools)))
+        self._off_note = self._off_tools_line()   # 판 117.1: 꺼진 도구 이름을 모델이 알게(말없이 안 쓰는 대신 켜 달라고 말하게)
+        if self._off_note:                        # 판 143: 칩을 바꾸면 set_tool 이 이 줄을 지금 상태로 다시 쓴다
+            system += "\n\n" + self._off_note
         if profile.language == "ko":
             system += "\n\n사람에게 하는 말은 한국어로 쓴다. 코드·파일 이름·명령은 원문 그대로 둔다."
         self.system = system
@@ -1352,6 +1353,25 @@ class ChatSession:
                 except OSError:
                     pass
 
+    def _off_tools_line(self) -> str:
+        return OFF_TOOLS_NOTE.format(names=", ".join(sorted(self.disabled_tools))) if self.disabled_tools else ""
+
+    def _sync_off_line(self) -> None:
+        """판 143: 지시문의 꺼진 도구 줄을 지금 칩 상태로. 시작 때 줄이 남으면 압축 뒤(칩 알림 줄이 사라진 뒤)나
+        차례 도중에 켠 칩이 도구 목록과 어긋난다 — 목록에 있는 도구를 꺼졌다고 답했다. 칩을 바꿀 때만 바뀐다."""
+        old, new = getattr(self, "_off_note", ""), self._off_tools_line()
+        if old == new:
+            return
+
+        def fix(text: str) -> str:
+            if old and ("\n\n" + old) in text:
+                return text.replace("\n\n" + old, ("\n\n" + new) if new else "", 1)
+            return text + ("\n\n" + new if new else "")
+        self.system = fix(self.system)
+        if self.messages and self.messages[0].get("role") == "system" and isinstance(self.messages[0].get("content"), str):
+            self.messages[0] = {**self.messages[0], "content": fix(self.messages[0]["content"])}
+        self._off_note = new
+
     def set_tool(self, name: str, on: bool, by: str = "human") -> bool:
         """허브 켬·끔(판 99): toggle_tools 의 도구를 다음 걸음부터 모델에게 보이게·안 보이게. by = human | skill:<이름>(판 119)."""
         if name not in getattr(self, "toggleable", []):
@@ -1361,6 +1381,7 @@ class ChatSession:
             self._human_off = getattr(self, "_human_off", set())
             (self._human_off.discard if on else self._human_off.add)(name)
         self._toggle_note = f"[엔진] 사람이 도구 칩을 바꿨다: {name} {'켬' if on else '끔'}. 지금 꺼진 도구: {', '.join(sorted(self.disabled_tools)) or '없음'}."
+        self._sync_off_line()
         self.tool_defs = [d for d in self._all_defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_names = [d["function"]["name"] for d in self.tool_defs]
         self.rec.event("tool_toggle", name=name, on=bool(on), **({"by": by} if by != "human" else {}))
@@ -1472,6 +1493,7 @@ class ChatSession:
                        **({"img_names": [x.name for x in (IMG.path_of(q) for q in images) if x]} if images else {}),
                        **({"raw": self._raw_text} if self._raw_text != text else {}))
         self.rec.md(f"## 사람 (차례 {self.st['turns']})\n\n```\n{text}\n```\n")
+        save_messages(self.rec.dir, self.messages)   # 판 143: 차례 도중 허브가 꺼져도(승인 대기 등) 이 말이 이어 받을 대화에 남게
         consecutive = 0
         reason = "max_steps"
         self._turn_calls: list[dict] = []   # /facts: 이번 차례의 도구 호출

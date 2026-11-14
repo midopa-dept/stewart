@@ -48,10 +48,21 @@ class FakeModel:
     def __init__(self, answer="네, 안녕하세요.", route=None):
         self.requests: list[dict] = []
         self.route = route   # 판 138: 요청 본문 → 응답(없으면 늘 answer)
+        self.down = False    # 판 143: True 면 모델 서버가 안 닿는 것처럼(503)
         me = self
 
         class Hd(BaseHTTPRequestHandler):
+            def _down(self):
+                if not me.down:
+                    return False
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+
             def do_GET(self):
+                if self._down():
+                    return
                 data = json.dumps({"data": [{"id": "m-cloud", "max_model_len": 65536}]}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -61,6 +72,8 @@ class FakeModel:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self._down():
+                    return
                 me.requests.append(body)
                 reply(self, body, me.route(body) if me.route else msg(answer))
 
