@@ -96,6 +96,8 @@ LABEL = {"ok": "준비됨", "loading": "올라오는 중", "down": "닿지 않�
 def explain(e: BackendError) -> tuple[str, str]:
     """백엔드 오류 → (종류, 사람 말 한 줄). 종류는 probe 의 state 와 같은 말(down·loading·auth·error)과 overflow·timeout."""
     msg, st, body = str(e), e.status, (e.body or "")
+    if getattr(e, "cap", False):   # 판 147: 돈·토큰 상한(spend) — 서버는 멀쩡하다, 까닭을 그대로
+        return "cap", msg
     low = (msg + " " + body).lower()
     if is_context_overflow(e):
         return "overflow", "문맥이 모델 서버의 최대 길이를 넘었다 — /compact 로 줄이거나 새 대화로"

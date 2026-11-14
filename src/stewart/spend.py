@@ -16,6 +16,12 @@ from pathlib import Path
 _LOCK = threading.Lock()
 
 
+def _cap(e):
+    """판 147: 돈·토큰 상한으로 보내지 않은 것 — 화면이 "모델 서버에 닿지 않는다"로 바꾸지 않고 이 글을 그대로 보이게(modelstat.explain)."""
+    e.cap = True
+    return e
+
+
 class Spend:
     def __init__(self, ledger_dir: Path, tier: str, usd_day: float | None, usd_chat: float | None,
                  tokens_day: int | None = None, priced: bool = True):
@@ -42,14 +48,14 @@ class Spend:
         from .backend import BackendError
         day = self.today()
         if self.priced and self.usd_day and day["usd"] >= self.usd_day:
-            raise BackendError(f"등급 {self.tier}: 오늘 돈 상한 ${self.usd_day:g} 에 닿았다(오늘 ${day['usd']:.2f}) — 보내지 않았다. "
-                               "내일 다시 쓰거나 backends 표 [tiers." + self.tier + "] 의 max_usd_day 를 바꾼다(0 = 끔)")
+            raise _cap(BackendError(f"등급 {self.tier}: 오늘 돈 상한 ${self.usd_day:g} 에 닿았다(오늘 ${day['usd']:.2f}) — 보내지 않았다. "
+                               "내일 다시 쓰거나 backends 표 [tiers." + self.tier + "] 의 max_usd_day 를 바꾼다(0 = 끔)"))
         if self.priced and self.usd_chat and self.chat_usd >= self.usd_chat:
-            raise BackendError(f"등급 {self.tier}: 이 대화의 돈 상한 ${self.usd_chat:g} 에 닿았다(${self.chat_usd:.2f}) — 보내지 않았다. "
-                               "새 대화를 열거나 max_usd_chat 을 바꾼다(0 = 끔)")
+            raise _cap(BackendError(f"등급 {self.tier}: 이 대화의 돈 상한 ${self.usd_chat:g} 에 닿았다(${self.chat_usd:.2f}) — 보내지 않았다. "
+                               "새 대화를 열거나 max_usd_chat 을 바꾼다(0 = 끔)"))
         if self.tokens_day and day["tokens"] >= self.tokens_day:
-            raise BackendError(f"등급 {self.tier}: 오늘 토큰 상한 {self.tokens_day} 에 닿았다(오늘 {day['tokens']}) — 보내지 않았다. "
-                               "max_tokens_day 를 바꾼다(0 = 끔)")
+            raise _cap(BackendError(f"등급 {self.tier}: 오늘 토큰 상한 {self.tokens_day} 에 닿았다(오늘 {day['tokens']}) — 보내지 않았다. "
+                               "max_tokens_day 를 바꾼다(0 = 끔)"))
 
     def after(self, usage: dict) -> None:
         u = usage or {}

@@ -49,15 +49,20 @@ class FakeModel:
         self.requests: list[dict] = []
         self.route = route   # 판 138: 요청 본문 → 응답(없으면 늘 answer)
         self.down = False    # 판 143: True 면 모델 서버가 안 닿는 것처럼(503)
+        self.status = None   # 판 147: 숫자면 그 HTTP 상태로 거절(예: 401 인증 거부)
         me = self
 
         class Hd(BaseHTTPRequestHandler):
             def _down(self):
-                if not me.down:
+                code = 503 if me.down else me.status
+                if not code:
                     return False
-                self.send_response(503)
-                self.send_header("Content-Length", "0")
+                data = json.dumps({"error": {"message": "invalid api key" if code == 401 else "unavailable"}}).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
+                self.wfile.write(data)
                 return True
 
             def do_GET(self):
@@ -174,14 +179,15 @@ def free_port() -> int:
 class Hub:
     """하위 프로세스 허브와 화면이 쓰는 API(쿠키·CSRF·Origin)."""
 
-    def __init__(self, root: Path, env: dict, extra_args=()):
-        self.port = free_port()
+    def __init__(self, root: Path, env: dict, extra_args=(), argv=None, port=None):
+        """argv·port 를 주면 그 명령으로 띄운다(판 147: 따로 도는 허브 — instance.hub_argv 그대로)."""
+        self.port = port or free_port()
         self.project = root / "project"
         self.project.mkdir(exist_ok=True)
         self.log = open(root / "hub.log", "w", encoding="utf-8")
-        self.p = subprocess.Popen([sys.executable, "-m", "stewart", "hub", "--project", str(self.project), "-b", SHAPE["main_backend"], "-p", SHAPE["profile"],
-                                   "--port", str(self.port), *extra_args], env=env, cwd=root, stdin=subprocess.DEVNULL,
-                                  stdout=self.log, stderr=subprocess.STDOUT)
+        cmd = list(argv) if argv else [sys.executable, "-m", "stewart", "hub", "--project", str(self.project), "-b", SHAPE["main_backend"],
+                                       "-p", SHAPE["profile"], "--port", str(self.port), *extra_args]
+        self.p = subprocess.Popen(cmd, env=env, cwd=root, stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT)
         self.root, self.origin = root, f"http://127.0.0.1:{self.port}"
         t0 = time.time()
         while time.time() - t0 < 60:
