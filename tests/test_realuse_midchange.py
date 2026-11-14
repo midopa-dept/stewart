@@ -216,6 +216,8 @@ class M06RestartWithWorker(MidBase):
 class M07BackendDownUp(MidBase):
     """모델 서버가 안 닿을 때 보낸 말: 바쁨이 풀리고 까닭이 화면에 보인다. 다시 닿으면 다음 말이 돈다(앞 말도 대화에 남는다)."""
 
+    extra_env = {"STEWART_BACKEND_RETRIES": "1"}   # 판 146: 503 재시도 기다림(지수 증가)이 시험을 35초 붙잡던 것 — 한 번만
+
     def route(self, body):
         return msg("") if is_memory_helper(body) else msg("닿았다")
 

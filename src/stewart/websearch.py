@@ -8,6 +8,7 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import os
 import re
 import threading
 import time
@@ -18,11 +19,16 @@ from collections import Counter
 
 
 class SearxClient:
-    def __init__(self, url: str, categories: str = "", timeout_s: float = 20, min_interval_s: float = 3.2,
+    def __init__(self, url: str, categories: str = "", timeout_s: float = 20, min_interval_s: float | None = None,
                  retry_wait_s: float = 30, max_retries: int = 3, cache_path=None):
         self.url = url.rstrip("/")
         self.categories = categories
         self.timeout_s = timeout_s
+        if min_interval_s is None:   # 판 146: 따로 주지 않으면 환경 STEWART_SEARXNG_MIN_INTERVAL(초, 기본 3.2 — 서버 제한 분당 20)
+            try:
+                min_interval_s = max(0.0, float(os.environ.get("STEWART_SEARXNG_MIN_INTERVAL", "3.2")))
+            except ValueError:
+                min_interval_s = 3.2
         self.min_interval_s = min_interval_s
         self.retry_wait_s = retry_wait_s
         self.max_retries = max_retries

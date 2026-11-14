@@ -37,6 +37,7 @@ class PathBase(unittest.TestCase):
         self.model = FakeModel(route=lambda b: self.route(b))
         self.addCleanup(self.model.close)
         self.env = make_user_shape(self.root, self.model.url)
+        self.env.update(getattr(self, "extra_env", {}))   # 판 146: 길마다 더할 환경(예: 재시도 횟수)
         self.proj = self.root / "project"
         self.proj.mkdir(exist_ok=True)
         (self.proj / "README.md").write_text("첫 줄\n둘째 줄\n", encoding="utf-8")

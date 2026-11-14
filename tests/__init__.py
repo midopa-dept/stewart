@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("STEWART_SERVED_CONTEXT", "0")
 # 기억: chat·허브 기본 켬(판 50)이지만 시험 묶음은 끈다(지시문·도구 목록이 그대로이게). 기억 시험은 직접 켠다
 os.environ.setdefault("STEWART_MEMORY", "0")
+os.environ.setdefault("STEWART_SEARXNG_MIN_INTERVAL", "0")   # 판 146: 검색 요청 간격(3.2초)을 시험에서 기다리지 않게(간격 시험은 값을 직접 준다)
 os.environ.setdefault("STEWART_BACKEND_RETRIES", "0")   # 백엔드 다시 보내기 대기가 시험을 늦추지 않게(test_u59 만 푼다)
 os.environ.setdefault("STEWART_BOARD_QUIET", "0")
 os.environ.setdefault("STEWART_WEB_FETCH", "0")
@@ -18,7 +19,12 @@ os.environ.setdefault("STEWART_CLAUDE_HOME", os.path.join(os.path.dirname(os.pat
 os.environ.setdefault("STEWART_USER_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_no_user_dir"))
 # 사용자 기본 자리(~/.local/state/stewart·~/.local/share·~/.cache·~/.config/stewart 의 profiles·skills)를 타지 않게
 # 시험 한 번마다 새 임시 폴더로 돌린다. 시험이 직접 값을 주면 그 값이 이긴다(setdefault).
+import socketserver as _socketserver
 import tempfile as _tempfile
+
+# 판 146: 시험 안 서버(가짜 모델·허브 화면)의 serve_forever 기본 poll 간격 0.5초가 닫을 때마다 shutdown 을 0.5초씩 붙잡았다
+# (시험 하나에 서버 셋이면 1초 넘게) — 시험 프로세스에서만 0.05초로. 제품 허브의 기본값은 그대로다.
+_socketserver.BaseServer.serve_forever.__defaults__ = (0.05,)
 
 _SANDBOX = _tempfile.mkdtemp(prefix="stewart-tests-")
 for _k, _sub in (("XDG_STATE_HOME", "state"), ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"),
