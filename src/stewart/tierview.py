@@ -59,9 +59,11 @@ def key_state(b, manual: bool) -> tuple[str, str]:
     if b.api_key_env and os.environ.get(b.api_key_env):
         return "있음", where[0]
     if b.api_key_keychain:
-        from .config import keychain_secret
+        from .config import keychain_secret, keychain_stuck
         if keychain_secret(b.api_key_keychain):
             return "있음", f"키체인 {b.api_key_keychain}"
+        if keychain_stuck(b.api_key_keychain):   # 판 147.4: 없음이 아니라 답하지 않음 — 풀면 5분 안에(또는 다시 켜면) 다시 읽는다
+            return "없음", f"키체인 {b.api_key_keychain} 이(가) 답하지 않았다(잠겼으면 security unlock-keychain — 5분 뒤 다시 읽는다)"
     if b.api_key_file and not (manual and b.external()):
         try:
             if Path(os.path.expanduser(b.api_key_file)).read_text(encoding="utf-8").strip():
@@ -96,7 +98,9 @@ def rows(backends: dict, default: str, tiers: dict, instance_backend: str | None
         ks, kw = key_state(b, manual)
         if ks == "없음" and instance_keychain and name == OUTSIDE_TIER and bname == instance_backend:
             from .config import keychain_secret   # 따로 도는 허브는 켤 때 instance.toml 의 키체인 항목에서 키를 읽어 넘긴다
-            ks, kw = ("있음", f"키체인 {instance_keychain}") if keychain_secret(instance_keychain) else ("없음", f"키체인 {instance_keychain}")
+            from .config import keychain_stuck
+            ks, kw = ("있음", f"키체인 {instance_keychain}") if keychain_secret(instance_keychain) else \
+                ("없음", f"키체인 {instance_keychain}" + (" 이(가) 답하지 않았다(잠겼으면 security unlock-keychain)" if keychain_stuck(instance_keychain) else ""))
             b_kc = instance_keychain
         else:
             b_kc = None

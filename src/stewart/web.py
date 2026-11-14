@@ -128,6 +128,17 @@ input,button{font-size:1rem;padding:.6rem;width:100%;box-sizing:border-box;margi
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 
 
+
+class _Server(ThreadingHTTPServer):
+    """판 147.4: HTTPServer.server_bind 는 server_name 을 socket.getfqdn(주소)(역 이름 풀이)로 정한다 — 이름 풀이가 느린 기계
+    (CI macOS 러너에서 허브 하나 뜨는 데 ~35초)에서는 그만큼 늦게 뜬다. 우리는 server_name 을 쓰지 않으니 주소 그대로 둔다."""
+
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = str(host), port
+
 class WebApp:
     def __init__(self, main, hub, token: str | None, host: str = "127.0.0.1", port: int = 0, extra_hosts=(),
                  accounts=None, users=None, state_dir=None):
@@ -174,7 +185,7 @@ class WebApp:
             def do_OPTIONS(self):
                 app.handle(self, "OPTIONS")
 
-        self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.httpd = _Server((host, port), Handler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.cookie = f"{COOKIE}_{self.port}"   # 쿠키는 포트를 가리지 않는다 — 같은 브라우저의 두 허브(8765·8766)가 서로 덮지 않게

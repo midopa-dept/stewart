@@ -158,12 +158,24 @@ def backends_path() -> Path:
 
 
 _KEYCHAIN: dict = {}
+_KC_STUCK: dict = {}   # 판 147.4: 시간 안에 답하지 않은 항목 → 그때(monotonic). KC_RETRY_S 가 지나면 다시 읽는다(키체인을 푼 뒤)
+KC_RETRY_S = 300
+
+
+def keychain_stuck(service: str) -> bool:
+    """판 147.4: 이 항목을 읽으려 했는데 키체인이 시간 안에 답하지 않았다(잠긴 키체인 등) — 등급 표가 "키 없음"과 가려 보인다."""
+    return service in _KC_STUCK
 
 
 def keychain_secret(service: str) -> str | None:
-    """macOS 키체인에서 비밀 하나(service 이름, 지금 사용자 계정). 다른 OS·없으면 None. 값은 프로세스 메모리에만(기록 안 함)."""
+    """macOS 키체인에서 비밀 하나(service 이름, 지금 사용자 계정). 다른 OS·없으면 None. 값은 프로세스 메모리에만(기록 안 함).
+    키체인이 답하지 않으면(시간 초과) KC_RETRY_S 동안은 다시 기다리지 않고 None — 그 뒤(또는 허브를 다시 켜면) 다시 읽는다."""
     if service in _KEYCHAIN:
         return _KEYCHAIN[service]
+    import time
+    t = _KC_STUCK.get(service)
+    if t is not None and time.monotonic() - t < KC_RETRY_S:
+        return None
     import shutil
     import subprocess
     import sys
@@ -171,8 +183,12 @@ def keychain_secret(service: str) -> str | None:
         return None
     try:
         r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        _KC_STUCK[service] = time.monotonic()   # 판 147.4: 부를 때마다 10초씩 다시 기다리지 않게(굳히지는 않는다 — KC_RETRY_S 뒤 다시)
         return None
+    except OSError:
+        return None
+    _KC_STUCK.pop(service, None)
     val = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
     _KEYCHAIN[service] = val or None
     return _KEYCHAIN[service]

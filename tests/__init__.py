@@ -45,6 +45,17 @@ import shutil as _shutil
 
 _atexit.register(_shutil.rmtree, _SANDBOX, True)
 
+# 판 147.4: 시험과 시험이 띄운 허브·셸은 진짜 키체인에 묻지 않는다 — PATH 맨 앞에 바로 끝나는 가짜 security(항목 없음 꼴, 44).
+# (CI macOS 러너에서는 키체인 조회가 답하지 않아 허브마다 수십 초를 붙잡았다. 이 맥에서도 사용자 키체인에 조회를 보내지 않게.)
+# 키체인 길을 보는 시험은 subprocess 를 직접 가짜로 바꿔 본다.
+if os.name == "posix":
+    _kc_bin = os.path.join(_SANDBOX, "bin")
+    os.makedirs(_kc_bin, exist_ok=True)
+    with open(os.path.join(_kc_bin, "security"), "w") as _f:
+        _f.write("#!/bin/sh\necho 'security: (시험) 키체인을 묻지 않는다' >&2\nexit 44\n")
+    os.chmod(os.path.join(_kc_bin, "security"), 0o755)
+    os.environ["PATH"] = _kc_bin + os.pathsep + os.environ.get("PATH", "")
+
 
 def _sweep_stale(root: str, me: str, older_s: float = 6 * 3600) -> int:
     """강제 종료로 남은 앞 시험의 임시 폴더를 지운다(판 87). 이 시험 꾸러미가 만든 것(.pid 표지)만, 그 pid 가 죽었고

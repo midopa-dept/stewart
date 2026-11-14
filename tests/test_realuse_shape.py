@@ -176,6 +176,18 @@ def free_port() -> int:
     return p
 
 
+def _ci_note_slow_start(root: Path, secs: float) -> None:
+    """CI 전용: 늦게 뜬 허브의 hub.log 에 찍힌 스택을 주석(::warning)으로 — 파일은 이름만."""
+    import re
+    try:
+        text = (root / "hub.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    lines = [re.sub(r'File "[^"]*/([^/"]+)"', r'File "\1"', ln) for ln in text.splitlines() if "File " in ln or "Thread" in ln]
+    msg = "\n".join(lines[:40]).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::warning title=허브가 늦게 떴다({secs:.1f}초) — 12초 때 스택::{msg}", flush=True)
+
+
 class Hub:
     """하위 프로세스 허브와 화면이 쓰는 API(쿠키·CSRF·Origin)."""
 
@@ -187,6 +199,10 @@ class Hub:
         self.log = open(root / "hub.log", "w", encoding="utf-8")
         cmd = list(argv) if argv else [sys.executable, "-m", "stewart", "hub", "--project", str(self.project), "-b", SHAPE["main_backend"],
                                        "-p", SHAPE["profile"], "--port", str(self.port), *extra_args]
+        ci = os.environ.get("GITHUB_ACTIONS") == "true" and cmd[1:3] == ["-m", "stewart"]
+        if ci:   # 판 147.4: CI 에서만 — 허브가 12초 안에 안 뜨면 그 자리의 스택을 hub.log 에 찍게(러너에서만 느린 시작을 가르려고)
+            cmd = [cmd[0], "-c", "import faulthandler,runpy,sys; faulthandler.dump_traceback_later(12); "
+                   "sys.argv=['stewart']+sys.argv[1:]; runpy.run_module('stewart', run_name='__main__')", *cmd[3:]]
         self.p = subprocess.Popen(cmd, env=env, cwd=root, stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT)
         self.root, self.origin = root, f"http://127.0.0.1:{self.port}"
         t0 = time.time()
@@ -201,6 +217,8 @@ class Hub:
             time.sleep(0.3)
         else:
             raise RuntimeError("허브가 60초 안에 뜨지 않았다")
+        if ci and time.time() - t0 > 12:
+            _ci_note_slow_start(root, time.time() - t0)
         tok = next(root.rglob("hub-token")).read_text(encoding="utf-8").strip()
         st, _, hd = self.req("POST", "/login", urllib.parse.urlencode({"token": tok}),
                              {"Content-Type": "application/x-www-form-urlencoded", "Origin": self.origin})
