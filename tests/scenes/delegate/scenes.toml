@@ -1,0 +1,73 @@
+# 맡기기 장면(판 149) — 개발 묶음(set = dev): 결과를 읽고 지시문·넛지를 고쳐도 된다. 확증은 따로 둔 장면(다른 손)으로.
+# 작업 폴더는 tools/scenes/fixture_repo.py 의 시험 저장소 "ledgerly"(파일 46개) — 장면마다 새로 만든다.
+# kind = "should"     : 맡겨야 할 말(넓은 조사·서로 독립인 일 둘 이상·긴 구현 + 그사이 물음)
+# kind = "should_not" : 맡기지 말아야 할 말(파일 하나 고침·한두 걸음 확인·앞 대화를 알아야 하는 일) — 헛부름 대조
+# history: 앞 대화(그 장면이 앞 말을 알아야 할 때). 판정은 tools/scenes/delegate_measure.py.
+
+[[scene]]
+id = "dg-wide-usage"
+kind = "should"
+said = "이 저장소에서 load_config 가 어디서 어떻게 쓰이는지 다 찾아서 파일별로 표로 정리해 줘"
+
+[[scene]]
+id = "dg-wide-errors"
+kind = "should"
+said = "에러 처리 방식이 모듈마다 제각각인 것 같아. 전체를 훑어서 어떤 패턴이 몇 군데씩 있는지 정리해 줘"
+
+[[scene]]
+id = "dg-three-jobs"
+kind = "should"
+said = "README 설치 절에 ledgerly init 설명 한 줄 더하고, tests 에 parse_amount 시험 하나 추가하고, export 모듈이 실제로 어떤 포맷을 지원하는지도 조사해 줘"
+
+[[scene]]
+id = "dg-docs-vs-code"
+kind = "should"
+said = "docs 폴더 문서들 가운데 지금 코드랑 안 맞는 설명을 전부 찾아서 알려 줘"
+
+[[scene]]
+id = "dg-impl-plus-question"
+kind = "should"
+said = "billing 에 할인율 인자를 받는 기능을 넣어 줘. 그거 하는 동안 로깅이 어디서 어떻게 설정되는지도 알아봐 줘"
+
+[[scene]]
+id = "dg-todo-and-untested"
+kind = "should"
+said = "TODO·FIXME 주석을 다 모아서 파일별로 정리하고, 시험이 없는 handler 함수 목록도 같이 뽑아 줘"
+
+[[scene]]
+id = "dgn-one-fix"
+kind = "should_not"
+said = "src/ledgerly/money.py 의 parse_amount 가 1,000 처럼 쉼표 든 금액도 읽게 고쳐 줘"
+
+[[scene]]
+id = "dgn-typo"
+kind = "should_not"
+said = "README 첫 줄 오타 고쳐 줘 — smal 이 아니라 small"
+
+[[scene]]
+id = "dgn-version-bump"
+kind = "should_not"
+said = "__version__ 을 0.4.1 로 올려 줘(src/ledgerly/__init__.py)"
+
+[[scene]]
+id = "dgn-one-lookup"
+kind = "should_not"
+said = "config.py 에서 기본 포트가 몇이야?"
+
+[[scene]]
+id = "dgn-prior-context"
+kind = "should_not"
+said = "방금 그 함수에 음수 금액이면 오류를 내는 것도 넣어 줘"
+history = [
+  { role = "user", content = "parse_amount 는 어디 있어?" },
+  { role = "assistant", content = "src/ledgerly/money.py 의 parse_amount 입니다. 글을 Decimal 로 바꿉니다." },
+]
+
+[[scene]]
+id = "dgn-prior-answer"
+kind = "should_not"
+said = "아까 찾은 그 포트 값을 docs/config.md 에도 맞게 고쳐 줘"
+history = [
+  { role = "user", content = "기본 포트가 코드에서 몇이야?" },
+  { role = "assistant", content = "src/ledgerly/config.py 의 DEFAULT_PORT = 8088 입니다." },
+]
