@@ -310,7 +310,7 @@ CHAT_DESC_ADD = {   # 판 117.1: 실사용(chat·허브)에서만 도구 설명 
     "web_search": " 작업 폴더 밖의 사실·최신 소식·처음 보는 이름·제품을 찾을 때 쓴다 — 폴더 안 내용은 search.",
 }
 # 판 141: 자리 정체성 줄·도구 설명 덧붙임(실사용 chat 길만). 낱말 규칙(webnudge)을 늘리지 않고 자리가 고를 길을 말한다.
-# 기본 끔(창 5 회귀 점검에서 켬이 문턱을 넘었다). STEWART_PLACE_HINTS=1 이나 등급 prompt.place_hints = true 로 켠다. =0 이 늘 이긴다.
+# 기본 켬(판 160 — 판 155 의 기본 끔을 되돌림). STEWART_PLACE_HINTS=0 이나 등급 prompt.place_hints = false 로 끈다. =0 이 늘 이긴다.
 PLACE_HINTS_ENV = "STEWART_PLACE_HINTS"
 CODE_PLACE_WEB = ("- 작업 폴더 밖의 것(도구·제품·사람·소식)에 대한 물음은 — 이름만 던졌거나, 평·비교·쓸 만한가를 물어도 — "
                   "web_search 부터 한다. 폴더에 그 이름이 있을 까닭이 있으면 폴더도 함께 본다.")
@@ -325,13 +325,13 @@ PLACE_DESC_ADD = {
 
 
 def place_hints_on(env=None, tier=None) -> bool:
-    """자리 안내 켬·끔: 환경 =0 이면 끔, 등급 칸(prompt.place_hints)이 적혀 있으면 그 값, 아니면 환경 =1 일 때만 켬(기본 끔)."""
+    """자리 안내 켬·끔: 환경 =0 이면 끔, 등급 칸(prompt.place_hints)이 적혀 있으면 그 값, 아니면 켬(기본 켬, 판 160)."""
     v = (os.environ if env is None else env).get(PLACE_HINTS_ENV)
     if v == "0":
         return False
     if isinstance(tier, bool):
         return tier
-    return v is not None and v != ""
+    return True
 
 
 def with_place_lines(system: str, kind: str, names) -> str:

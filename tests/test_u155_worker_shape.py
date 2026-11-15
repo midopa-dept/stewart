@@ -1,7 +1,7 @@
 """판 155: 작업자 묶음 다듬기.
 
 - 작업자 지시문에 허브 역할 글·현황판 지시를 넘기지 않는다(작업자는 session_*·board 를 못 쓴다). 메인 지시문은 그대로.
-- 자리 안내(place_hints) 기본 끔. STEWART_PLACE_HINTS=1 이나 등급 prompt.place_hints = true 로 켜고, =0 이 늘 이긴다.
+- 자리 안내(place_hints): 판 155 는 기본 끔이었고 판 160 에서 다시 기본 켬. 등급 prompt.place_hints 가 적혀 있으면 그 값, =0 이 늘 이긴다.
 - run_shell 이 없는 묶음(읽기 작업자, 셸을 뺀 등급 등)에서는 shell_output·shell_kill 도 뺀다(볼 출력·끌 작업이 생기지 않는다).
 """
 
@@ -34,7 +34,8 @@ class TUnit(unittest.TestCase):
 
     def test_place_hints_default_off(self):
         from stewart.chat import place_hints_on
-        self.assertFalse(place_hints_on({}))
+        self.assertTrue(place_hints_on({}))                                      # 판 160: 기본 켬
+        self.assertFalse(place_hints_on({}, tier=False))
         self.assertTrue(place_hints_on({"STEWART_PLACE_HINTS": "1"}))
         self.assertFalse(place_hints_on({"STEWART_PLACE_HINTS": "0"}))
         self.assertTrue(place_hints_on({}, tier=True))
@@ -93,12 +94,12 @@ class TOnce(unittest.TestCase):
         self.assertIn("허브 메인으로서", str(mb["messages"][0]["content"]))                     # 메인 지시문은 그대로
         self.assertIn("shell_output", {t["function"]["name"] for t in mb["tools"]})
 
-    def test_hub_main_place_hints_off_by_default(self):
-        mb = [b for b in self.run_worker("--hub-main") if not is_worker(b)][0]
-        self.assertNotIn("이 컴퓨터의 앱·브라우저", str(mb["messages"][0]["content"]))
-        self.env["STEWART_PLACE_HINTS"] = "1"
+    def test_hub_main_place_hints_on_by_default(self):   # 판 160: 기본 켬(판 155 의 기본 끔을 되돌림), =0 이면 끔
         mb = [b for b in self.run_worker("--hub-main") if not is_worker(b)][0]
         self.assertIn("이 컴퓨터의 앱·브라우저", str(mb["messages"][0]["content"]))
+        self.env["STEWART_PLACE_HINTS"] = "0"
+        mb = [b for b in self.run_worker("--hub-main") if not is_worker(b)][0]
+        self.assertNotIn("이 컴퓨터의 앱·브라우저", str(mb["messages"][0]["content"]))
 
     def test_write_worker_keeps_shell(self):
         wb = [b for b in self.run_worker("--worker", "write", "--worker-tools", "read_file,list_dir,search,write_file,run_shell,shell_output,shell_kill") if is_worker(b)][0]

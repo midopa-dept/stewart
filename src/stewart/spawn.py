@@ -52,13 +52,13 @@ THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_
 
 # 판 132: 등급의 기본 생각 깊이(reasoning_effort). 표·환경에 값이 없을 때만, 그 등급 백엔드의 대화 틀이 그 낱말을 받을 때만
 # (backends.<이름>.effort_values 에 있을 때만) 싣는다. 목록이 없거나 그 낱말이 없으면 지금처럼 보내지 않고, 그 까닭을 보인다.
-# 판 159: presto 기본은 low 를 대화 틀 자리(chat_template_kwargs)에 싣는다 — 잰 꼴(등급 칸 reasoning_effort = "low",
+# 판 159: presto 기본은 low 를 대화 틀 자리(chat_template_kwargs)에 싣는다 — 등급 칸에 적은 꼴(reasoning_effort = "low",
 # reasoning_effort_at = "template") 그대로. 그 꼴은 effort_values 없이 쟀으므로 presto 는 목록이 없어도 싣는다
 # (목록이 있는데 low 가 없으면 싣지 않는다). 바깥 백엔드(provider·바깥 주소)에는 싣지 않는다 — 그 칸을 모르는 API 가 많다.
 # 되돌리기: 등급 칸에 reasoning_effort = "none"(보내지 않음) 또는 환경 STEWART_REASONING_EFFORT=none.
 TIER_DEFAULT_EFFORT = {"moderato": "medium", "presto": "low"}
 TIER_DEFAULT_EFFORT_AT = {"presto": "template"}     # 적지 않은 등급은 body(think.settings 기본)
-TIER_DEFAULT_NO_LIST = ("presto",)                  # effort_values 가 없어도 싣는 등급(잰 꼴이 목록 없이였다)
+TIER_DEFAULT_NO_LIST = ("presto",)                  # effort_values 가 없어도 싣는 등급(목록 없는 백엔드에서 잰 꼴)
 EFFORT_OFF = ("", "none", "off")   # 등급 칸·환경에 적으면 노력 값을 보내지 않는다(서버 기본)
 EFFORT_ENV = "STEWART_REASONING_EFFORT"
 

@@ -4,7 +4,7 @@
 - role: "full" | "line" | "off" — 허브 역할 글(HUB_MAIN_NOTE). line 은 머리 줄과 첫 맡기기 줄만 남긴다
 - board: true | false — 현황판 지시
 - engine_core: true | false — 내장 chat 지시문의 코딩·확인 절(CORE_PREFIXES 로 시작하는 항목). 정체·안전·승인·답 꼴 줄은 남는다
-- place_hints: true | false — 자리 안내(판 141, 기본 끔). 적으면 그 값, STEWART_PLACE_HINTS=0 이 이긴다
+- place_hints: true | false — 자리 안내(판 141, 기본 켬). 적으면 그 값, STEWART_PLACE_HINTS=0 이 이긴다
 - nudges: true | false — 대화 길의 넛지(의도·할 일·웹·맡기기)와 허브 목표 알림
 - examples: true | false — 예시 은행 붙이기
 - memory_guide: true | false — 기억 안내와 색인(기억 도구는 그대로 — 도구는 tools 칸으로)

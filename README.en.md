@@ -289,7 +289,7 @@ uv run stewart hub --project ~/my-project
     - AGENTS.md and STEWART.md in the working folder (project rules) always stay.
     - These fields do not change tools. Use `tools` and `tools_deny` for tools.
     - `place_hints`, `nudges` and `examples` are conversation-path devices and mean nothing for workers (reported in the table).
-    - Place guidance (`place_hints`) is off by default. Set this cell to `true` or the environment variable `STEWART_PLACE_HINTS=1` to turn it on. `=0` always turns it off.
+    - Place guidance (`place_hints`) is on by default. Set this cell to `false` to turn it off. The environment variable `STEWART_PLACE_HINTS=0` always turns it off.
     - Worker instructions never contain the hub role text or board instructions (workers cannot use session_* or board). So `role` and `board` also mean nothing for workers (reported in the table).
     - Example: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
     - For measurement, `filler_file = "<path>"` appends that file's text as is at the end of the profile instructions (before memory text and the skills index). Use it to build a cell that matches only in length. A relative path is resolved from the backends table's folder, and if the file cannot be read the run does not start. The feature fingerprint records its sha and character count.

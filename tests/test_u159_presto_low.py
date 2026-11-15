@@ -1,6 +1,6 @@
 """판 159: presto 기본 생각 깊이 low(대화 틀 자리) · 생각 되풀이 끊개(기본 끔).
 
-- presto 를 표에 생각 칸 없이 적으면, 잰 꼴(등급 칸 reasoning_effort = "low", reasoning_effort_at = "template")과 같은 요청이 나간다.
+- presto 를 표에 생각 칸 없이 적으면, 표에 적은 꼴(등급 칸 reasoning_effort = "low", reasoning_effort_at = "template")과 같은 요청이 나간다.
   그 꼴은 effort_values 없는 백엔드에서 쟀으므로 목록이 없어도 싣는다. 목록에 low 가 없거나 바깥 API 면 싣지 않고 까닭을 남긴다.
 - 표의 reasoning_effort·reasoning_effort_at, 환경 STEWART_REASONING_EFFORT 가 이긴다. moderato 규칙(판 132)은 그대로다.
 - 끊개: STEWART_THINK_REPEAT_CUT=N 또는 등급 칸 think_repeat_cut = N. 생각 스트림에서 같은 문단이 N번 나오면 그 걸음을 끊고
@@ -49,7 +49,7 @@ slim = true
 use = "곧. 찾기·읽기·요약, 검산할 것."
 default_for = ["read"]
 '''
-SEALED = PRESTO + 'reasoning_effort = "low"\nreasoning_effort_at = "template"\n'   # 잰 꼴(wlow)
+TABLE_FORM = PRESTO + 'reasoning_effort = "low"\nreasoning_effort_at = "template"\n'   # 표에 적은 꼴
 
 
 def tier_from(text):
@@ -65,16 +65,16 @@ def kwargs(t, backend, env=None):
 
 
 class TPrestoDefault(unittest.TestCase):
-    def test_same_request_as_sealed_form(self):
+    def test_same_request_as_explicit_form(self):
         b = B()
-        s0, k0, f0 = kwargs(tier_from(SEALED), b)
+        s0, k0, f0 = kwargs(tier_from(TABLE_FORM), b)
         s1, k1, f1 = kwargs(tier_from(PRESTO), b)
         self.assertEqual((k1, f1), (k0, f0))                                                    # 요청에 얹는 칸이 같다
         self.assertEqual(k1["overrides"], {"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "low"}})
         self.assertEqual({k: v for k, v in s1.items() if k != "source"}, {k: v for k, v in s0.items() if k != "source"})
         self.assertEqual((s0["source"]["effort"], s1["source"]["effort"]), ("tier", "default"))
         on_list = B(effort_values=["xhigh", "medium", "low"])
-        self.assertEqual(kwargs(tier_from(PRESTO), on_list)[1], kwargs(tier_from(SEALED), on_list)[1])
+        self.assertEqual(kwargs(tier_from(PRESTO), on_list)[1], kwargs(tier_from(TABLE_FORM), on_list)[1])
 
     def test_not_sent(self):
         t = tier_from(PRESTO)

@@ -723,15 +723,23 @@ def glob_files(env: ToolEnv, pattern: str, path: str = ".", sort: str = "mtime")
         found.sort(key=lambda x: x[1])
     out = [r + ("  (비밀 파일 — 도구로 읽기·쓰기 막힘)" if env.is_secret(f) else "") for _, r, f in found[:GLOB_MAX]]   # 비밀 표시는 보일 것만
     notes = []
-    if len(found) > GLOB_MAX:
-        notes.append(f"…(전체 {len(found)}개 중 {GLOB_MAX}개만 보임 — 패턴·path 를 좁혀라)")
+    room, used, k = MAX_OUT - 400, 0, 0   # 판 160: 결과 전체가 글자 상한(MAX_OUT) 안에 들게, 안내 줄 몫을 남기고 줄 단위로
+    for line in out:
+        if used + len(line) + 1 > room:
+            break
+        used, k = used + len(line) + 1, k + 1
+    if k < len(out):
+        CM.note("output_clip", "max_chars", "clip", orig_chars=sum(len(x) + 1 for x in out), kept_chars=used, mode="lines")
+    out = out[:k]
+    if len(found) > k:
+        notes.append(f"…(전체 {len(found)}개 중 {k}개만 보임 — {len(found) - k}개 더. 패턴·path 를 좁혀라)")
     if stopped:
         notes.append(f"…(파일 {GLOB_SCAN_MAX}개를 훑고 멈춤 — 결과가 더 있을 수 있다. path 를 좁혀라)")
     if timed_out:
         notes.append(f"…({GLOB_TIMEOUT_S}초 시간 초과로 멈춤 — 다 못 봤다(파일 {scanned}개까지 훑음). path 를 좁혀라)")
     if not out:
         return True, "(맞는 파일 없음)" + ("\n" + "\n".join(notes) if notes else "")
-    return True, _clip_notes("\n".join(out), notes, max(MAX_OUT, 60000))
+    return True, _clip_notes("\n".join(out), notes, MAX_OUT)
 
 
 TODO_STATUS = ("pending", "in_progress", "done")

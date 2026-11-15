@@ -115,8 +115,13 @@ class TClipKeepsNotes(unittest.TestCase):
             (deep / f"{i:05d}.txt").write_text("x", encoding="utf-8")
         env = T.ToolEnv(workdir=root)
         ok, out = T.glob_files(env, "**/*.txt", sort="name")
-        self.assertIn("…(잘림: 본문", out)
-        self.assertIn("1200개 중 1000개만 보임", out.splitlines()[-1])
+        lines = out.splitlines()
+        self.assertLessEqual(len(out), T.MAX_OUT)                                                # 판 160: 결과 전체가 상한 안
+        k = len(lines) - 1
+        self.assertLess(k, 1000)
+        self.assertIn(f"1200개 중 {k}개만 보임 — {1200 - k}개 더. 패턴·path 를 좁혀라", lines[-1])
+        self.assertTrue(all(x.endswith(".txt") for x in lines[:-1]))                            # 줄 가운데서 자르지 않는다
+        self.assertEqual(lines[:-1], sorted(lines[:-1]))
         with mock.patch.object(T, "GLOB_TIMEOUT_S", 0):
             ok, out = T.glob_files(env, "**/*.txt")
         self.assertIn("시간 초과로 멈춤 — 다 못 봤다", out.splitlines()[-1])

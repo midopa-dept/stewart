@@ -45,9 +45,13 @@ class GlobTool(unittest.TestCase):
         d.mkdir()
         for i in range(T.GLOB_MAX + 5):
             (d / f"f{i:05}.txt").write_text("")
-        out = self.g("many/*.txt", sort="name")
+        with mock.patch.object(T, "MAX_OUT", 10 ** 6):   # 개수 상한만 보려고 글자 상한을 넓힌다
+            out = self.g("many/*.txt", sort="name")
         self.assertEqual(len(out), T.GLOB_MAX + 1)
         self.assertIn(f"전체 {T.GLOB_MAX + 5}개 중 {T.GLOB_MAX}개", out[-1])
+        out = self.g("many/*.txt", sort="name")            # 판 160: 글자 상한(MAX_OUT) 안에서 줄 단위로, 남은 수를 알린다
+        self.assertLessEqual(len("\n".join(out)), T.MAX_OUT)
+        self.assertIn(f"전체 {T.GLOB_MAX + 5}개 중 {len(out) - 1}개만 보임 — {T.GLOB_MAX + 5 - len(out) + 1}개 더", out[-1])
 
     def test_scan_limit(self):
         with mock.patch.object(T, "GLOB_SCAN_MAX", 3):
