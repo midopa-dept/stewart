@@ -11,4 +11,5 @@ stewart 의 등급(presto·moderato·largo 등)은 같은 모델을 다른 방�
 |---|---|
 | [preregistration.md](preregistration.md) | P-004 사전 등록(결과 전): 등급마다 C·T−(도구만 줄임)·I−(지시문만 줄임) 칸, 판정 규칙, 바깥 벤치 겹쳐 재기, 결과 전에 고친 것. 이 파일이 들어간 커밋이 등록이다 |
 | [amendment-01.md](amendment-01.md) | P-004 개정 1(결과 전, 19:09 KST): BrowseComp-Plus 판정 묶음 X 200 을 뽑는 규칙과 목록 sha, 측정 길 조건, 자리 안내 기본값을 칸마다 적어 고정 |
+| [amendment-02.md](amendment-02.md) | P-004 개정 2(결과 전, 19:20 KST): BrowseComp-Plus 파일 길의 도구 조건 — 말뭉치, 모델 없는 도구 시험, 동시 값을 정하는 규칙, 결과에 더 낼 것, 범위 문장 |
 | [related-work.md](related-work.md) | 선행 연구: 도구 수·지시문 길이·생각 깊이·설정을 다르게 두는 관행·큰 모델에도 같은가, 그리고 우리가 보탤 수 있는 것 |
