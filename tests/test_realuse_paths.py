@@ -176,7 +176,7 @@ class T07NewChats(PathBase):
                     name = self.hub.post("/api/chat/new", {"how": "fresh", "kind": kind, "title": "새 대화", "from": "main",
                                                            **({"tier": tier} if tier else {})})["chat"]
                     row = next(c for c in self.state()["chats"] if c["name"] == name)
-                    self.assertEqual((row["kind"], row.get("tier") or ""), (kind, tier))
+                    self.assertEqual((row["kind"], row.get("tier")), (kind, tier or "largo"))              # 판 152: 등급 없음('')은 largo 로 보인다
                     n0 = len(self.model.requests)
                     self.say("안녕", name)
                     st = self.idle(name)

@@ -196,7 +196,7 @@ uv run stewart hub --project ~/my-project
   - With no tier table, or no such field, workers have no tier and behave as before.
 - What does not change
   - `presto`, `largo` and `rubato` stay as they were (no effort value sent = server default).
-  - Runs without a tier (`stewart run`, `chat`, and "default" in a new hub conversation) stay as they were.
+  - Runs without a tier (`stewart run`, `chat`, and older hub conversations opened without a tier) stay as they were.
 - It is sent only when that tier's backend chat template accepts `medium`: the backend's `effort_values` must include `medium`.
   - With no list, or no `medium` in it, nothing is sent (as before).
   - The reason shows in `stewart tiers`, the Settings sheet and the conversation's start line.
@@ -223,8 +223,11 @@ uv run stewart hub --project ~/my-project
 - `stewart tiers` shows in one table which server and model each of the four tiers (presto, moderato, largo, rubato) points to, whether it is reachable, its concurrency, its thinking depth (value and source), its key (present or not, never the value) and its spending caps.
   - `--no-check` skips probing the servers, `--json` gives the same fields as the hub screen, and `--instance <name>` shows a separately run hub's table.
   - presto, moderato and largo fall back to the default model when they are not in the table. rubato is "not set" when it is not in the table.
-- "+ New conversation" in the hub opens an empty conversation straight away. On its first screen you pick the place (stewart · *parlando*) and the model tier (default, presto, moderato, largo, rubato).
+- "+ New conversation" in the hub opens an empty conversation straight away. On its first screen you pick the place (stewart · *parlando*) and the model tier (presto, moderato, largo, rubato).
+  - The first choice is the last tier the browser remembers, or `largo` if there is none.
   - Tiers with no connection or no key are greyed out and cannot be picked.
+  - Older conversations opened without a tier, and a hub main started without `--tier`, show as `largo`. If the table has a `[tiers.largo]` entry they follow it; if not, nothing changes.
+    - `stewart chat` (outside the hub) follows that entry only when given `--tier largo`.
   - The choice is fixed once you send the first message. Branches keep the tier, and a conversation that used the outside tier reopens with it.
 - `stewart setup` builds the backends table by asking questions (terminal only).
   - With no table yet it starts with a model server. Given an address, it finds the model name and context size with `GET /models`.

@@ -378,11 +378,14 @@ def main_tier(a, workdir: str):
     """판 113: --tier 가 있으면 그 등급(backends 표 [tiers.<이름>])의 백엔드·프로필·문맥 예산으로 메인을 켠다.
     등급에 slim = true 면 얇은 메인(slim.py). -b 는 작업자 기본 백엔드로 남는다. 없으면 -p·-b 그대로."""
     from .cli import resolve
-    name = getattr(a, "tier", None)
-    if not name:
-        return resolve(a.profile, a.backend, workdir)
     from . import spawn as SP
     from .config import ConfigError
+    name = getattr(a, "tier", None)
+    if not name:   # 판 152: 허브 메인의 등급 없음('')도 표에 largo 칸이 있으면 그 칸을 따른다(`chat --once` 는 --tier 없이 여기 오지 않는다)
+        from . import tierview as TV
+        if os.environ.get("STEWART_INSTANCE") or TV.EMPTY_TIER not in SP.load_tiers(main=True):
+            return resolve(a.profile, a.backend, workdir)
+        name = TV.EMPTY_TIER
     tiers = SP.load_tiers(main=True)
     t = tiers.get(name)
     if t is None:   # 판 116: 없는 등급은 기본 모델로 대신하지 않는다(바깥 유료 등급이 몰래 물려받기로 떨어지지 않게)
@@ -1120,14 +1123,16 @@ class HubMain:
         return getattr(self, "main", None) or self
 
     def _chat_list(self) -> list[dict]:
+        from . import tierview as TV
         root = self._root()
         tier = (((root._profile.raw or {}).get("tier") or {}).get("name")) or ""
-        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": tier,
+        shown = (lambda t: t) if os.environ.get("STEWART_INSTANCE") else (lambda t: t or TV.EMPTY_TIER)   # 판 152: 등급 없음('')은 largo 로 보인다
+        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": shown(tier),
                 **_conv_brief(root.sess)}]
         for c in root.chats.values():
             out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir),
                         "kind": getattr(c, "kind", root.kind),
-                        "tier": getattr(c, "tier", "") or (tier if getattr(c, "kind", root.kind) == root.kind else ""),
+                        "tier": shown(getattr(c, "tier", "") or (tier if getattr(c, "kind", root.kind) == root.kind else "")),
                         **_conv_brief(c.sess)})
         return out
 
@@ -1167,7 +1172,16 @@ class HubMain:
                 for r in rows:
                     if r.get("status") == "unchecked" and r["tier"] in cache["st"]:
                         r["status"] = cache["st"][r["tier"]]
-        return {"instance": inst, "rows": rows}
+        return {"instance": inst, "rows": rows, **({} if inst else {"new_default": TV.NEW_CHAT_TIER, "empty_as": TV.EMPTY_TIER})}
+
+    def empty_tier_profile(self, kind: str):
+        """판 152: 등급 없음('')의 (프로필, 백엔드) — 표에 EMPTY_TIER(largo) 칸이 있으면 그 칸을 따른다(화면에 largo 로 보이는 것 = 실제 largo).
+        칸이 없으면 지금과 같다(그 자리 프로필·허브 모델 — largo 와 요청 본문이 같다). 따로 도는 허브는 그대로."""
+        from . import spawn as SP
+        from . import tierview as TV
+        if not os.environ.get("STEWART_INSTANCE") and TV.EMPTY_TIER in SP.load_tiers():
+            return self.tier_profile(TV.EMPTY_TIER, kind)
+        return self.kind_profile(kind)
 
     def tier_profile(self, tier: str, kind: str):
         """판 125: 사람이 고른 등급의 (프로필, 백엔드) — 그 자리(kind)의 프로필에 등급의 백엔드·문맥 예산·생각 칸.
@@ -1541,7 +1555,7 @@ class HubChat(HubMain):
         self.hub, self.main, self.name, self.title, self.origin = hub, main, name, title, origin
         self.kind = kind or main.kind   # 판 120: 만들 때 정하고 바뀌지 않는다(지시문·도구 고정 → 앞부분 캐시 유지)
         self.tier = tier or ""          # 판 125: 사람이 고른 등급(만들 때 정하고 바뀌지 않는다)
-        prof, back = main.tier_profile(tier, self.kind) if tier else main.kind_profile(self.kind)
+        prof, back = main.tier_profile(tier, self.kind) if tier else main.empty_tier_profile(self.kind)
         self.chats = {}
         hub.register_chat(name, prof.workdir, main._mode, title=title, origin=origin, kind=self.kind)
         self.ui = HubMainUI(hub, name)

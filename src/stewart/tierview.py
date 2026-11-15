@@ -9,6 +9,7 @@
 - 키 값은 읽어도 화면·기록에 내지 않는다(있음·없음만). 바깥 사람만 등급은 키 파일(api_key_file)을 쓰지 않는다.
 - 판 136: 안쪽(바깥 아닌) 백엔드는 키 자리를 적었는데 값이 비어도 등급을 막지 않는다 — 그때는 키 없이 보낸다(KEY_EMPTY_LOCAL).
   막는 것은 찔러 본 서버가 401·403 을 낼 때(상태 "인증 거부")뿐이다. 바깥 백엔드의 "키 없음"은 그대로 막는다.
+- 판 152: '기본' 칸은 없다. 등급 없음('')은 EMPTY_TIER(largo)로 보이고 그 표 칸을 따른다. 새 대화의 처음 값은 NEW_CHAT_TIER.
 - 판 132: 등급마다 생각 깊이(reasoning_effort)와 출처 — 표(등급 칸)·기본(spawn.TIER_DEFAULT_EFFORT)·환경(STEWART_REASONING_EFFORT).
   값 없음은 노력 값을 보내지 않는다는 뜻이다(서버 기본). 기본값을 싣지 못하면 그 까닭을 표 밑에 적는다.
 """
@@ -22,6 +23,8 @@ from pathlib import Path
 
 CANON = ("presto", "moderato", "largo", "rubato")
 OUTSIDE_TIER = "rubato"          # 따로 도는 허브(instance)의 백엔드가 앉는 등급
+EMPTY_TIER = "largo"     # 판 152: 등급 없음('')은 화면에 이 등급으로 보이고, 표에 이 등급 칸이 있으면 그 칸을 따른다(내부 값 '' 는 그대로)
+NEW_CHAT_TIER = "largo"  # 판 152: 새 대화의 처음 값(브라우저에 고른 값이 없을 때). 바꿀 때는 이 한 줄만
 DEFAULT_USD_DAY = 3.0
 DEFAULT_USD_CHAT = 1.0
 

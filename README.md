@@ -198,7 +198,7 @@ uv run stewart hub --project ~/my-project
   - 등급 표가 없거나 그 칸이 없으면 작업자에게는 등급이 없고, 예전 그대로입니다.
 - 바뀌지 않는 것
   - `presto`·`largo`·`rubato` 는 그대로입니다(노력 값을 보내지 않음 = 서버 기본).
-  - 등급 없이 도는 실행(`stewart run`·`chat`, 허브 새 대화의 "기본")도 그대로입니다.
+  - 등급 없이 도는 실행(`stewart run`·`chat`, 허브의 등급 없는 옛 대화)도 그대로입니다.
 - 그 등급 백엔드의 대화 틀이 `medium` 을 받을 때만 싣습니다. 백엔드 칸 `effort_values` 에 `medium` 이 있어야 합니다.
   - 목록이 없거나 `medium` 이 없으면 보내지 않습니다(예전 그대로).
   - 그 까닭은 `stewart tiers`·설정 시트·대화 시작 줄에 보입니다.
@@ -225,8 +225,11 @@ uv run stewart hub --project ~/my-project
 - `stewart tiers` 는 등급 넷(presto·moderato·largo·rubato)이 어느 서버·모델을 가리키는지, 닿는지, 동시 수, 생각 깊이(값·출처), 키(있음·없음만), 돈 상한을 한 표로 보입니다.
   - `--no-check` 는 서버를 찔러 보지 않고, `--json` 은 허브 화면과 같은 칸을 냅니다. `--instance <이름>` 은 따로 도는 허브의 표입니다.
   - 표에 없는 presto·moderato·largo 는 기본 모델을 씁니다. rubato 는 표에 없으면 "설정 없음"입니다.
-- 허브의 「＋ 새 대화」는 바로 빈 대화를 엽니다. 빈 대화 첫 화면에서 자리(stewart · *parlando*)와 모델 등급(기본·presto·moderato·largo·rubato)을 고릅니다.
+- 허브의 「＋ 새 대화」는 바로 빈 대화를 엽니다. 빈 대화 첫 화면에서 자리(stewart · *parlando*)와 모델 등급(presto·moderato·largo·rubato)을 고릅니다.
+  - 처음 고른 값은 브라우저가 기억한 마지막 등급이고, 기억이 없으면 `largo` 입니다.
   - 연결 없음·키 없음인 등급은 흐리게 보이고 고를 수 없습니다.
+  - 등급 없이 연 옛 대화와 `--tier` 없이 켠 허브 메인은 `largo` 로 보입니다. 표에 `[tiers.largo]` 칸이 있으면 그 칸을 따르고, 칸이 없으면 예전과 같습니다.
+    - `stewart chat`(허브 밖)은 `--tier largo` 를 줄 때만 그 칸을 따릅니다.
   - 첫 말을 보내면 굳고, 등급은 그 뒤 바뀌지 않습니다. 갈래는 같은 등급이고, 바깥 등급으로 하던 대화는 다시 열 때 그 등급으로 엽니다.
 - `stewart setup` 은 물어 가며 backends 표를 만듭니다(터미널에서만).
   - 표가 없으면 모델 서버부터 묻습니다. 주소를 넣으면 `GET /models` 로 모델 이름·문맥 크기를 찾아 보입니다.

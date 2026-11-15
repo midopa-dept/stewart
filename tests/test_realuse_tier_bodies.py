@@ -155,6 +155,28 @@ class TCliLargoKnobs(Base):
         self.assertEqual((lt["system"], lt["tools"]), (l0["system"], l0["tools"]))
 
 
+class TEmptyAsLargo(Base):
+    """판 152: '기본' 칸 없음 — 등급 없음('')은 화면에 largo 로 보이고, 표에 [tiers.largo] 칸이 있으면 그 칸을 따른다(허브 메인도)."""
+    table = MODERATO + '\n[tiers.largo]\nthinking_token_budget = 8192\nthink_max_tokens = 16384\n'
+
+    def test_empty_follows_largo_row(self):
+        h = Hub(self.root, self.env)
+        self.addCleanup(h.close)
+        t = h.get("/api/tiers")
+        self.assertEqual((t.get("new_default"), t.get("empty_as")), ("largo", "largo"))
+        self.assertNotIn("", [r["tier"] for r in t["rows"]])
+        main = self.hub_first(h, main=True)
+        largo = self.hub_first(h, "largo")
+        none = self.hub_first(h)
+        self.assertEqual(none, largo)                                                               # '' = largo 칸(예산·상한까지)
+        self.assertEqual(main, largo)                                                               # 허브 메인(--tier 없이)도
+        self.assertEqual((largo["keys"]["max_tokens"], largo["keys"].get("thinking_token_budget")), (16384, 8192))
+        rows = h.get("/api/state")["chats"]
+        self.assertEqual({c["tier"] for c in rows}, {"largo"})                                      # 화면 표시: 등급 없음 = largo
+        l0, r = self.cli_first()
+        self.assertEqual(l0["keys"]["max_tokens"], 8192, r.stderr[-400:])                           # `chat --once`(--tier 없이)는 표 칸을 따르지 않는다(측정 L0)
+
+
 class TWorkers(Base):
     table = MODERATO
 

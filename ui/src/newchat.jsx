@@ -24,7 +24,8 @@ export async function startNew(kind, tier) {
   kind = kind ?? read(KIND_KEY, 'talk')
   tier = tier ?? read(TIER_KEY, '')
   if (tier && !rows.some(r => r.tier === tier && usable(r))) tier = ''
-  if (!tier && t.instance) tier = rows.find(usable)?.tier || ''   // 따로 도는 허브: 연결된 등급(rubato)
+  if (!tier && t.new_default && rows.some(r => r.tier === t.new_default && usable(r))) tier = t.new_default   // 판 152: 처음 값(서버 상수 하나)
+  if (!tier) tier = rows.find(usable)?.tier || ''   // 따로 도는 허브(rubato)·처음 값을 못 쓸 때: 연결된 첫 등급
   const r = await post('/api/chat/new', { how: 'fresh', kind, ...(tier ? { tier } : {}), title: NEW_TITLE, from: chat.value })
   openChat(r.chat)
   for (const n of drafts) await post('/api/chat/close', { chat: n }).catch(() => {})   // 앞의 빈 새 대화는 닫는다(쌓이지 않게)
@@ -59,10 +60,10 @@ export function DraftPick() {
     class={'py-1 ' + (on ? 'text-fg font-semibold underline underline-offset-4 decoration-1' : ok ? 'text-mute hover:text-fg' : 'text-mute/40 cursor-not-allowed')}
     onClick={onClick}>{label}</button>
   const rows = t.rows || []
-  const opts = [...(t.instance ? [] : [{ tier: '', label: '기본', ok: true }]), ...rows.map(r => ({ tier: r.tier, label: r.tier, ok: usable(r), r }))]
+  const opts = rows.map(r => ({ tier: r.tier, label: r.tier, ok: usable(r), r }))   // 판 152: '기본' 칸 없음 — 등급 없음('')은 서버가 largo 로 보인다
   const sel = opts.find(o => o.tier === tier)
   const r = sel?.r
-  const sub = !sel ? '' : !r ? '허브의 기본 모델' : [r.external ? '바깥 API · ' + r.provider : r.model, ST[r.status]].filter(Boolean).join(' · ')
+  const sub = !r ? '' : [r.external ? '바깥 API · ' + r.provider : r.model, ST[r.status]].filter(Boolean).join(' · ')
   const off = opts.filter(o => o.tier && !o.ok && o.r?.connected).map(o => `${o.label} ${o.r.key === '없음' ? '키 없음' : ST[o.r.status]}`)
   return <div class="mt-6 text-[14px] space-y-1.5">
     <div class="flex justify-center gap-4" role="radiogroup" aria-label="자리">
