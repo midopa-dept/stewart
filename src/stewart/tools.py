@@ -93,6 +93,20 @@ def _clip(s: str, n: int = MAX_OUT) -> str:
     return s[:n] + f"\n…(잘림: 전체 {len(s)}자 중 {n}자)"
 
 
+def _clip_notes(body: str, notes, n: int = MAX_OUT) -> str:
+    """본문만 n 자 안으로 자르고(줄 경계에서), 안내 줄(notes)은 자른 뒤에도 늘 끝에 붙인다 — 자르기가 '더 있다·멈췄다' 안내를 먹지 않게."""
+    tail = "\n".join(x for x in (notes or ()) if x)
+    room = max(1000, n - (len(tail) + 1 if tail else 0))
+    if len(body) > room:
+        CM.note("output_clip", "max_chars", "clip", orig_chars=len(body), kept_chars=room, mode="head")
+        cut = body[:room]
+        nl = cut.rfind("\n")
+        if nl > room // 2:
+            cut = cut[:nl]
+        body = cut + f"\n…(잘림: 본문 {len(body)}자 중 {len(cut)}자)"
+    return body + ("\n" + tail if tail else "")
+
+
 def _clip_ht(env: ToolEnv, s: str) -> str:
     """긴 셸 출력: 앞 SHELL_HEAD + 뒤 SHELL_TAIL 자만 남기고, 전문은 env.outputs 에 두어 shell_output 으로 보게 한다."""
     if len(s) <= SHELL_HEAD + SHELL_TAIL:
@@ -196,11 +210,25 @@ def read_file(env: ToolEnv, path: str, offset: int = 1, limit: int = 400) -> tup
             lines = nb_lines
     offset = max(1, int(offset))
     chunk = lines[offset - 1 : offset - 1 + int(limit)]
-    body = "\n".join(f"{i:>5}\t{l}" for i, l in enumerate(chunk, offset))
+    rows = [f"{i:>5}\t{l}" for i, l in enumerate(chunk, offset)]
+    if not rows:
+        return True, "(빈 파일)"
+    keep, size = len(rows), 0
+    for k, r in enumerate(rows):   # 글자 상한 안에 드는 줄까지만(줄 가운데서 자르지 않는다 — 이어 읽을 offset 이 맞게)
+        size += len(r) + 1
+        if size > MAX_OUT - 200:
+            keep = max(1, k)
+            break
+    body = "\n".join(rows[:keep])
+    if keep < len(rows):
+        CM.note("output_clip", "max_chars", "clip", orig_chars=sum(len(r) + 1 for r in rows), kept_chars=len(body), mode="head")
+        if len(body) > MAX_OUT - 200:   # 한 줄이 상한보다 길다
+            body = body[:MAX_OUT - 200] + " [... 긴 줄 잘림]"
+    last = offset + keep - 1
     tail = ""
-    if offset - 1 + len(chunk) < len(lines):
-        tail = f"\n…({len(lines)}줄 중 {offset}~{offset + len(chunk) - 1}줄. offset을 늘려 더 읽을 수 있다)"
-    return True, _clip(body + tail) if body else "(빈 파일)"
+    if last < len(lines):
+        tail = f"\n…({len(lines)}줄 중 {offset}~{last}줄. 이어 읽으려면 offset={last + 1})"
+    return True, body + tail
 
 
 def view_image(env: ToolEnv, path: str, region: list | None = None) -> tuple[bool, str]:
@@ -251,7 +279,6 @@ def list_dir(env: ToolEnv, path: str = ".", recursive: bool = False) -> tuple[bo
             for f in sorted(files):
                 out.append(str(r / f))
             if len(out) > 500:
-                out.append("…(500개 넘어서 멈춤)")
                 break
     else:
         for c in sorted(p.iterdir()):
@@ -260,7 +287,11 @@ def list_dir(env: ToolEnv, path: str = ".", recursive: bool = False) -> tuple[bo
             except OSError:               # 권한 없는 항목 하나 때문에 목록 전체가 실패하지 않게
                 d = False
             out.append(c.name + ("/" if d else ""))
-    return True, _clip("\n".join(x.removeprefix("./") for x in out) or "(빈 폴더)")
+    notes = []
+    if recursive and len(out) > 500:
+        out = out[:500]
+        notes.append("…(500개 넘어서 멈춤 — path 를 좁히거나 glob 으로)")
+    return True, _clip_notes("\n".join(x.removeprefix("./") for x in out) or "(빈 폴더)", notes)
 
 
 def write_file(env: ToolEnv, path: str, content: str, append: bool = False) -> tuple[bool, str]:
@@ -438,10 +469,17 @@ def _rg_bin() -> str | None:
     return shutil.which("rg")
 
 
+def _path_key(path: str) -> tuple:
+    return tuple(path.split("/"))
+
+
 def _search_rg(env: ToolEnv, rg: str, rx_src: str, base: Path, glob: str | None, context: int,
-               mode: str, ignore_case: bool) -> list[str] | None:
-    """rg 로 찾는다. 쓸 수 없으면(정규식 문법 차이 등) None → 파이썬 방식."""
-    cmd = [rg, "--no-config", "--color", "never", "--sort", "path", "--with-filename", "--hidden",
+               mode: str, ignore_case: bool) -> tuple[list[str], list[str]] | None:
+    """rg 로 찾는다 → (줄, 안내 줄). 쓸 수 없으면(정규식 문법 차이 등) None → 파이썬 방식.
+    먼저 여러 스레드로 돌리고(--sort 를 쓰면 스레드 하나로 돈다) 받은 결과를 파일 묶음째 경로순으로 줄 세운다.
+    맞은 줄이 SEARCH_SWITCH 를 넘으면 --sort path(한 스레드)로 다시 돌려 앞 SEARCH_MAX 줄에서 멈춘다.
+    어느 길이든 결과는 경로순 앞부분이라 같고, 돌릴 때마다 같다. 시간 상한은 두 번을 합쳐 SEARCH_TIMEOUT_S."""
+    cmd = [rg, "--no-config", "--color", "never", "--with-filename", "--hidden",
            "--no-require-git", "--no-ignore-global", "--no-ignore-exclude", "--no-ignore-dot",
            "--max-columns", str(SEARCH_COL), "--max-columns-preview"]
     if ignore_case:
@@ -466,6 +504,31 @@ def _search_rg(env: ToolEnv, rg: str, rx_src: str, base: Path, glob: str | None,
     # 비밀 파일은 rg glob 으로 빼지 않는다(견본 파일 되살리기를 glob 으로 하면 화이트리스트가 되어 버린다).
     # 아래에서 출력 경로마다 env.is_secret 으로 거른다 — 내용은 모델에 가지 않는다.
     cmd += ["-e", rx_src, "--", _rel(env, base)]
+    end = time.monotonic() + SEARCH_TIMEOUT_S
+    got = _rg_run(env, cmd, glob, mode, context, end, ordered=False)   # 여러 스레드 — 드문 패턴은 끝까지 훑어도 빠르다
+    if got is None:
+        return None
+    lines, seen, timed_out, many = got
+    if many:   # 맞은 줄이 많다 — 경로순 한 스레드로 다시 돌려 앞 SEARCH_MAX 줄에서 멈춘다(흔한 패턴은 이쪽이 빠르다). 결과는 같은 앞부분
+        got = _rg_run(env, cmd[:1] + ["--sort", "path"] + cmd[1:], glob, mode, context, end, ordered=True)
+        if got is None:
+            return None
+        lines, seen, timed_out, _ = got
+    notes = []
+    if timed_out:
+        notes.append(f"…({SEARCH_TIMEOUT_S}초 시간 초과로 멈춤 — 다 못 봤다(그때까지 받은 {seen}줄 가운데 경로순). path·glob 로 좁혀라)")
+    return lines, notes
+
+
+SEARCH_SWITCH = 2000   # 여러 스레드로 받다가 맞은 줄이 이만큼을 넘으면 경로순 한 스레드로 바꾼다
+
+
+def _rg_run(env: ToolEnv, cmd: list[str], glob: str | None, mode: str, context: int, end: float, ordered: bool):
+    """rg 한 번 → (경로순 줄, 받은 줄 수, 시간 초과, 많음) 또는 None(rg 오류).
+    ordered=False: 출력 순서가 섞이니 파일 묶음째 받아 경로순으로 줄 세우고 앞 SEARCH_MAX+1 줄 만큼만 쥔다.
+      받은 줄이 SEARCH_SWITCH 를 넘으면 멈추고 많음=True.
+    ordered=True(--sort path): 받은 순서가 경로순이니 SEARCH_MAX 줄을 넘으면 멈춘다."""
+    import bisect
     try:
         proc = subprocess.Popen(cmd, cwd=env.workdir, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
@@ -477,15 +540,28 @@ def _search_rg(env: ToolEnv, rg: str, rx_src: str, base: Path, glob: str | None,
         timed_out.append(True)
         proc.kill()
 
-    timer = threading.Timer(SEARCH_TIMEOUT_S, _kill)
+    timer = threading.Timer(max(0.0, end - time.monotonic()), _kill)
     timer.start()
-    lines: list[str] = []
+    blocks: list[tuple[tuple, list[str]]] = []
+    held = 0
+    cur_path, cur, sep = None, None, False
+    seen, many, full = 0, False, False
+
+    def _push(path, rows):
+        nonlocal held
+        k = _path_key(path)
+        if blocks and held >= SEARCH_MAX + 1 and k > blocks[-1][0]:
+            return                           # 이미 쥔 앞부분보다 뒤 — 버린다
+        bisect.insort(blocks, (k, rows), key=lambda b: b[0])
+        held += len(rows)
+        while len(blocks) > 1 and held - len(blocks[-1][1]) >= SEARCH_MAX + 1:
+            held -= len(blocks.pop()[1])
+
     try:
         for line in proc.stdout:
             line = line.rstrip("\n")
             if line == "--":
-                if lines and lines[-1] != "--":
-                    lines.append(line)
+                sep = True
                 continue
             path, nul, rest = line.partition("\0")
             path = path.removeprefix("./")
@@ -494,34 +570,55 @@ def _search_rg(env: ToolEnv, rg: str, rx_src: str, base: Path, glob: str | None,
             if env.is_secret(Path(path)):
                 continue
             if not nul:                       # files 모드: 경로만
-                lines.append(path)
+                row = path
             elif mode == "count":
-                lines.append(f"{path}:{rest}")
+                row = f"{path}:{rest}"
             else:                             # "12:본문"(맞은 줄) 또는 "12-본문"(앞뒤 줄)
                 k = len(rest) - len(rest.lstrip("0123456789"))
-                sep = rest[k:k + 1]
-                lines.append(f"{path}{sep}{rest[:k]}{sep}{rest[k + 1:]}")
-            if len(lines) > SEARCH_MAX:
+                sp = rest[k:k + 1]
+                row = f"{path}{sp}{rest[:k]}{sp}{rest[k + 1:]}"
+            if path == cur_path:              # rg 는 한 파일의 출력을 한 덩이로 낸다
+                if sep:
+                    cur.append("--")
+                cur.append(row)
+            else:
+                if cur_path is not None:
+                    _push(cur_path, cur)
+                cur_path, cur = path, [row]
+            sep = False
+            seen += 1
+            if ordered and held + len(cur) + (len(blocks) if context else 0) > SEARCH_MAX:   # 파일 사이 "--" 까지 센다
+                full = True
                 proc.kill()
                 break
+            if not ordered and seen > SEARCH_SWITCH:
+                many = True
+                proc.kill()
+                break
+        if cur_path is not None and not many:
+            _push(cur_path, cur)
         proc.wait()
     finally:
         timer.cancel()
         proc.stdout.close()
-    if timed_out:
-        lines.append(f"…({SEARCH_TIMEOUT_S}초 시간 초과로 멈춤 — path·glob 로 좁혀라)")
-    while lines and lines[-1] == "--":
-        lines.pop()
-    if proc.returncode == 2 and not lines:
+    lines: list[str] = []
+    for _, rows in blocks:
+        if context and lines:
+            lines.append("--")                # 파일 사이(rg 와 같게)
+        lines += rows
+    if proc.returncode == 2 and not lines and not timed_out and not many and not full:
         return None                       # 정규식 오류(rg 문법)·실행 오류 → 파이썬 방식으로 다시
-    return lines
+    return lines, seen, bool(timed_out), many
 
 
 def _search_py(env: ToolEnv, rx: re.Pattern, base: Path, glob: str | None, context: int,
-               mode: str) -> list[str]:
-    files = [base] if base.is_file() else list(fswalk.walk(base, skip=lambda q, d: not d and env.is_secret(q)))
+               mode: str) -> tuple[list[str], list[str]]:
+    files = [base] if base.is_file() else fswalk.walk(base, skip=lambda q, d: not d and env.is_secret(q))
     out: list[str] = []
-    for f in files:
+    end = time.monotonic() + SEARCH_TIMEOUT_S
+    for n, f in enumerate(files):
+        if n % 64 == 0 and time.monotonic() > end:
+            return out, [f"…({SEARCH_TIMEOUT_S}초 시간 초과로 멈춤 — 다 못 봤다(파일 {n}개까지, 경로순). path·glob 로 좁혀라)"]
         rel = _rel(env, f)
         if glob and not fswalk.glob_match(rel, glob):
             continue
@@ -552,7 +649,7 @@ def _search_py(env: ToolEnv, rx: re.Pattern, base: Path, glob: str | None, conte
                 shown = max(shown, hi)
         if len(out) > SEARCH_MAX:
             break
-    return out
+    return out, []
 
 
 def search(env: ToolEnv, pattern: str, path: str = ".", glob: str | None = None, context: int = 0,
@@ -572,17 +669,20 @@ def search(env: ToolEnv, pattern: str, path: str = ".", glob: str | None = None,
     if base.is_file():
         glob = None                       # 파일을 콕 집었으면 거르지 않는다
     rg = _rg_bin()
-    lines = _search_rg(env, rg, pattern, base, glob, context, output, ignore_case) if rg else None
-    if lines is None:
-        lines = _search_py(env, rx, base, glob, context, output)
+    got = _search_rg(env, rg, pattern, base, glob, context, output, ignore_case) if rg else None
+    lines, notes = got if got is not None else _search_py(env, rx, base, glob, context, output)
     if len(lines) > SEARCH_MAX:
         unit = "파일" if output != "content" else "줄"
-        lines = lines[:SEARCH_MAX] + [f"…({SEARCH_MAX}{unit} 넘어서 멈춤 — path·glob 로 좁히거나 output=files/count 로 먼저 본다)"]
-    return True, _clip("\n".join(lines) or "(일치 없음)")
+        lines = lines[:SEARCH_MAX]
+        while lines and lines[-1] == "--":
+            lines.pop()
+        notes = [f"…({SEARCH_MAX}{unit} 넘어서 멈춤 — path·glob 로 좁히거나 output=files/count 로 먼저 본다)"] + notes
+    return True, _clip_notes("\n".join(lines) or "(일치 없음)", notes)
 
 
 GLOB_MAX = 1000           # glob 이 돌려주는 경로 수 상한
 GLOB_SCAN_MAX = 200_000   # 훑는 파일 수 상한(아주 큰 폴더에서 멈추게)
+GLOB_TIMEOUT_S = 30       # 훑는 시간 상한(search 와 같은 꼴)
 
 
 def glob_files(env: ToolEnv, pattern: str, path: str = ".", sort: str = "mtime") -> tuple[bool, str]:
@@ -594,32 +694,44 @@ def glob_files(env: ToolEnv, pattern: str, path: str = ".", sort: str = "mtime")
         return False, f"폴더가 없다: {path}"
     rx = fswalk.path_rx(pattern)
     base_r = base.resolve()
-    found: list[tuple[float, str]] = []
-    scanned, stopped = 0, False
+    try:   # 보일 경로 = 작업 폴더 기준(밖이면 절대 경로). 파일마다 resolve 하지 않게 바탕 폴더에서 한 번만 셈한다
+        head = base_r.relative_to(env.workdir.resolve()).as_posix()
+        head = "" if head == "." else head + "/"
+    except ValueError:
+        head = str(base_r) + "/"
+    found: list[tuple[float, str, Path]] = []
+    scanned, stopped, timed_out = 0, False, False
+    end = time.monotonic() + GLOB_TIMEOUT_S
     for f in fswalk.walk(base):
         scanned += 1
         if scanned > GLOB_SCAN_MAX:
             stopped = True
             break
-        if rx.match(f.relative_to(base_r).as_posix()):
+        if scanned % 256 == 0 and time.monotonic() > end:
+            timed_out = True
+            break
+        rel = f.relative_to(base_r).as_posix()
+        if rx.match(rel):
             try:
                 mt = f.stat().st_mtime
             except OSError:
                 continue
-            found.append((mt, _rel(env, f) + ("  (비밀 파일 — 도구로 읽기·쓰기 막힘)" if env.is_secret(f) else "")))
+            found.append((mt, head + rel, f))
     if sort == "mtime":
         found.sort(key=lambda x: (-x[0], x[1]))     # 최근에 고친 것부터
     else:
         found.sort(key=lambda x: x[1])
-    out = [r for _, r in found[:GLOB_MAX]]
+    out = [r + ("  (비밀 파일 — 도구로 읽기·쓰기 막힘)" if env.is_secret(f) else "") for _, r, f in found[:GLOB_MAX]]   # 비밀 표시는 보일 것만
     notes = []
     if len(found) > GLOB_MAX:
         notes.append(f"…(전체 {len(found)}개 중 {GLOB_MAX}개만 보임 — 패턴·path 를 좁혀라)")
     if stopped:
         notes.append(f"…(파일 {GLOB_SCAN_MAX}개를 훑고 멈춤 — 결과가 더 있을 수 있다. path 를 좁혀라)")
+    if timed_out:
+        notes.append(f"…({GLOB_TIMEOUT_S}초 시간 초과로 멈춤 — 다 못 봤다(파일 {scanned}개까지 훑음). path 를 좁혀라)")
     if not out:
         return True, "(맞는 파일 없음)" + ("\n" + "\n".join(notes) if notes else "")
-    return True, _clip("\n".join(out + notes), max(MAX_OUT, 60000))
+    return True, _clip_notes("\n".join(out), notes, max(MAX_OUT, 60000))
 
 
 TODO_STATUS = ("pending", "in_progress", "done")
