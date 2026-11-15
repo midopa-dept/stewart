@@ -16,6 +16,8 @@
 - 판정(기계): 첫 N 걸음 안에 delegate 또는 workers(action=spawn)를 불렀는가 · 부른 걸음 번호 · 맡긴 글에 범위(경로·폴더)와 돌려받을 것(정리·목록·표…)이
   있는가 · 맡기지 말아야 할 말에서의 헛부름 · 넛지가 떴는가(기록의 delegate_nudge 사건).
 - 모델을 부르니 비용·장비 시간이 든다(장면 12 × 칸 4 × n 회).
+- 사용자 자리는 빈 임시 폴더, 기억은 끔(--memory 로만 켬). 회차 기록은 --work(기본 --out 옆 work/<칸>-<장면>-<회차>).
+- 끝: 결과가 모자라면 rc 2, 오류 회차가 있으면 rc 1, 다 정상이면 0. --out 머리에 expected·got·errors·scenes_sha.
 """
 
 from __future__ import annotations
@@ -114,8 +116,13 @@ def dry_wrap(s) -> None:
     s._exec = ex
 
 
-def one(scene: dict, backend, cell: str, limit: int, dry: bool = False) -> dict:
-    tmp = Path(tempfile.mkdtemp(prefix="dg-scene-"))
+def one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Path | None = None) -> dict:
+    """한 회차. work 가 있으면 그 폴더에 시험 저장소(repo)·기록(runs)을 남긴다(없으면 임시 폴더)."""
+    if work is not None:
+        work.mkdir(parents=True, exist_ok=True)
+        tmp = work
+    else:
+        tmp = Path(tempfile.mkdtemp(prefix="dg-scene-"))
     repo = make_repo(tmp / "repo")
     p = load_profile("chat")
     p = dataclasses.replace(p, workdir=repo, max_steps=limit)
@@ -139,16 +146,41 @@ def one(scene: dict, backend, cell: str, limit: int, dry: bool = False) -> dict:
             s.close()
         except Exception:   # noqa: BLE001
             pass
-    nudges = refused = 0
+    nudges = refused = cleaned = 0
     try:
         evs = (s.rec.dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
         nudges = sum(1 for ln in evs if '"delegate_nudge"' in ln)
         refused = sum(1 for ln in evs if '"hub_tool_refused"' in ln)   # 판 151: 허브 도구를 불러 거절 글을 받은 수
+        for ln in evs:   # 세션을 닫을 때 정리한 백그라운드 작업 수
+            if '"shell_cleanup"' in ln:
+                try:
+                    cleaned += len(json.loads(ln).get("cleaned_up") or [])
+                except ValueError:
+                    pass
     except OSError:
         pass
     r = judge(scene, s.messages, nudges, limit)
-    r.update(reason=str(reason)[:120], secs=round(time.time() - t0, 1), hub_refused=refused)
+    r.update(reason=str(reason)[:120], secs=round(time.time() - t0, 1), hub_refused=refused, bg_cleaned=cleaned)
+    if str(reason).startswith("오류 "):
+        r["error"] = str(reason)[:200]
     return r
+
+
+def safe_one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Path | None = None) -> dict:
+    """one() 이 어디서 깨지든(세션 만들기 포함) 그 회차를 오류 결과로 남긴다 — 스레드가 죽어 결과가 모자라는 일이 없게."""
+    try:
+        return one(scene, backend, cell, limit, dry, work)
+    except Exception as e:   # noqa: BLE001
+        return {"ok": False, "delegated": False, "first_step": None, "n_calls": 0, "nudge": 0, "steps": 0, "names": [],
+                "error": f"{type(e).__name__}: {str(e)[:200]}", "secs": 0.0, "hub_refused": 0, "bg_cleaned": 0}
+
+
+def empty_user_env() -> dict:
+    """빈 사용자 자리: 기억 글(STEWART.md)·스킬·프로필이 없는 임시 폴더."""
+    d = Path(tempfile.mkdtemp(prefix="dscene-user-"))
+    for sub in ("skills", "profiles"):
+        (d / sub).mkdir()
+    return {"STEWART_USER_DIR": str(d), "STEWART_SKILLS_DIR": str(d / "skills"), "STEWART_PROFILES_DIR": str(d / "profiles")}
 
 
 def table_md(res: dict, meta: dict) -> str:
@@ -158,7 +190,7 @@ def table_md(res: dict, meta: dict) -> str:
     for cell in meta["cells"]:
         tot = {"should": [0, 0], "should_not": [0, 0]}
         for sc in meta["scenes"]:
-            rs = [x for x in res.get(f"{cell}|{sc['id']}", []) if "ok" in x]
+            rs = [x for x in res.get(f"{cell}|{sc['id']}", []) if "ok" in x and not x.get("error")]
             if not rs:
                 continue
             ok = sum(x["ok"] for x in rs)
@@ -170,7 +202,8 @@ def table_md(res: dict, meta: dict) -> str:
                          f"| {cell} | {sc['kind']} | {sc['id']} | {ok}/{len(rs)} | 0 | - | {sum(1 for x in rs if x['nudge'])} | - |")
             tot[sc["kind"]][0] += ok
             tot[sc["kind"]][1] += len(rs)
-        lines.append(f"- {cell}: 맡겨야 할 말 {tot['should'][0]}/{tot['should'][1]} · 맡기지 말아야 할 말(헛부름 없음) "
+        nerr = sum(1 for sc in meta["scenes"] for x in res.get(f"{cell}|{sc['id']}", []) if x.get("error"))
+        lines.append(f"- {cell}: 오류 회차 {nerr}(표에서 뺌) · 맡겨야 할 말 {tot['should'][0]}/{tot['should'][1]} · 맡기지 말아야 할 말(헛부름 없음) "
                      f"{tot['should_not'][0]}/{tot['should_not'][1]}")
     return "\n".join(lines) + "\n"
 
@@ -194,22 +227,25 @@ def main() -> int:
     ap.add_argument("--scenes", default=str(SCENES))
     ap.add_argument("--out", default="")
     ap.add_argument("--table", default="")
+    ap.add_argument("--work", default="", help="회차 기록(시험 저장소·runs)을 남길 폴더. 기본: --out 옆의 work, --out 이 없으면 임시 폴더")
+    ap.add_argument("--memory", action="store_true", help="기억(STEWART_MEMORY)을 켠다. 기본은 끔으로 못박는다")
     ap.add_argument("--dry", action="store_true", help="실행하지 않는 꼴: 읽기만 실제로, 쓰기·셸은 거절, delegate·workers 는 부름·맡긴 글만 기록")
     a = ap.parse_args()
     if a.lanes and not a.model:
         ap.error("--lanes 에는 --model 이 필요하다")
-    os.environ.setdefault("STEWART_MEMORY", "0")
+    os.environ["STEWART_MEMORY"] = "1" if a.memory else "0"   # 바깥 환경으로 뒤집히지 않게 못박는다
     os.environ.setdefault("STEWART_SEARXNG_URL", "http://127.0.0.1:9/search")
     os.environ.setdefault("STEWART_SEARXNG_MIN_INTERVAL", "0")
-    os.environ.update({k: v for k, v in M.SC.scene_env().items() if k != "STEWART_USER_DIR"})   # 스킬·프로필은 빈 시험 자리
+    os.environ.update(empty_user_env())   # 사용자 자리는 빈 시험 자리(기억 글·스킬·프로필 없음) — 돌리는 사람 설정에 기대지 않게
+    work = Path(a.work) if a.work else (Path(a.out).resolve().parent / "work" if a.out else Path(tempfile.mkdtemp(prefix="dscene-work-")))
     scenes = [s for s in load(a.scenes) if not a.only or s["id"] in a.only.split(",")]
     cells = [c for c in a.cells.split(",") if c in CELLS]
     lanes = M.lane_backends(a)
     jobs: queue.Queue = queue.Queue()
-    for _ in range(a.n):
+    for i in range(a.n):
         for cell in cells:
             for sc in scenes:
-                jobs.put((cell, sc))
+                jobs.put((cell, sc, i))
     res: dict = {}
     lock = threading.Lock()
     total = jobs.qsize()
@@ -217,10 +253,12 @@ def main() -> int:
     def worker(b):
         while True:
             try:
-                cell, sc = jobs.get_nowait()
+                cell, sc, i = jobs.get_nowait()
             except queue.Empty:
                 return
-            r = one(sc, b, cell, a.steps, a.dry)
+            wd = work / f"{cell}-{sc['id']}-{i + 1}"
+            r = safe_one(sc, b, cell, a.steps, a.dry, wd)
+            r["work"] = os.path.relpath(wd, Path(a.out).resolve().parent) if a.out else str(wd)
             with lock:
                 res.setdefault(f"{cell}|{sc['id']}", []).append(r)
                 done = sum(len(v) for v in res.values())
@@ -232,14 +270,25 @@ def main() -> int:
         t.start()
     for t in ths:
         t.join()
+    got = sum(len(v) for v in res.values())
+    errors = sum(1 for v in res.values() for x in v if x.get("error"))
+    import hashlib
     meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "steps": a.steps, "n": a.n, "cells": cells, "dry": a.dry,
-            "scenes": [{"id": s["id"], "kind": s["kind"]} for s in scenes]}
+            "scenes": [{"id": s["id"], "kind": s["kind"]} for s in scenes],
+            "scenes_sha": hashlib.sha256(Path(a.scenes).read_bytes()).hexdigest()[:16],
+            "expected": total, "got": got, "errors": errors, "memory": a.memory}
     if a.out:
         Path(a.out).write_text(json.dumps({"meta": meta, "results": res}, ensure_ascii=False, indent=1), encoding="utf-8")
     md = table_md(res, meta)
     if a.table:
         Path(a.table).write_text(md, encoding="utf-8")
     print(md)
+    if got < total:
+        print(f"결과가 모자라다: {got}/{total}", file=sys.stderr)
+        return 2
+    if errors:
+        print(f"오류 회차 {errors}/{total}", file=sys.stderr)
+        return 1
     return 0
 
 
