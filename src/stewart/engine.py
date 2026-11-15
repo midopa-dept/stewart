@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import __version__, bounds as BND, hooks as HK, memfile, memory as MEM, selfcheck as SC, think as TH, tools as T
-from .backend import BackendError, chat, is_context_overflow, sync_context
+from .backend import BackendError, chat, chat_stream, is_context_overflow, sync_context
 from .compact import Compactor, est_tokens, mask_roll, repeat_stats, reply_reserve, settings as compact_settings
 from .check import CheckContext, ToolCall, load_check
 from .config import Backend, Profile
@@ -127,6 +127,9 @@ def empty_length(resp: dict) -> bool:
     m = ch.get("message") or {}
     return ch.get("finish_reason") == "length" and not (m.get("content") or "").strip() and not m.get("tool_calls")
 
+
+REPEAT_THINK_NOTE = ("[엔진] 생각이 같은 문단을 되풀이해 그 걸음을 끊었다. 더 생각하지 말고 지금 아는 것으로 "
+                     "바로 도구를 부르거나 최종 답을 써라.")   # 판 159(think.RepeatWatch)
 
 EMPTY_NOTE = ("[엔진] 생각만 하고 본문도 도구 호출도 없이 멈췄다. 더 생각하지 말고 지금 아는 것으로 "
               "바로 도구를 부르거나 최종 답을 써라.")
@@ -619,7 +622,7 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                        "last_role": messages[-1]["role"]}
         mode = None
         try:
-            overflow_done = length_done = empty_done = False
+            overflow_done = length_done = empty_done = repeat_done = False
             extra: dict = {}
             est = think_tokens = None
             u0 = {}
@@ -636,6 +639,23 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                     elif force_final:
                         mode = "마무리 강제(반복 감지, 도구 없음)"
                         resp, dt = chat(backend, messages, None, **kw)
+                    elif tks.get("repeat_cut") and not repeat_done and kw.get("thinking") is not False:   # 판 159: 생각 되풀이 끊개
+                        t_req = time.monotonic()
+                        try:
+                            resp, dt = chat_stream(backend, messages, tool_defs, on_delta=TH.RepeatWatch(tks["repeat_cut"]).cut, **kw)
+                        except TH.ThinkRepeat as e:
+                            repeat_done = True
+                            dtc = time.monotonic() - t_req
+                            st["think_repeat_cuts"] = st.get("think_repeat_cuts", 0) + 1
+                            st["model_time_s"] += dtc
+                            rec.event("think_repeat_cut", step=step, elapsed_s=round(dtc, 3), **e.info,
+                                      reasoning_content=(getattr(e, "partial", None) or {}).get("reasoning_content") or "")
+                            comps.fire("think_repeat", step, "same_paragraph", "retry", count=e.info["count"], at=e.info["at"],
+                                       para_hash=e.info["para_hash"], think_chars=e.info["think_chars"], paragraphs=e.info["paragraphs"])
+                            rec.md(f"> 생각이 같은 문단을 {e.info['count']}번 되풀이 → 그 걸음을 끊고 생각 끔 + 알림으로 같은 단계 다시\n")
+                            messages.append({"role": "user", "content": REPEAT_THINK_NOTE})
+                            extra = {"thinking": False}
+                            continue
                     else:
                         resp, dt = chat(backend, messages, tool_defs, **kw)
                 except BackendError as e:

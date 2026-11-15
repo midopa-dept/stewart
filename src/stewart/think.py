@@ -15,6 +15,10 @@
   노력(effort)을 template 자리에 실었는데 틀이 그 낱말을 모른다고 400 이면 chat_template_kwargs 의 reasoning_effort 를 빼고 다시 보낸다.
   백엔드 effort_values(그 틀이 받는 낱말)를 적으면 밖의 값은 시작할 때 알리고 보내지 않는다(check_effort). 적지 않으면 그대로 보내는데,
   틀이 모르는 값은 오류 없이 다른 수준(예: 기본)으로 처리될 수 있다 — 400 이 아니라 위의 빼고 다시 보내기도 걸리지 않는다.
+- 판 159: presto 기본 생각 깊이는 low(대화 틀 자리, spawn.TIER_DEFAULT_EFFORT_AT).
+- 판 159: 생각 되풀이 끊개(기본 끔) — 등급 칸 think_repeat_cut = N 또는 STEWART_THINK_REPEAT_CUT=N(환경이 이긴다, 0 = 끔).
+  스트리밍으로 받는 생각에서 같은 문단(공백을 접고 소문자로 맞춘 문단의 해시)이 N번 나오면 그 걸음을 끊고 생각 끔으로 한 번 다시 묻는다.
+  짧은 문단(REPEAT_MIN_CHARS 자 미만)은 세지 않는다. 스트리밍이 아닌 요청에는 걸리지 않는다.
 """
 
 from __future__ import annotations
@@ -27,6 +31,8 @@ ENV_MAX_FIRST, ENV_EFFORT, ENV_EFFORT_AT = "STEWART_THINK_MAX_TOKENS_FIRST", "ST
 # 판 123(실험 손잡이, 기본 없음): 서버의 생각 예산 칸(vLLM 요청 thinking_token_budget — 예산에 닿으면 서버가 생각을 닫는다).
 # 생각 켬 요청에만 싣는다. 서버가 모른다고 400 이면 빼고 다시 보낸다(backend.dropped_params).
 ENV_BUDGET = "STEWART_THINKING_TOKEN_BUDGET"
+ENV_REPEAT = "STEWART_THINK_REPEAT_CUT"   # 판 159: 생각 되풀이 끊개 문턱(기본 끔)
+REPEAT_MIN_CHARS = 24                     # 이보다 짧은 문단은 세지 않는다("잠깐." 같은 짧은 말은 흔히 되풀이된다)
 EFFORT_RX = r"^[a-z]{2,12}$"
 PRESETS: dict[str, dict] = {
     # Qwen3 계열 모델 카드의 생각 모드 권장값 + 되풀이를 줄이는 presence_penalty
@@ -61,6 +67,12 @@ def settings(profile, env=None) -> dict:
     budget = None
     if isinstance(tt.get("thinking_token_budget"), int) and tt["thinking_token_budget"] >= 1:
         budget, src["budget"] = tt["thinking_token_budget"], "tier"
+    repeat = None
+    tr = tt.get("think_repeat_cut")
+    if isinstance(tr, int) and not isinstance(tr, bool) and tr >= 2:
+        repeat, src["repeat_cut"] = tr, "tier"
+    elif tr is not None:
+        bad.append("think_repeat_cut")
     ts = tt.get("think_sampling")
     if isinstance(ts, str) and ts in PRESETS:
         samp, src["sampling"] = ts, "tier"
@@ -106,6 +118,14 @@ def settings(profile, env=None) -> dict:
             budget, src["budget"] = int(v), "env"
         else:
             bad.append(ENV_BUDGET)
+    v = env.get(ENV_REPEAT)
+    if v is not None:
+        if v.strip() in ("", "0"):
+            repeat, src["repeat_cut"] = None, "env:off"
+        elif v.strip().isdigit() and int(v) >= 2:
+            repeat, src["repeat_cut"] = int(v), "env"
+        else:
+            bad.append(ENV_REPEAT)
     v = env.get(ENV_EFFORT_AT)
     if v is not None:
         if v.strip() in ("body", "template"):
@@ -123,7 +143,64 @@ def settings(profile, env=None) -> dict:
         out["effort"], out["effort_at"] = effort, at
     if budget:
         out["budget"] = budget
+    if repeat:
+        out["repeat_cut"] = repeat
     return out
+
+
+class ThinkRepeat(Exception):
+    """판 159: 생각 스트림이 같은 문단을 되풀이했다 — 그 걸음을 끊는다(info = RepeatWatch.feed 가 돌려준 것)."""
+
+    def __init__(self, info: dict):
+        super().__init__(f"생각 되풀이 {info.get('count')}회")
+        self.info = info
+
+
+def norm_para(p: str) -> str:
+    return " ".join(p.split()).lower()
+
+
+class RepeatWatch:
+    """판 159: 생각 조각을 받아 끝난 문단(빈 줄로 닫힌)마다 정규화 해시를 센다. 한 문단이 at 번째로 나오면 그 정보를 돌려준다."""
+
+    def __init__(self, at: int, min_chars: int = REPEAT_MIN_CHARS):
+        self.at, self.min_chars = at, min_chars
+        self.buf, self.counts, self.chars, self.paras = "", {}, 0, 0
+
+    def cut(self, text: str, think: str) -> None:
+        """chat_stream 의 on_delta 꼴. 되풀이에 닿으면 ThinkRepeat 를 던진다(연결은 chat_stream 이 닫는다)."""
+        if think:
+            hit = self.feed(think)
+            if hit:
+                raise ThinkRepeat(hit)
+
+    def cut_after(self, show):
+        """화면에 먼저 보이고(show) 되풀이를 센다."""
+        def on_delta(text: str, think: str) -> None:
+            show(text, think)
+            self.cut(text, think)
+        return on_delta
+
+    def feed(self, piece: str) -> dict | None:
+        import hashlib
+        import re
+        self.chars += len(piece)
+        self.buf += piece
+        if "\n" not in piece:   # 새로 닫히는 문단은 새 조각 안의 줄바꿈으로 끝난다
+            return None
+        parts = re.split(r"\n[ \t]*\n", self.buf)
+        self.buf = parts.pop()   # 아직 닫히지 않은 꼬리
+        for p in parts:
+            n = norm_para(p)
+            if len(n) < self.min_chars:
+                continue
+            self.paras += 1
+            h = hashlib.sha256(n.encode("utf-8", "replace")).hexdigest()[:12]
+            c = self.counts[h] = self.counts.get(h, 0) + 1
+            if c >= self.at:
+                return {"count": c, "at": self.at, "para_hash": h, "paragraph": n[:400], "think_chars": self.chars,
+                        "paragraphs": self.paras, "distinct": len(self.counts)}
+        return None
 
 
 def is_on(backend, thinking) -> bool:

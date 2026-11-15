@@ -915,6 +915,9 @@ def chat_stream(
             if isinstance(e, BackendError):
                 raise
             raise conn_error("연결 실패", e) from None
+        except Exception as e:   # on_delta 가 끊은 걸음(판 159 생각 되풀이 등) — 받은 데까지를 붙여 올린다(연결은 위에서 닫혔다)
+            e.partial = asm.message()
+            raise
         data = asm.response()
         if text_mode:
             data = TT.apply_response(data, len(messages))

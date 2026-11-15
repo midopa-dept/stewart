@@ -77,7 +77,10 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # 동시에 몇을 돌릴지는 그 백엔드의 concurrency(서버의 동시 요청 수)가 정한다. max 로 더 줄일 수 있다.
 # 생각 칸(안 적으면 지금과 같다): think = true|false · think_max_tokens · think_max_tokens_first(차례 첫 걸음) ·
 #   reasoning_effort = "<낱말>"("none" = 보내지 않음) · reasoning_effort_at = "body"|"template" · think_sampling = "<묶음>" 또는 { temperature = … }
+#   think_repeat_cut = 3(생각이 같은 문단을 3번 내면 그 걸음을 끊고 생각 끔으로 다시 — 판 159, 기본 끔)
 # [tiers.presto]
+# # 생각 깊이 기본은 low, 대화 틀 자리(template)다(판 159 — 적지 않아도. effort_values 가 있으면 low 가 있을 때만, 바깥 API 는 싣지 않음).
+# # 되돌리기: reasoning_effort = "none"
 # # backend = "<다른 모델이 있으면 그 백엔드 이름>"
 # budget = 24000
 # slim = true                  # 메인으로 앉힐 때 얇은 허브(작업자일 때는 뜻 없음)

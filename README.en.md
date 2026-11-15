@@ -197,7 +197,7 @@ uv run stewart hub --project ~/my-project
   - A worker whose tier the model did not pick gets one from `default_for`. If the table's `[tiers.moderato]` has `default_for = ["write"]`, workers that list tools also land on moderato and get this default.
   - With no tier table, or no such field, workers have no tier and behave as before.
 - What does not change
-  - `presto`, `largo` and `rubato` stay as they were (no effort value sent = server default).
+  - `largo` and `rubato` stay as they were (no effort value sent = server default). `presto` is covered in the section below.
   - Runs without a tier (`stewart run`, `chat`, and older hub conversations opened without a tier) stay as they were.
 - It is sent only when that tier's backend chat template accepts `medium`: the backend's `effort_values` must include `medium`.
   - With no list, or no `medium` in it, nothing is sent (as before).
@@ -211,11 +211,29 @@ uv run stewart hub --project ~/my-project
   - Or the environment variable `STEWART_REASONING_EFFORT=none` (applies to every tier).
   - When measuring a "no value" cell in a comparison experiment, also set `STEWART_REASONING_EFFORT=none` explicitly. Left empty, moderato is now `medium`.
 
+#### Default thinking depth for presto
+- A main or worker running on `presto` defaults to a thinking depth of `low`, sent in the chat template slot (`chat_template_kwargs`).
+  - The request is the same as writing `reasoning_effort = "low"` and `reasoning_effort_at = "template"` in the tier field.
+- How it differs from moderato: it is sent even when the backend has no `effort_values`.
+  - If there is a list and it has no `low`, nothing is sent.
+  - It is not sent to external API backends (a `provider` is set, or the address is external); many APIs do not know that field. To send it there, write it in the tier field.
+  - The reason it was not sent shows in `stewart tiers`, the Settings sheet and the conversation's start line.
+- A `reasoning_effort` written in the table wins as the value, and a `reasoning_effort_at` as the slot. The environment variable always wins.
+- Reverting: `reasoning_effort = "none"` under `[tiers.presto]`, or `STEWART_REASONING_EFFORT=none`.
+
+#### Thinking-repeat cutoff (off by default)
+- When thinking repeats the same paragraph, that step is cut and the same step is asked once more with thinking off.
+  - A paragraph is a block separated by blank lines. Two paragraphs are the same when their text matches after collapsing whitespace and lowercasing. Short paragraphs under 24 characters are not counted.
+  - The step is cut when the same paragraph appears for the Nth time. The cut step's thinking is not added to the conversation.
+- Turning it on: the environment variable `STEWART_THINK_REPEAT_CUT=3`, or the tier field `think_repeat_cut = 3`. The environment wins, and `0` means off.
+- When on, that request is received as a stream and cut midway (on the worker path too).
+- Records: the event `think_repeat_cut` (the repeated paragraph, the count, and the thinking up to the cut) and the component `think_repeat` (action `retry`).
+
 - Tags read "seat · tier" (worker 3 · `presto` / main · `largo`).
 
 | Tier | What it does |
 |---|---|
-| `presto` | Light work such as finding, reading and summarizing. A thin prompt, read tools and a short context make it good for running several as workers. With `slim = true`, seating it as the main gives the slim hub. Its results get double-checked |
+| `presto` | Light work such as finding, reading and summarizing. A thin prompt, read tools and a short context make it good for running several as workers. With `slim = true`, seating it as the main gives the slim hub. Its results get double-checked. Its thinking depth defaults to `low` (section above) |
 | `moderato` | The default for coding and conversation; the default tier for work that lists tools (writes). Its thinking depth defaults to `medium` (section above) |
 | `largo` | Planning, dispatching and review. Seated as the main with every tool and a wide context (`stewart hub --tier largo`) |
 | `rubato` | An external API (paid). Put it in the tier table with a key, and it is used only when a person picks it under "+ New conversation" (workers and automatic dispatch never call it). The default model is never used in its place |
@@ -462,7 +480,7 @@ temperature = 0.2
 url = "<SearXNG address>"   # SearXNG with JSON output enabled. backend = "none" turns web tools off
 ```
 
-- Thinking: `--think` and `/think` in chat, `STEWART_THINK_MAX_TOKENS`, `STEWART_THINK_SAMPLING`.
+- Thinking: `--think` and `/think` in chat, `STEWART_THINK_MAX_TOKENS`, `STEWART_THINK_SAMPLING`, `STEWART_THINK_REPEAT_CUT`.
 - Check before finishing: the profile key `check_on_stop` (on in the `code` profile).
 - Tests: `uv run python -m unittest discover -s tests -t .` runs against fake servers only and needs no network.
 

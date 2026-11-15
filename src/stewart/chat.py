@@ -32,7 +32,7 @@ from .backend import BackendError, chat, chat_stream, is_context_overflow, sync_
 from .compact import Compactor, est_tokens
 from .check import CheckContext, ToolCall, load_check
 from .config import Backend, Profile
-from .engine import EMPTY_NOTE, LENGTH_NOTE, REPEAT_NUDGE, REPEAT_STOP, _git_rev, empty_length, empty_stop, memory_for, web_search_config
+from .engine import EMPTY_NOTE, LENGTH_NOTE, REPEAT_NUDGE, REPEAT_THINK_NOTE, REPEAT_STOP, _git_rev, empty_length, empty_stop, memory_for, web_search_config
 from .record import Recorder
 from .resume import prepare, save_messages
 from . import bounds as BND, hooks as HK, memory as MEM, modes as M, think as TH
@@ -1235,7 +1235,7 @@ class ChatSession:
         """모델 요청 한 번. 문맥 넘침이면 한 번 접고(force, 최근 1단계만 원문) 같은 단계를 다시 보낸다.
         두 번째도 넘치거나 접을 것이 없으면 그 오류를 그대로 올린다(차례 끝 context_overflow).
         생각만 하다 상한에 닿아 빈 답이면(본문·툴콜 없음) 생각 끔 + 짧은 알림으로 한 번 다시 보낸다."""
-        overflow_done = length_done = False
+        overflow_done = length_done = repeat_done = False
         mt = dict(mt)
         while True:
             streamed = False
@@ -1249,10 +1249,18 @@ class ChatSession:
                 if self.stream:
                     self.ui.stream_start()
                     t_req, first = time.monotonic(), []
+                    on_delta = self.ui.stream_piece
+                    if self.tks.get("repeat_cut") and not repeat_done and mt.get("thinking") is not False:   # 판 159: 생각 되풀이 끊개
+                        on_delta = TH.RepeatWatch(self.tks["repeat_cut"]).cut_after(self.ui.stream_piece)
                     try:   # 첫 조각(본문·생각·툴콜)까지 시간 = ttft
                         resp, dt = chat_stream(self.backend, self._clean(), self.tool_defs or None,
-                                               on_delta=self.ui.stream_piece,
+                                               on_delta=on_delta,
                                                on_first=lambda: first.append(time.monotonic() - t_req), **kw)
+                    except TH.ThinkRepeat as e:
+                        repeat_done = True
+                        self._think_repeat(step, e.info, time.monotonic() - t_req, getattr(e, "partial", None))
+                        mt["thinking"] = False
+                        continue
                     finally:
                         streamed = self.ui.stream_end()
                     self._ttft = round(first[0], 3) if first else None
@@ -1311,6 +1319,18 @@ class ChatSession:
             self.ui.dim("  (생각만 하다 생성 상한에 닿아 답이 비었다 → 생각 끄고 같은 단계 다시)")
             self.messages.append({"role": "user", "content": LENGTH_NOTE})
             mt["thinking"] = False
+
+    def _think_repeat(self, step: int, info: dict, dt: float, partial: dict | None) -> None:
+        """판 159: 생각이 같은 문단을 되풀이해 걸음을 끊었다 — 기록하고(과정은 늘 닿게: 문단·끊은 데까지의 생각) 알림을 단다.
+        끊은 걸음의 생각은 대화에 넣지 않는다. 다음 요청은 생각 끔으로 같은 단계를 다시 묻는다."""
+        self.st["think_repeat_cuts"] = self.st.get("think_repeat_cuts", 0) + 1
+        self.st["model_time_s"] += dt
+        think = (partial or {}).get("reasoning_content") or ""
+        self.rec.event("think_repeat_cut", step=step, elapsed_s=round(dt, 3), **info, reasoning_content=think)
+        self.comps.fire("think_repeat", step, "same_paragraph", "retry", count=info["count"], at=info["at"],
+                        para_hash=info["para_hash"], think_chars=info["think_chars"], paragraphs=info["paragraphs"])
+        self.ui.dim(f"  (생각이 같은 문단을 {info['count']}번 되풀이했다 → 그 걸음을 끊고 생각 끄고 같은 단계 다시)")
+        self.messages.append({"role": "user", "content": REPEAT_THINK_NOTE})
 
     # ---- 한 차례 ---------------------------------------------------------
     def _err_watch(self, cmd: str, result: str, tc: dict) -> str:

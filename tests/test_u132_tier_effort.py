@@ -3,7 +3,7 @@
 - 표·환경에 값이 없을 때만, 그 등급 백엔드의 대화 틀이 medium 을 받을 때만(effort_values 에 medium) 싣는다.
   목록이 없거나 medium 이 없으면 지금처럼 보내지 않고 그 까닭을 보인다.
 - 우선: 환경 STEWART_REASONING_EFFORT > 등급 칸 reasoning_effort > 등급 기본값. "none" = 보내지 않음(가장 깊게 — 서버 기본).
-- presto·largo·rubato 와 등급 없는 실행은 그대로다.
+- largo·rubato 와 등급 없는 실행은 그대로다(판 159: presto 는 low — test_u159_presto_low).
 - 보이기: stewart tiers 표·설정 시트(등급 줄 effort)·"이 대화" 판(허브 상태 effort) — 값과 출처.
 """
 
@@ -41,7 +41,7 @@ class TDefault(unittest.TestCase):
         v, why = SP.default_effort("moderato", None, B(effort_values=["low"]))
         self.assertIsNone(v)
         self.assertIn("medium 이 없다", why)
-        for t in ("presto", "largo", "rubato", "", None):
+        for t in ("largo", "rubato", "", None):
             self.assertEqual(SP.default_effort(t, {}, B(effort_values=OK)), (None, ""))
         self.assertEqual(SP.default_effort("moderato", {"reasoning_effort": "low"}, B(effort_values=OK)), (None, ""))   # 표가 이긴다
         self.assertEqual(SP.default_effort("moderato", {"reasoning_effort": "none"}, B(effort_values=OK)), (None, ""))
@@ -89,7 +89,7 @@ class TSettings(unittest.TestCase):
         self.assertNotIn("effort", s)
         self.assertIn("effort_values", s["effort_note"])
         self.assertNotIn("effort_note", self.s(SP.tier_raw({"name": "moderato"}, B()), {"STEWART_REASONING_EFFORT": "low"}))
-        for t in ("presto", "largo", "rubato"):
+        for t in ("largo", "rubato"):
             self.assertNotIn("effort", self.s(SP.tier_raw({"name": t}, self.b)))
         none = TH.settings(prof(self.tmp), env={})                                              # 등급 없는 실행
         self.assertEqual(none, {"max_tokens": None, "sampling": None, "params": {}, "source": {"max_tokens": None, "sampling": None},

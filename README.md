@@ -199,7 +199,7 @@ uv run stewart hub --project ~/my-project
   - 모델이 등급을 안 고른 작업자는 `default_for` 로 등급이 정해집니다. 표의 `[tiers.moderato]` 에 `default_for = ["write"]` 가 있으면 도구를 적은 작업자도 moderato 가 되어 이 기본을 받습니다.
   - 등급 표가 없거나 그 칸이 없으면 작업자에게는 등급이 없고, 예전 그대로입니다.
 - 바뀌지 않는 것
-  - `presto`·`largo`·`rubato` 는 그대로입니다(노력 값을 보내지 않음 = 서버 기본).
+  - `largo`·`rubato` 는 그대로입니다(노력 값을 보내지 않음 = 서버 기본). `presto` 는 아래 절입니다.
   - 등급 없이 도는 실행(`stewart run`·`chat`, 허브의 등급 없는 옛 대화)도 그대로입니다.
 - 그 등급 백엔드의 대화 틀이 `medium` 을 받을 때만 싣습니다. 백엔드 칸 `effort_values` 에 `medium` 이 있어야 합니다.
   - 목록이 없거나 `medium` 이 없으면 보내지 않습니다(예전 그대로).
@@ -213,11 +213,29 @@ uv run stewart hub --project ~/my-project
   - 또는 환경 변수: `STEWART_REASONING_EFFORT=none`(모든 등급에 걸립니다).
   - 비교 실험에서 "값 없음" 칸을 잴 때도 `STEWART_REASONING_EFFORT=none` 을 명시로 적습니다. 비워 두면 이제 moderato 는 `medium` 입니다.
 
+#### presto 의 기본 생각 깊이
+- `presto` 로 도는 메인·작업자는 생각 깊이 기본이 `low` 이고, 대화 틀 자리(`chat_template_kwargs`)에 싣습니다.
+  - 등급 칸에 `reasoning_effort = "low"`, `reasoning_effort_at = "template"` 을 적은 것과 같은 요청이 나갑니다.
+- moderato 와 다른 점: 백엔드에 `effort_values` 가 없어도 싣습니다.
+  - 목록이 있는데 `low` 가 없으면 싣지 않습니다.
+  - 바깥 API 백엔드(`provider` 를 적었거나 바깥 주소)에는 싣지 않습니다. 그 칸을 모르는 API 가 많습니다. 실으려면 등급 칸에 적습니다.
+  - 싣지 않은 까닭은 `stewart tiers`·설정 시트·대화 시작 줄에 보입니다.
+- 표에 `reasoning_effort` 를 적으면 그 값, `reasoning_effort_at` 을 적으면 그 자리입니다. 환경 변수가 늘 이깁니다.
+- 되돌리기: `[tiers.presto]` 에 `reasoning_effort = "none"`, 또는 `STEWART_REASONING_EFFORT=none`.
+
+#### 생각 되풀이 끊개(기본 끔)
+- 생각이 같은 문단을 되풀이하면 그 걸음을 끊고, 생각 끔으로 같은 단계를 한 번 다시 묻습니다.
+  - 문단은 빈 줄로 나뉜 덩이입니다. 공백을 접고 소문자로 맞춘 글이 같으면 같은 문단입니다. 24자 미만의 짧은 문단은 세지 않습니다.
+  - 같은 문단이 N번째 나오면 끊습니다. 끊은 걸음의 생각은 대화에 넣지 않습니다.
+- 켜기: 환경 변수 `STEWART_THINK_REPEAT_CUT=3`, 또는 등급 칸 `think_repeat_cut = 3`. 환경이 이기고, `0` 은 끔입니다.
+- 켜면 그 요청을 스트리밍으로 받아 도중에 끊습니다(작업자 길도).
+- 기록: 사건 `think_repeat_cut`(되풀이한 문단·횟수·끊은 데까지의 생각), 구성 요소 `think_repeat`(action `retry`).
+
 - 꼬리표는 "자리 · 등급"으로 읽습니다(작업자 3 · `presto` / 메인 · `largo`).
 
 | 등급 | 하는 일 |
 |---|---|
-| `presto` | 찾기·읽기·요약처럼 가벼운 일. 얇은 지시문·읽기 도구·짧은 문맥이라 작업자로 여럿 띄우기 좋습니다. `slim = true` 라 메인으로 앉히면 얇은 허브입니다. 결과는 검산합니다 |
+| `presto` | 찾기·읽기·요약처럼 가벼운 일. 얇은 지시문·읽기 도구·짧은 문맥이라 작업자로 여럿 띄우기 좋습니다. `slim = true` 라 메인으로 앉히면 얇은 허브입니다. 결과는 검산합니다. 생각 깊이 기본은 `low`(위 절) |
 | `moderato` | 코딩·대화의 기본. 도구를 적은(쓰는) 작업의 기본 등급입니다. 생각 깊이 기본은 `medium`(위 절) |
 | `largo` | 계획·분배·검토. 모든 도구와 넓은 문맥을 쓰는 메인으로 앉힙니다(`stewart hub --tier largo`) |
 | `rubato` | 바깥 API(유료). 등급 표에 적고 키를 넣으면, 사람이 「＋ 새 대화」에서 고를 때만 씁니다(작업자·자동 분배는 부르지 않습니다). 기본 모델로 대신하는 일은 없습니다 |
@@ -464,7 +482,7 @@ temperature = 0.2
 url = "<SearXNG 주소>"   # SearXNG(JSON 출력을 켠 것). backend = "none" 이면 웹 도구를 끕니다
 ```
 
-- 생각(thinking): chat 의 `--think`·`/think`, `STEWART_THINK_MAX_TOKENS`, `STEWART_THINK_SAMPLING`.
+- 생각(thinking): chat 의 `--think`·`/think`, `STEWART_THINK_MAX_TOKENS`, `STEWART_THINK_SAMPLING`, `STEWART_THINK_REPEAT_CUT`.
 - 끝내기 전 확인: 프로필 `check_on_stop`(`code` 프로필은 켜짐).
 - 시험: `uv run python -m unittest discover -s tests -t .`. 가짜 서버로만 돌고 망이 필요 없습니다.
 

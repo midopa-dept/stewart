@@ -44,15 +44,21 @@ DEFINITION = {"type": "function", "function": {
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
 TIER_KEYS = ("backend", "profile", "budget", "max", "use", "default_for", "slim", "slim_keep", "slim_system",
              "manual", "max_usd_day", "max_usd_chat", "max_tokens_day", "tools", "tools_deny", "prompt",
-             "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling", "thinking_token_budget", "reasoning_passback")
+             "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling", "thinking_token_budget", "reasoning_passback",
+             "think_repeat_cut")
 THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling",
-              "thinking_token_budget", "reasoning_passback")
+              "thinking_token_budget", "reasoning_passback", "think_repeat_cut")
 
 
 # 판 132: 등급의 기본 생각 깊이(reasoning_effort). 표·환경에 값이 없을 때만, 그 등급 백엔드의 대화 틀이 그 낱말을 받을 때만
 # (backends.<이름>.effort_values 에 있을 때만) 싣는다. 목록이 없거나 그 낱말이 없으면 지금처럼 보내지 않고, 그 까닭을 보인다.
+# 판 159: presto 기본은 low 를 대화 틀 자리(chat_template_kwargs)에 싣는다 — 잰 꼴(등급 칸 reasoning_effort = "low",
+# reasoning_effort_at = "template") 그대로. 그 꼴은 effort_values 없이 쟀으므로 presto 는 목록이 없어도 싣는다
+# (목록이 있는데 low 가 없으면 싣지 않는다). 바깥 백엔드(provider·바깥 주소)에는 싣지 않는다 — 그 칸을 모르는 API 가 많다.
 # 되돌리기: 등급 칸에 reasoning_effort = "none"(보내지 않음) 또는 환경 STEWART_REASONING_EFFORT=none.
-TIER_DEFAULT_EFFORT = {"moderato": "medium"}
+TIER_DEFAULT_EFFORT = {"moderato": "medium", "presto": "low"}
+TIER_DEFAULT_EFFORT_AT = {"presto": "template"}     # 적지 않은 등급은 body(think.settings 기본)
+TIER_DEFAULT_NO_LIST = ("presto",)                  # effort_values 가 없어도 싣는 등급(잰 꼴이 목록 없이였다)
 EFFORT_OFF = ("", "none", "off")   # 등급 칸·환경에 적으면 노력 값을 보내지 않는다(서버 기본)
 EFFORT_ENV = "STEWART_REASONING_EFFORT"
 
@@ -64,6 +70,13 @@ def default_effort(name, think: dict | None, backend) -> tuple[str | None, str]:
         return None, ""
     allowed = getattr(backend, "effort_values", None) if backend is not None else None
     bname = getattr(backend, "name", "") if backend is not None else ""
+    if str(name) in TIER_DEFAULT_NO_LIST:   # 판 159
+        ext = getattr(backend, "external", None)
+        if backend is not None and (getattr(backend, "kind", "openai") == "anthropic" or (callable(ext) and ext())):
+            return None, f"기본 {want} 을 싣지 않았다 — 백엔드 {bname} 는 바깥 API 다. 실으려면 등급 칸에 reasoning_effort 를 적는다"
+        if allowed and want not in allowed:
+            return None, f"기본 {want} 을 싣지 않았다 — 백엔드 {bname} 의 대화 틀이 받는 낱말({'·'.join(allowed)})에 {want} 이 없다"
+        return want, ""
     if not allowed:
         return None, (f"기본 {want} 을 싣지 않았다 — 백엔드 {bname} 에 effort_values(대화 틀이 받는 낱말)가 없다. "
                       f"그 틀이 {want} 을 받으면 백엔드 칸에 effort_values 를 적는다")
@@ -169,6 +182,9 @@ def tier_raw(t: dict, backend=None) -> dict:
     d, why = default_effort(t.get("name"), think, backend)
     if d:
         think.update(reasoning_effort=d, effort_default=True)
+        at = TIER_DEFAULT_EFFORT_AT.get(str(t.get("name") or ""))
+        if at and "reasoning_effort_at" not in think:   # 판 159: 표에 자리를 적었으면 그 자리
+            think["reasoning_effort_at"] = at
     return {"name": t.get("name"), "budget": t.get("budget"), **({"think": think} if think else {}),
             **({"effort_default_skipped": why} if why else {}),
             **({"tools": list(t["tools"])} if isinstance(t.get("tools"), list) else {}),
