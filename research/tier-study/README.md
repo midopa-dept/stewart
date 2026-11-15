@@ -9,4 +9,5 @@ stewart 의 등급(presto·moderato·largo 등)은 같은 모델을 다른 방�
 
 | 파일 | 무엇 |
 |---|---|
+| [preregistration.md](preregistration.md) | P-004 사전 등록(결과 전): 등급마다 C·T−(도구만 줄임)·I−(지시문만 줄임) 칸, 판정 규칙, 바깥 벤치 겹쳐 재기, 결과 전에 고친 것. 이 파일이 들어간 커밋이 등록이다 |
 | [related-work.md](related-work.md) | 선행 연구: 도구 수·지시문 길이·생각 깊이·설정을 다르게 두는 관행·큰 모델에도 같은가, 그리고 우리가 보탤 수 있는 것 |
