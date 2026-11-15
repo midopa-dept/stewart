@@ -38,6 +38,21 @@ class TMeasure(unittest.TestCase):
             ok, why, first = M.one(self.by["dev-bare-name"], self.b, 1, run_tools=False)
         self.assertEqual((ok, first), (True, ["web_search"]))
 
+    def test_hub_main_cell(self):
+        """판 152.1: --hub-main 칸은 허브 도구 정의가 실린다. 기본(옛 허브 꼴, 판 141)은 역할 글만이다."""
+        seen = []
+
+        def fake(backend, messages, tools=None, *a, **k):
+            seen.append([t["function"]["name"] for t in tools or []])
+            return resp("네")
+        sc = self.by["dev-bare-name"]
+        with mock.patch.object(C, "chat", side_effect=fake):
+            M.one(sc, self.b, 1, run_tools=False)
+            M.one(sc, self.b, 1, run_tools=False, hub_main=True)
+        self.assertNotIn("session_spawn", seen[0])
+        self.assertIn("session_spawn", seen[-1])
+        self.assertIn("board", seen[-1])
+
     def test_requires_skips(self):
         sc = {**self.by["dev-bare-name"], "requires": ["no_such_tool"]}
         with mock.patch.object(C, "chat", side_effect=AssertionError("부르면 안 된다")):

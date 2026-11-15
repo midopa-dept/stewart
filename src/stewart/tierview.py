@@ -23,6 +23,7 @@ from pathlib import Path
 
 CANON = ("presto", "moderato", "largo", "rubato")
 OUTSIDE_TIER = "rubato"          # 따로 도는 허브(instance)의 백엔드가 앉는 등급
+CUSTOM_TIER = "comodo"           # 판 153: 사용자가 꾸미는 꼴 — 표에 칸이 없으면 "설정 없음"으로 rubato 뒤에 보인다(이름은 표의 칸 이름)
 EMPTY_TIER = "largo"     # 판 152: 등급 없음('')은 화면에 이 등급으로 보이고, 표에 이 등급 칸이 있으면 그 칸을 따른다(내부 값 '' 는 그대로)
 NEW_CHAT_TIER = "largo"  # 판 152: 새 대화의 처음 값(브라우저에 고른 값이 없을 때). 바꿀 때는 이 한 줄만
 DEFAULT_USD_DAY = 3.0
@@ -38,6 +39,8 @@ def is_manual(t: dict | None, backend) -> bool:
     """사람이 고를 때만 쓰는 등급인가: 표에 manual 을 적었으면 그 값, 아니면 바깥 백엔드면 참."""
     if t and t.get("manual") is not None:
         return bool(t["manual"])
+    if t and t.get("name") == CUSTOM_TIER:   # 판 153: 사용자가 꾸미는 꼴은 기본이 사람만(작업자·자동 분배가 고르지 않는다)
+        return True
     return bool(backend is not None and backend.external())
 
 
@@ -81,16 +84,21 @@ def key_state(b, manual: bool) -> tuple[str, str]:
 def rows(backends: dict, default: str, tiers: dict, instance_backend: str | None = None, instance_keychain: str | None = None) -> list[dict]:
     """등급 줄들(probe 전). backends = {이름: Backend}, tiers = spawn.load_tiers() 꼴(+ 원래 칸 raw)."""
     out = []
-    for name in list(CANON) + [n for n in tiers if n not in CANON]:
+    shown = list(CANON) + [CUSTOM_TIER]
+    for name in shown + [n for n in tiers if n not in shown]:
         t = tiers.get(name)
         if t:
             bname, src = t.get("backend") or (instance_backend or default), "표"
         elif instance_backend:
             bname, src = (instance_backend, "이 허브의 모델") if name == OUTSIDE_TIER else (None, "연결 없음")
         else:
-            bname, src = (default, "기본 모델") if name != OUTSIDE_TIER else (None, "설정 없음")
+            bname, src = (default, "기본 모델") if name not in (OUTSIDE_TIER, CUSTOM_TIER) else (None, "설정 없음")
         b = backends.get(bname) if bname else None
         r = {"tier": name, "source": src, "backend": bname or "", "connected": b is not None, "use": (t or {}).get("use") or ""}
+        if (t or {}).get("tools") is not None:
+            r["tools"] = list(t["tools"])   # 판 153: 도구 부분집합(설정 시트가 보인다)
+        if (t or {}).get("budget"):
+            r["budget"] = t["budget"]
         if b is None:
             r.update(status="none" if instance_backend or src == "연결 없음" else "unset", manual=False)
             if bname and bname not in backends:

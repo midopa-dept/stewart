@@ -421,6 +421,10 @@ class ChatSession:
                 self.ui.warn(f"  forge 설정을 쓰지 않는다: {e}")
         if self.forge is not None:
             defs += FG.DEFINITIONS
+        only = ((profile.raw or {}).get("tier") or {}).get("tools")
+        if isinstance(only, list):   # 판 153: 등급의 도구 부분집합 — 이 자리 도구 가운데 적힌 이름만(더 주지 않는다, 작업자에게 넘길 목록도 같이)
+            keep = {str(x) for x in only}
+            defs = [d for d in defs if d["function"]["name"] in keep]
         defs += self.extra_defs
         self.extra_names = {d["function"]["name"] for d in self.extra_defs}
         self.all_tool_names = [d["function"]["name"] for d in defs

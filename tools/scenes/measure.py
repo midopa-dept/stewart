@@ -16,6 +16,7 @@
   스킬·프로필 폴더는 늘 빈 시험 자리다(판 137) — 실행하는 사람의 실제 스킬·프로필이 실리지 않는다.
 - 판 141
   - 허브 꼴: 허브가 메인에 붙이는 역할 글(hubmain.with_role)을 붙여 돈다(기본). --no-hub-role 로 보통 chat 꼴.
+  - --hub-main: 허브 메인 꼴(역할 글 + 허브 도구 정의, hubmain.hub_main_form). 옛 허브 꼴과 나란히 한 번 재 차이를 보는 칸이다(기본은 옛 꼴).
   - 장면의 max_steps·run_tools: 그 장면만 걸음 상한을 바꾸고, run_tools 의 읽기 도구는 실제로 돌린다(빈 작업 폴더).
   - 판정의 "보류"(첫 걸음이 폴더만 → 둘째 걸음까지 웹)는 표에 따로 센다.
   - --user-shape: 실사용 꼴 설정(tests/test_realuse_shape.make_user_shape — 기억 파일·사용자 스킬·hub.toml·사용자 프로필)으로
@@ -62,14 +63,18 @@ def dry_exec(session):
 PROFILE_MAP: dict = {}   # 판 141: --user-shape 면 {"chat": <사용자 프로필>}
 
 
-def one(scene: dict, backend, max_steps: int, run_tools: bool, hub_role: bool = True) -> tuple[bool, str, list]:
+def one(scene: dict, backend, max_steps: int, run_tools: bool, hub_role: bool = True, hub_main: bool = False) -> tuple[bool, str, list]:
     tmp = Path(tempfile.mkdtemp(prefix="scene-"))
     p = load_profile(PROFILE_MAP.get(scene["profile"], scene["profile"]))
     p = dataclasses.replace(p, workdir=tmp, raw=SC.profile_raw(scene, p.raw), max_steps=int(scene.get("max_steps") or max_steps))
-    if hub_role:   # 판 141: 허브가 메인에 붙이는 역할 글(사용자는 허브로 쓴다). parlando 처럼 hub_role = false 인 프로필은 그대로
+    rec, extra = Recorder(tmp / "runs", "scene"), None
+    if hub_main:   # 판 152.1: `chat --once --hub-main` 과 같은 길(역할 글 + 허브 도구 정의, 허브 도구는 거절 글) — 옛 꼴과 나란히 재 볼 칸
+        from stewart.hubmain import hub_main_form
+        p, extra = hub_main_form(p, rec)
+    elif hub_role:   # 판 141: 허브가 메인에 붙이는 역할 글(사용자는 허브로 쓴다). parlando 처럼 hub_role = false 인 프로필은 그대로
         from stewart.hubmain import with_role
         p = with_role(p)
-    s = C.ChatSession(p, backend, Recorder(tmp / "runs", "scene"), C.UI(out=io.StringIO(), color=False), stream=False, mode="auto")
+    s = C.ChatSession(p, backend, rec, C.UI(out=io.StringIO(), color=False), stream=False, mode="auto", extra_tools=extra)
     if not run_tools:
         real, dry, live = s._exec, dry_exec(s), set(scene.get("run_tools") or [])
         s._exec = (lambda rc, step: real(rc, step) if (rc.get("function") or {}).get("name") in live else dry(rc, step)) if live else dry
@@ -104,7 +109,7 @@ def lane_backends(a) -> list:
 def table_md(res: dict) -> str:
     """결과 표: 장면 × 첫 걸음 도구 × N 번, 맞음 수."""
     lines = [f"# 장면 실측 — {res['model']} · {res['when']} · 차선 {len(res['lanes'])} · 장면마다 {res['n']}번 · 걸음 상한 {res['max_steps']}"
-             f"{' · 허브 꼴' if res.get('hub_role', True) else ' · 보통 chat 꼴'}{' · 실사용 꼴 설정' if res.get('user_shape') else ''}"
+             f"{' · 허브 메인 꼴(--hub-main)' if res.get('hub_main') else ' · 허브 꼴' if res.get('hub_role', True) else ' · 보통 chat 꼴'}{' · 실사용 꼴 설정' if res.get('user_shape') else ''}"
              f" · 자리 줄 {'켬' if res.get('place_hints', True) else '끔'}"
              f"{' · 도구 실행 안 함' if not res['run_tools'] else ''}{' · 사용자 기억 파일 있음' if res.get('user_memory') else ''}"
              f"{' · 스킬·프로필은 실사용 꼴 설정의 것' if res.get('user_shape') else ' · 스킬·프로필 폴더는 빈 시험 자리'}", "",
@@ -147,12 +152,16 @@ def main() -> int:
     ap.add_argument("--run-tools", action="store_true", help="도구를 실제로 돌린다(기본은 실행하지 않음)")
     ap.add_argument("--no-user-memory", action="store_true", help="사용자 기억 파일 없이(기본은 임시 사용자 폴더에 기억 파일을 둔다)")
     ap.add_argument("--no-hub-role", action="store_true", help="허브 역할 글 없이 보통 chat 꼴로(기본은 허브 꼴)")
+    ap.add_argument("--hub-main", action="store_true",
+                    help="허브 메인 꼴(역할 글 + 허브 도구 정의 — `chat --once --hub-main` 과 같은 길)로. 기본은 옛 허브 꼴(역할 글만, 판 141)")
     ap.add_argument("--user-shape", action="store_true", help="실사용 꼴 설정(임시 HOME)으로 — 코드 자리는 그 사용자 프로필로")
     ap.add_argument("--out", default="")
     ap.add_argument("--table", default="")
     a = ap.parse_args()
     if a.lanes and not a.model:
         ap.error("--lanes 에는 --model 이 필요하다")
+    if a.hub_main and a.no_hub_role:
+        ap.error("--hub-main 과 --no-hub-role 은 같이 쓰지 않는다")
     os.environ.setdefault("STEWART_MEMORY", "0")
     if a.user_shape:   # 판 141: 실사용 꼴 설정 — 임시 HOME, XDG·STEWART 자리는 비움(그 HOME 의 기본 자리를 쓴다)
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -185,7 +194,7 @@ def main() -> int:
                 si, k = jobs.get_nowait()
             except queue.Empty:
                 return
-            r = one(scenes[si], b, a.max_steps, a.run_tools, hub_role=not a.no_hub_role)
+            r = one(scenes[si], b, a.max_steps, a.run_tools, hub_role=not a.no_hub_role, hub_main=a.hub_main)
             with lock:
                 got[(si, k)] = r
                 mark = "건너뜀" if r[0] is None else "맞음" if r[0] else "틀림"
@@ -204,7 +213,7 @@ def main() -> int:
                      "skipped": sum(1 for r in res if r[0] is None),
                      "runs": [{"ok": r[0], "why": r[1], "first": r[2]} for r in res]})
     out = {"model": lanes[0].model if lanes else "", "user_memory": not a.no_user_memory or a.user_shape,
-           "hub_role": not a.no_hub_role, "user_shape": a.user_shape, "place_hints": C.place_hints_on(), "lanes": [b.base_url for b in lanes], "n": a.n, "max_steps": a.max_steps,
+           "hub_role": not a.no_hub_role, "hub_main": a.hub_main, "user_shape": a.user_shape, "place_hints": C.place_hints_on(), "lanes": [b.base_url for b in lanes], "n": a.n, "max_steps": a.max_steps,
            "run_tools": a.run_tools, "think": a.think if a.lanes else "table", "when": time.strftime("%Y-%m-%d %H:%M"),
            "elapsed_s": round(time.time() - t0, 1), "dev_head": DEV_HEAD, "rows": rows}
     md = table_md(out)

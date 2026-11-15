@@ -852,7 +852,9 @@ class WebApp:
                 **self.main.tier_rows(probe=True),
                 "backends": [{"name": n, "base_url": b.base_url, "model": b.model, "concurrency": b.concurrency, "max_context": b.max_context,
                               "external": b.external(), "provider": b.provider if b.provider else "",
-                              "keychain": b.api_key_keychain or "", "key_env": b.api_key_env or ""} for n, b in bks.items()]}
+                              "keychain": b.api_key_keychain or "", "key_env": b.api_key_env or "",
+                              "effort_values": list(b.effort_values or [])} for n, b in bks.items()],
+                "place_tools": self.main._root().place_tools()}   # 판 153: 도구 부분집합으로 고를 수 있는 이름(자리마다)
 
     def settings_post(self, h, path: str, data: dict) -> None:
         from . import settings as ST

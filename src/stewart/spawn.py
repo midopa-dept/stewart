@@ -43,7 +43,7 @@ DEFINITION = {"type": "function", "function": {
 
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
 TIER_KEYS = ("backend", "profile", "budget", "max", "use", "default_for", "slim", "slim_keep", "slim_system",
-             "manual", "max_usd_day", "max_usd_chat", "max_tokens_day",
+             "manual", "max_usd_day", "max_usd_chat", "max_tokens_day", "tools",
              "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling", "thinking_token_budget", "reasoning_passback")
 THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling",
               "thinking_token_budget", "reasoning_passback")
@@ -120,6 +120,8 @@ def load_tiers(path=None, main: bool = False) -> dict:
                               "think": {k: t[k] for k in THINK_KEYS if k in t},
                               # 판 125: 사람만(바깥 등급의 기본) · 돈·토큰 상한 — tierview.is_manual·caps 가 읽는다
                               "manual": (bool(t["manual"]) if "manual" in t else None),
+                              # 판 153: 도구 부분집합 — 그 자리 도구 가운데 이 이름들만 남긴다(더 주지 않는다). 없으면 그 자리 그대로
+                              "tools": ([str(x) for x in t["tools"]] if isinstance(t.get("tools"), list) else None),
                               **{k: t[k] for k in ("max_usd_day", "max_usd_chat", "max_tokens_day") if k in t}}
     return out
 
@@ -152,7 +154,8 @@ def tier_raw(t: dict, backend=None) -> dict:
     if d:
         think.update(reasoning_effort=d, effort_default=True)
     return {"name": t.get("name"), "budget": t.get("budget"), **({"think": think} if think else {}),
-            **({"effort_default_skipped": why} if why else {})}
+            **({"effort_default_skipped": why} if why else {}),
+            **({"tools": list(t["tools"])} if isinstance(t.get("tools"), list) else {})}
 
 
 def unknown_note(tiers: dict, asked, manual: set | frozenset = frozenset()) -> str:

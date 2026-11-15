@@ -62,7 +62,8 @@ class TRows(unittest.TestCase):
     def test_main_hub(self):
         rows, _ = TV.load(self.write(LOCAL))
         r = self.by(rows)
-        self.assertEqual([x["tier"] for x in rows], list(TV.CANON))
+        self.assertEqual([x["tier"] for x in rows], list(TV.CANON) + [TV.CUSTOM_TIER])           # 판 153: 꾸미는 꼴은 rubato 뒤
+        self.assertEqual((r[TV.CUSTOM_TIER]["status"], r[TV.CUSTOM_TIER]["source"]), ("unset", "설정 없음"))
         self.assertEqual((r["presto"]["backend"], r["presto"]["source"]), ("small", "표"))
         self.assertEqual((r["moderato"]["backend"], r["moderato"]["source"]), ("big", "기본 모델"))
         self.assertFalse(r["presto"]["manual"])

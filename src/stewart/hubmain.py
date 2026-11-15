@@ -1172,7 +1172,25 @@ class HubMain:
                 for r in rows:
                     if r.get("status") == "unchecked" and r["tier"] in cache["st"]:
                         r["status"] = cache["st"][r["tier"]]
-        return {"instance": inst, "rows": rows, **({} if inst else {"new_default": TV.NEW_CHAT_TIER, "empty_as": TV.EMPTY_TIER})}
+        return {"instance": inst, "rows": rows, "custom": TV.CUSTOM_TIER,
+                **({} if inst else {"new_default": TV.NEW_CHAT_TIER, "empty_as": TV.EMPTY_TIER})}
+
+    def place_tools(self) -> dict:
+        """판 153: 설정 시트가 도구 부분집합으로 고를 수 있는 이름 — 자리(코드·parlando)마다 그 자리에 있는 도구.
+        메인과 같은 자리는 메인 세션의 도구(작업자에게 넘길 수 있는 것), 다른 자리는 그 프로필의 도구 목록."""
+        from . import tools as T
+        root = self._root()
+        out = {}
+        for kind in ("code", "talk"):
+            try:
+                if kind == root.kind:
+                    out[kind] = list(root.sess.all_tool_names)
+                    continue
+                prof, _ = self.kind_profile(kind)
+                out[kind] = [n for n in T.TOOLS if n not in T.ORGANIZE_TOOLS and n not in T.OPT_IN] if prof.tools == ["*"] else list(prof.tools or [])
+            except (ValueError, OSError):
+                out[kind] = []
+        return out
 
     def empty_tier_profile(self, kind: str):
         """판 152: 등급 없음('')의 (프로필, 백엔드) — 표에 EMPTY_TIER(largo) 칸이 있으면 그 칸을 따른다(화면에 largo 로 보이는 것 = 실제 largo).

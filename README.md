@@ -225,12 +225,17 @@ uv run stewart hub --project ~/my-project
 - `stewart tiers` 는 등급 넷(presto·moderato·largo·rubato)이 어느 서버·모델을 가리키는지, 닿는지, 동시 수, 생각 깊이(값·출처), 키(있음·없음만), 돈 상한을 한 표로 보입니다.
   - `--no-check` 는 서버를 찔러 보지 않고, `--json` 은 허브 화면과 같은 칸을 냅니다. `--instance <이름>` 은 따로 도는 허브의 표입니다.
   - 표에 없는 presto·moderato·largo 는 기본 모델을 씁니다. rubato 는 표에 없으면 "설정 없음"입니다.
-- 허브의 「＋ 새 대화」는 바로 빈 대화를 엽니다. 빈 대화 첫 화면에서 자리(stewart · *parlando*)와 모델 등급(presto·moderato·largo·rubato)을 고릅니다.
+- 허브의 「＋ 새 대화」는 바로 빈 대화를 엽니다. 빈 대화 첫 화면에서 자리(stewart · *parlando*)와 모델 등급(presto·moderato·largo·rubato·comodo)을 고릅니다.
   - 처음 고른 값은 브라우저가 기억한 마지막 등급이고, 기억이 없으면 `largo` 입니다.
   - 연결 없음·키 없음인 등급은 흐리게 보이고 고를 수 없습니다.
   - 등급 없이 연 옛 대화와 `--tier` 없이 켠 허브 메인은 `largo` 로 보입니다. 표에 `[tiers.largo]` 칸이 있으면 그 칸을 따르고, 칸이 없으면 예전과 같습니다.
     - `stewart chat`(허브 밖)은 `--tier largo` 를 줄 때만 그 칸을 따릅니다.
   - 첫 말을 보내면 굳고, 등급은 그 뒤 바뀌지 않습니다. 갈래는 같은 등급이고, 바깥 등급으로 하던 대화는 다시 열 때 그 등급으로 엽니다.
+- 사람이 꾸미는 꼴 `comodo`: 표에 `[tiers.comodo]` 칸이 없으면 등급 줄 rubato 뒤에 흐리게("설정 없음") 보입니다.
+  - 설정 시트의 comodo 줄에서 모델(서버)·생각 깊이(그 서버의 `effort_values` 가운데, 또는 값 없음)·문맥 창·도구를 고르면 고를 수 있게 됩니다.
+  - 도구는 그 자리(stewart·*parlando*) 도구의 부분집합만 남고, 더 주지는 않습니다. *parlando* 에 `run_shell` 을 적어도 생기지 않습니다.
+  - 표에는 `tools = [...]`·`reasoning_effort`·`budget`·`manual = true` 로 적힙니다. 사람만 고르는 꼴이라 작업자·자동 분배는 쓰지 않습니다.
+  - 다른 등급 칸에 `tools` 를 손으로 적어도 같은 부분집합 규칙이 먹습니다.
 - `stewart setup` 은 물어 가며 backends 표를 만듭니다(터미널에서만).
   - 표가 없으면 모델 서버부터 묻습니다. 주소를 넣으면 `GET /models` 로 모델 이름·문맥 크기를 찾아 보입니다.
   - 그다음 등급마다 서버를 고르거나 새 서버를 더합니다. rubato 는 바깥 API 의 주소·모델·제공자 이름·돈 상한과 키(가림 입력 → 키체인)를 묻습니다.

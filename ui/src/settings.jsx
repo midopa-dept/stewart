@@ -35,13 +35,22 @@ function Edit({ v, r, back, reload }) {
   const [f, setF] = useState({ name: '', base_url: b0?.base_url || '', model: b0?.model || '', concurrency: b0?.concurrency || 1 })
   const [cap, setCap] = useState({ day: r.caps?.usd_day ?? '', chat: r.caps?.usd_chat ?? '' })
   const [models, setModels] = useState(null), [key, setKey] = useState(''), [busy, setBusy] = useState(false)
+  // 판 153: 사용자가 꾸미는 꼴 — 생각 깊이·문맥 창·도구(그 자리 도구의 부분집합)
+  const custom = r.tier === v.custom
+  const allTools = [...new Set([...(v.place_tools?.code || []), ...(v.place_tools?.talk || [])])]
+  const [eff, setEff] = useState(r.effort?.source === 'tier' || r.effort?.source === 'tier:off' ? (r.effort.value || 'none') : '')
+  const [bud, setBud] = useState(r.budget ?? '')
+  const [tools, setTools] = useState(r.tools ?? null)   // null = 그 자리 도구 그대로
   useEffect(() => { const b = bks.find(x => x.name === bname); if (b) setF({ name: '', base_url: b.base_url, model: b.model, concurrency: b.concurrency }) }, [bname])
   const dis = !v.editable || busy
   const tb = isNew ? f.name : bname
   const ext = r.external || (isNew && /^https:\/\//.test(f.base_url))
   const bf = (isNew || (b0 && (f.base_url !== b0.base_url || f.model !== b0.model || +f.concurrency !== b0.concurrency)))
     ? { base_url: f.base_url, model: f.model, concurrency: +f.concurrency || 1 } : null
-  const tf = { backend: tb || null, ...(r.manual && r.external ? { max_usd_day: cap.day === '' ? null : +cap.day, max_usd_chat: cap.chat === '' ? null : +cap.chat } : {}) }
+  const tf = { backend: tb || null, ...(r.manual && r.external ? { max_usd_day: cap.day === '' ? null : +cap.day, max_usd_chat: cap.chat === '' ? null : +cap.chat } : {}),
+    ...(custom ? { manual: true, reasoning_effort: eff || null, budget: bud === '' ? null : +bud, tools: tools } : {}) }   // 사람만(작업자는 고르지 않는다)
+  const effs = (b0 || cur || bks.find(b => b.name === v.default))?.effort_values || []
+  const toggleTool = n => { const s = new Set(tools ?? allTools); s.has(n) ? s.delete(n) : s.add(n); const l = allTools.filter(x => s.has(x)); setTools(l.length === allTools.length ? null : l) }
   const preview = [...(bf ? [`[backends.${tb || '<이름>'}]`, ...Object.entries(bf).map(([k, x]) => `${k} = ${JSON.stringify(x)}`), ''] : []),
     `[tiers.${r.tier}]`, ...Object.entries(tf).filter(([, x]) => x !== null).map(([k, x]) => `${k} = ${JSON.stringify(x)}`)].join('\n')
   async function save(confirmOutside) {
@@ -86,7 +95,25 @@ function Edit({ v, r, back, reload }) {
       </Field>
       <Field label="동시 요청 수"><input class={inp} type="number" min="1" disabled={dis} value={f.concurrency} onInput={e => setF({ ...f, concurrency: e.currentTarget.value })} /></Field>
     </>}
-    {r.effort && <div class="py-2 border-b border-line"><span class="text-[13px] text-mute">생각 깊이</span>
+    {custom && <>
+      <Field label="생각 깊이" note="값 없음 = 보내지 않음(서버 기본). 고를 수 있는 낱말은 그 서버의 effort_values">
+        <select class={inp} disabled={dis} value={eff} onChange={e => setEff(e.currentTarget.value)}>
+          <option value="">적지 않음</option><option value="none">값 없음(보내지 않음)</option>
+          {effs.map(x => <option key={x} value={x}>{x}</option>)}
+        </select>
+      </Field>
+      <Field label="문맥 창(토큰)" note="비우면 그 서버의 창 그대로. 4096 이상">
+        <input class={inp} type="number" min="4096" step="1024" disabled={dis} value={bud} onInput={e => setBud(e.currentTarget.value)} />
+      </Field>
+      <div class="py-2 border-b border-line"><span class="text-[13px] text-mute">도구 — 그 자리(stewart·parlando)에 있는 것 가운데 고른 것만 남는다</span>
+        <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[13.5px]">
+          {allTools.map(n => <label key={n} class="flex items-center gap-1"><input type="checkbox" disabled={dis} checked={(tools ?? allTools).includes(n)} onChange={() => toggleTool(n)} />
+            <span class={(v.place_tools?.talk || []).includes(n) ? '' : 'text-mute'}>{n}</span></label>)}
+        </div>
+        <div class="text-[12px] text-mute mt-1">{tools === null ? '모두 고름 = 그 자리 도구 그대로' : `${tools.length}개`} · 흐린 이름은 parlando 에 없는 도구(parlando 에서는 생기지 않는다) · 사람만 고르는 꼴(작업자는 쓰지 않는다)</div>
+      </div>
+    </>}
+    {r.effort && !custom && <div class="py-2 border-b border-line"><span class="text-[13px] text-mute">생각 깊이</span>
       <div class={'mt-1 text-[15px] ' + (r.effort.note ? 'text-warn' : '')}>{effortLabel(r.effort)}</div>
       <div class="text-[12px] text-mute mt-1">{r.effort.note ? r.effort.note + ' · ' : ''}표 = 등급 칸 reasoning_effort · 기본 = 등급 기본값 · 환경 = STEWART_REASONING_EFFORT · 값 없음 = 보내지 않음(서버 기본).
         바꾸려면 이 등급 칸에 reasoning_effort = "low" 처럼, 보내지 않으려면 reasoning_effort = "none" 을 적는다.</div></div>}

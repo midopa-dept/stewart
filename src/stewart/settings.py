@@ -17,7 +17,9 @@ from pathlib import Path
 NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 BACKEND_KEYS = {"base_url": str, "model": str, "concurrency": int, "provider": str, "max_context": int,
                 "api_key_keychain": str, "api_key_env": str}
-TIER_KEYS = {"backend": str, "max_usd_day": float, "max_usd_chat": float, "max_tokens_day": int, "manual": bool, "budget": int, "use": str}
+TIER_KEYS = {"backend": str, "max_usd_day": float, "max_usd_chat": float, "max_tokens_day": int, "manual": bool, "budget": int, "use": str,
+             "reasoning_effort": str, "tools": list}   # 판 153: 생각 깊이·도구 부분집합(사용자가 꾸미는 꼴)
+TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 
 
 def _clean(fields: dict, spec: dict, what: str) -> dict:
@@ -28,6 +30,11 @@ def _clean(fields: dict, spec: dict, what: str) -> dict:
         t = spec[k]
         if v is None or v == "":
             out[k] = None   # 지운다
+            continue
+        if t is list:   # 판 153: 도구 이름 목록(빈 목록은 "도구 없음")
+            if not isinstance(v, list) or len(v) > 80 or not all(isinstance(x, str) and TOOL_NAME.match(x) for x in v):
+                raise ValueError(f"{what} 칸 {k} 는 도구 이름(소문자·숫자·_) 목록이어야 한다")
+            out[k] = list(dict.fromkeys(v))
             continue
         try:
             v = (v if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes", "on")) if t is bool else t(v)
