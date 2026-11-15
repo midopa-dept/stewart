@@ -1,0 +1,7 @@
+598e8cea24b3d4a430f26303a68ffff1b4108b56f97d5bc7496ef1cd284781b7
+
+# stewart 평가기 h1.1f(보류 묶음 h1.1 의 울타리 실행 판) 해시 (고정 2026-11-10 13:40 KST, 평가 담당, 총괄 지시)
+# 판 폴더 h1.1f/(0700) 의 *.py 와 과제용 저장소 폴더 전체(eval_files 121개). 내용은 비공개.
+# 과제 sha = aa97ed44450d7e5a1eb8950a91061d59333c382f97aab36bcc0d4f4db1301266 — h1.1 과 같음(과제 정의 32개 바이트 같음). 실행 판만 다름.
+# h1.1 에서 바뀐 것: agentspawn.py 더함(v2.0.5 와 같은 바이트), run_one 의 에이전트 띄우기만 spawn_agent, agent_fence·valid 사유, 회차 TMPDIR. selftest 32/0.
+# 파일별 목록은 봉인 묶음이라 싣지 않음

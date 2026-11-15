@@ -1,0 +1,15 @@
+1b5c8ac80dcc518005ec2f1202648176fbb452bd1d4b3fe95dea9441f2d8a213  stewart eval v1.2 평가기 해시(판 폴더 v1.2/*.py), 2026-11-08 06:4x 고정.
+v1.1 → v1.2: 27번째 점검 결과를 본 뒤 고침(그 점검에 대한 총괄 회신 (가)). 이유 = 기능 실패(custom_functional 검사: E05 합계, C04 형 주석)가 지시 준수로도 잡히던 이중 집계 분류 오류. 과제·숨긴 시험·문턱·access 규칙은 그대로. 재채점 기능(--regrade)을 더했다. 옛 기준선과 base-fix 두 실행에 똑같이 적용한다(작업 폴더 그대로, GPU 없음).
+고정 전 동작 확인: eval-20261108-000607-mac-4b-x1-regrade-v1.2(판단에 안 씀, 해시 고정 전이라 valid=False, 바뀐 회차 0)
+  access.py 83b33002e5b59100758657eafedab49d5fbcc71ecbf67a867aac194a9f697902
+  grade.py 50fc498248b8b0d0650a0128c83ad0f89ce0fe97fec56522e7f172349de09f52
+  run_eval.py 0d15c165123dbe088a0b0a3eff7d3b90e85367ec96b2161165f32df0e95e3e8f
+  solutions_a.py 73e412172895fa40770eefc76b64645bf79c4b5b4e04a53192d84c1ef568c7eb
+  solutions_b.py 987652f7ea4f6838b32a13f1a41f014ab2f34c261050d912cfc7507788769a99
+  solutions_cd.py efd7ff334f0a69f13d9c302e9439b63b0287a190aeb0b662b77b5860ad225307
+  solutions_e.py 70d2309cdd98bfc53e7fa2f764a3ef139fe98f1b750e7cd976651e77d93c63c2
+  tasks_a.py 3ed9285788606d772a17aa4470c37b9b97cfd5de920f7e0364f541fcdfc06c3a
+  tasks_b.py 1ca61870e432369efd79919fd09f835b14a51fcfad21972986dd2e19adc08abd
+  tasks_c.py 29b2dda17582933868e59f422fcd7d4ad4bbcd34d2168bbba2771fbe0ab722a5
+  tasks_d.py bc2cfb7d99d7ae38fe916fcd5db6f76d3d3e7e879895ed8f66056e29525ba14f
+  tasks_e.py de9ea1a513aec4480cba49e8d1b4cdc31cbded238d2b8d3ff6cd1bf796406b99

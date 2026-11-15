@@ -1,0 +1,7 @@
+1d2e7b6bbe100e20efb542a3a1f43d401b36d454b8f3e064c1c475e5ab3253e7
+
+# stewart 평가기 h1.0(새 보류 32과제) 해시 (고정 2026-11-09 21:47 KST, 평가 담당, 총괄 지시)
+# 판 폴더 h1.0/(0700) 의 *.py 와 과제용 저장소 폴더 전체(run_eval.py --hash 의 eval_files 119개). 내용은 비공개.
+# selftest(b480fe7 채점 python): 과제 32개 문제 0개. 구성 R12(feature 4·rename 3·trace 5) · G4 · L6 · Q8(ask 4·act 4) · V2(과제 ID 는 봉인이라 싣지 않음).
+# 난이도 맞춤(b480fe7 v2 기준선 ±5pt)은 아직 — GPU 실행 뒤. 맞춤으로 과제를 바꾸면 h1.1 로 새 해시.
+# 파일별 목록은 봉인 묶음이라 싣지 않음

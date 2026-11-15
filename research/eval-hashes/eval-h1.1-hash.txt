@@ -1,0 +1,8 @@
+d4e5ff8f01533c4dcd5f0e7cfa1c7b06dc0a0a8bcacd77e7cc0abb6ddb6113f6
+
+# stewart 평가기 h1.1(새 보류 32과제, h1.0 대체) 해시 (고정 2026-11-10 10:53 KST, 평가 담당, 총괄 지시 / 연구 담당)
+# 판 폴더 h1.1/(0700) 의 *.py 와 과제용 저장소 폴더 전체(run_eval.py --hash 의 eval_files 120개). 내용은 비공개.
+# selftest: 과제 32개 문제 0개. 구성 R12(feature 4·rename 3·trace 5) · G4 · L6 · Q8(ask 4·act 4) · V2.
+# h1.0 에서 바뀐 것: L 과제 6개 은퇴 → 새 L 과제 6개(같은 꼴을 v2 L 크기로 줄임, 과제 ID·내용은 봉인이라 싣지 않음). R·G·Q·V 과제 정의는 h1.0 그대로.
+# 난이도 맞춤(S0 × 3)은 아직 — 총괄 지시 뒤. 맞춤 실행은 사용으로 세지 않음(registry/holdout-criteria.md 개정 1).
+# 파일별 목록은 봉인 묶음이라 싣지 않음

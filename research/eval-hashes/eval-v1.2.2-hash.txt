@@ -1,0 +1,4 @@
+f846df74a729bed0db22ba57ede63a65b7ec74f0b4903c9907d0d76420c1a477
+
+# stewart 평가기 v1.2.2 해시 (고정 2026-11-09 23:14 KST, 평가 담당, 총괄의 E17 시작 지시 — Claude 평가 probe 통과 뒤)
+# --agent stewart|claude, 어댑터 agents/claude_run.py(usage_breakdown·total_cost_usd 기록), 채점 복사본 숨김 폴더·채점 뒤 지움. selftest 문제 0.
