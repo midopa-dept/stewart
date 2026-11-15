@@ -248,6 +248,7 @@ uv run stewart hub --project ~/my-project
   - Tools can only shrink. Of the place's tools, only names in `tools` are kept and names in `tools_deny` are dropped. A name in both is dropped.
     - Workers additionally get only the tools a worker may use.
     - Hub tools (board, session_*) belong to the hub and stay as they are.
+    - In any place, a bundle without `run_shell` also drops `shell_output` and `shell_kill` (there is no output to read and no job to stop). The same holds for read workers.
   - Even when the main is seated on a tier (for example the slim shape of `hub --tier presto`), that shape does not leak into new conversations of other tiers.
   - Without these fields, behaviour is as before.
   - Fields that have no effect are reported one line each in `stewart tiers` and on that tier's row in the settings sheet. Examples: an unknown field name, `slim_keep` without `slim`, `default_for` on a manual-only tier, a `profile` that cannot be found.
@@ -269,6 +270,8 @@ uv run stewart hub --project ~/my-project
     - AGENTS.md and STEWART.md in the working folder (project rules) always stay.
     - These fields do not change tools. Use `tools` and `tools_deny` for tools.
     - `place_hints`, `nudges` and `examples` are conversation-path devices and mean nothing for workers (reported in the table).
+    - Place guidance (`place_hints`) is off by default. Set this cell to `true` or the environment variable `STEWART_PLACE_HINTS=1` to turn it on. `=0` always turns it off.
+    - Worker instructions never contain the hub role text or board instructions (workers cannot use session_* or board). So `role` and `board` also mean nothing for workers (reported in the table).
     - Example: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
     - For measurement, `filler_file = "<path>"` appends that file's text as is at the end of the profile instructions (before memory text and the skills index). Use it to build a cell that matches only in length. A relative path is resolved from the backends table's folder, and if the file cannot be read the run does not start. The feature fingerprint records its sha and character count.
 - `stewart setup` builds the backends table by asking questions (terminal only).

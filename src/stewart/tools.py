@@ -1504,9 +1504,19 @@ def unknown_tool(name: str, available: list[str]) -> str:
     return f"없는 도구: {name}. 쓸 수 있는 도구: {available}"
 
 
+SHELL_FOLLOW = ("shell_output", "shell_kill")
+
+
+def shell_pair(names) -> list:
+    """run_shell 이 없는 묶음에서는 shell_output·shell_kill 도 뺀다(볼 출력·끌 작업이 생길 수 없다 — 헛부름으로 연속 오류가 났다)."""
+    names = list(names)
+    return names if "run_shell" in names else [n for n in names if n not in SHELL_FOLLOW]
+
+
 def definitions(names: list[str]) -> list[dict]:
     if names == ["*"]:
         names = [n for n in TOOLS if n not in ORGANIZE_TOOLS and n not in OPT_IN]   # 정리 도구는 정리 프로필에서만 연다
+    names = shell_pair(names)
     out = []
     for n in names:
         if n not in TOOLS:

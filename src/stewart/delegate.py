@@ -118,6 +118,16 @@ class Budget:
         self.n = 0
 
 
+def without_role(system: str) -> str:
+    """허브 역할 글·현황판 지시를 뺀 지시문. 작업자는 부모(허브 메인) 지시문을 물려받지만 session_*·board 를 쓰지 못하니 그 글은 넘기지 않는다."""
+    from .board import NOTE as BOARD_NOTE
+    from .hubmain import HUB_MAIN_NOTE
+    s = system or ""
+    if HUB_MAIN_NOTE in s:
+        s = s.replace("\n\n" + HUB_MAIN_NOTE + "\n" + BOARD_NOTE, "").replace(HUB_MAIN_NOTE, "").replace(BOARD_NOTE, "")
+    return s
+
+
 def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, budget: Budget, pfl=None,
                   read_default: bool = False):
     """(작업자 프로필, max_steps) 또는 ConfigError."""
@@ -144,7 +154,7 @@ def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, b
     allowed = set(SP.narrow_tools(sorted(allowed), args.get("_tier")))   # 판 154: 작업자 등급의 tools·tools_deny(줄이기만)
     if exec_mode == "plan":
         allowed &= M.READ_TOOLS
-    tools = [t for t in parent_tools if t in allowed]
+    tools = T.shell_pair(t for t in parent_tools if t in allowed)   # 셸 없는 작업자에 shell_output·shell_kill 을 주지 않는다
     steps = base.max_steps if (kind and agent is None) else DEFAULT_STEPS
     if args.get("max_steps"):
         try:
@@ -155,7 +165,7 @@ def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, b
     if left <= 0:
         raise ConfigError(f"이번 일의 작업자 단계 합 상한({budget.limit})을 다 썼다. 직접 마무리하라.")
     steps = min(steps, left)
-    prof = dataclasses.replace(base, tools=tools, workdir=parent.workdir, system=WORKER_NOTE + "\n\n" + base.system.strip(), verify_command=None, output_format="free",
+    prof = dataclasses.replace(base, tools=tools, workdir=parent.workdir, system=WORKER_NOTE + "\n\n" + without_role(base.system).strip(), verify_command=None, output_format="free",
                                output_schema=None, mode=None, confirm=None, manager_tools=None, delegate_budget=None, secret_files=parent.secret_files,
                                action_check=parent.action_check)
     return prof, steps

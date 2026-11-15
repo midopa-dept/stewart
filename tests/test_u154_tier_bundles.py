@@ -150,7 +150,7 @@ class THub(unittest.TestCase):
         mod = self.first(h, "code", "moderato")
         self.assertNotIn("run_shell", mod["tools"])
         self.assertNotIn("web_fetch", mod["tools"])
-        self.assertEqual(set(main["tools"]) - set(mod["tools"]), {"run_shell", "web_fetch"})        # 그 밖은 메인 자리와 같다
+        self.assertEqual(set(main["tools"]) - set(mod["tools"]), {"run_shell", "web_fetch", "shell_output", "shell_kill"})   # 그 밖은 메인 자리와 같다(셸이 빠지면 셸 출력·끄기도)
         self.assertIn("허브 메인으로서", mod["system"])                                               # 지시문 꼴은 그 자리 그대로(자리 안내는 남은 도구를 따른다)
         talk = self.first(h, "talk", "lean")
         self.assertFalse(talk["system"].startswith("LEAN-지시문"))                                   # 대화 자리는 자기 지시문
@@ -242,6 +242,7 @@ class TPromptParts(unittest.TestCase):
         self.assertEqual(PP.apply_base(src, {}), src)
 
     def test_hub_main_parts(self):
+        self.env["STEWART_PLACE_HINTS"] = "1"   # 자리 안내는 기본 끔 — 켠 꼴에서 칸이 빼는지 본다
         full, tools0, b0 = self.once("--hub-main")
         same, tools_s, _ = self.once("--hub-main", "--tier", "same")
         self.assertEqual((same, tools_s), (full, tools0))                                          # 빈 prompt 칸 = 지금 그대로

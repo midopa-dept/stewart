@@ -310,7 +310,7 @@ CHAT_DESC_ADD = {   # 판 117.1: 실사용(chat·허브)에서만 도구 설명 
     "web_search": " 작업 폴더 밖의 사실·최신 소식·처음 보는 이름·제품을 찾을 때 쓴다 — 폴더 안 내용은 search.",
 }
 # 판 141: 자리 정체성 줄·도구 설명 덧붙임(실사용 chat 길만). 낱말 규칙(webnudge)을 늘리지 않고 자리가 고를 길을 말한다.
-# 환경 STEWART_PLACE_HINTS=0 이면 끈다(코딩 과제 회귀 짝을 잴 손잡이 — 기본 켬).
+# 기본 끔(창 5 회귀 점검에서 켬이 문턱을 넘었다). STEWART_PLACE_HINTS=1 이나 등급 prompt.place_hints = true 로 켠다. =0 이 늘 이긴다.
 PLACE_HINTS_ENV = "STEWART_PLACE_HINTS"
 CODE_PLACE_WEB = ("- 작업 폴더 밖의 것(도구·제품·사람·소식)에 대한 물음은 — 이름만 던졌거나, 평·비교·쓸 만한가를 물어도 — "
                   "web_search 부터 한다. 폴더에 그 이름이 있을 까닭이 있으면 폴더도 함께 본다.")
@@ -324,8 +324,14 @@ PLACE_DESC_ADD = {
 }
 
 
-def place_hints_on(env=None) -> bool:
-    return (os.environ if env is None else env).get(PLACE_HINTS_ENV, "1") != "0"
+def place_hints_on(env=None, tier=None) -> bool:
+    """자리 안내 켬·끔: 환경 =0 이면 끔, 등급 칸(prompt.place_hints)이 적혀 있으면 그 값, 아니면 환경 =1 일 때만 켬(기본 끔)."""
+    v = (os.environ if env is None else env).get(PLACE_HINTS_ENV)
+    if v == "0":
+        return False
+    if isinstance(tier, bool):
+        return tier
+    return v is not None and v != ""
 
 
 def with_place_lines(system: str, kind: str, names) -> str:
@@ -345,7 +351,7 @@ OFF_TOOLS_NOTE = "꺼져 있는 도구(사람이 허브 머리의 도구 칩으�
 
 
 def _chat_desc(d: dict, place: bool = True) -> dict:
-    add = CHAT_DESC_ADD.get(d["function"]["name"], "") + (PLACE_DESC_ADD.get(d["function"]["name"], "") if place and place_hints_on() else "")
+    add = CHAT_DESC_ADD.get(d["function"]["name"], "") + (PLACE_DESC_ADD.get(d["function"]["name"], "") if place else "")
     if not add:
         return d
     return {**d, "function": {**d["function"], "description": d["function"]["description"] + add}}
@@ -428,6 +434,8 @@ class ChatSession:
             # 판 153·154: 등급의 도구 칸 — 이 자리 도구 가운데 tools 의 이름만, tools_deny 의 이름은 빼고(더 주지 않는다, 작업자에게 넘길 목록도 같이)
             keep = set(SP.narrow_tools([d["function"]["name"] for d in defs], tier_tools))
             defs = [d for d in defs if d["function"]["name"] in keep]
+        keep = set(T.shell_pair([d["function"]["name"] for d in defs]))   # run_shell 이 빠진 묶음이면 shell_output·shell_kill 도
+        defs = [d for d in defs if d["function"]["name"] in keep]
         defs += self.extra_defs
         self.extra_names = {d["function"]["name"] for d in self.extra_defs}
         self.all_tool_names = [d["function"]["name"] for d in defs
@@ -447,7 +455,7 @@ class ChatSession:
         self.disabled_tools = {n for n in self.toggleable if n not in ((profile.raw or {}).get("toggle_on") or [])}
         self.pparts = PP.of(profile)   # 판 154: 등급 prompt 칸(지시문 절 켬끔) — 없으면 지금 그대로
         self.nudges_on = PP.on(self.pparts, "nudges")
-        defs = [_chat_desc(d, PP.on(self.pparts, "place_hints")) for d in defs]   # 판 117.1: 실사용 길만 search·web_search 설명에 "언제 어느 쪽" 한 구절(평가 길 앞부분은 그대로)
+        defs = [_chat_desc(d, place_hints_on(tier=self.pparts.get("place_hints"))) for d in defs]   # 판 117.1: 실사용 길만 search·web_search 설명에 "언제 어느 쪽" 한 구절(평가 길 앞부분은 그대로)
         self._all_defs = defs
         defs = [d for d in defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_defs = defs
@@ -477,7 +485,7 @@ class ChatSession:
         mem_text, mem_log = memory_for(profile, interactive=True)
         self.env_info = envinfo.measure(profile.workdir)   # 세션 시작 때 한 번(이어 하기는 새로 잰다)
         base_sys = PP.apply_base(profile.system.strip(), self.pparts)   # 판 154: role·board·engine_core 칸
-        self.place_hints = place_hints_on() and self.slim is None and PP.on(self.pparts, "place_hints")   # 판 141(얇은 꼴은 자기 짧은 지시를 쓴다)
+        self.place_hints = place_hints_on(tier=self.pparts.get("place_hints")) and self.slim is None   # 판 141(얇은 꼴은 자기 짧은 지시를 쓴다)
         if self.place_hints:
             base_sys = with_place_lines(base_sys, "talk" if str((profile.raw or {}).get("surface") or "") == "talk" else "code",
                                         self.tool_names)

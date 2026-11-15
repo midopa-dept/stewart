@@ -250,6 +250,7 @@ uv run stewart hub --project ~/my-project
   - 도구는 줄이기만 합니다. 그 자리 도구 가운데 `tools` 의 이름만 남기고 `tools_deny` 의 이름을 뺍니다. 둘 다 적힌 이름은 빠집니다.
     - 작업자는 여기에 더해 작업자가 쓸 수 있는 도구만 받습니다.
     - 허브 도구(board·session_*)는 허브 몫이라 그대로입니다.
+    - 어느 자리든 `run_shell` 이 빠진 묶음에서는 `shell_output`·`shell_kill` 도 빠집니다(볼 출력·끌 작업이 생기지 않습니다). 읽기 작업자도 같습니다.
   - 메인이 등급으로 앉았어도(예: `hub --tier presto` 의 얇은 꼴) 그 꼴이 다른 등급의 새 대화로 새지 않습니다.
   - 칸이 없으면 예전과 같습니다.
   - 쓰이지 않는 칸은 `stewart tiers` 와 설정 시트의 그 등급 줄에 한 줄씩 알립니다. 예: 모르는 칸 이름, `slim` 없는 `slim_keep`, 사람만 등급의 `default_for`, 찾지 못하는 `profile`.
@@ -271,6 +272,8 @@ uv run stewart hub --project ~/my-project
     - 작업 폴더의 AGENTS.md·STEWART.md(프로젝트 규칙)는 늘 남습니다.
     - 도구는 이 칸으로 바뀌지 않습니다. 도구는 `tools`·`tools_deny` 로 바꿉니다.
     - `place_hints`·`nudges`·`examples` 는 대화 길 장치라 작업자에는 뜻이 없습니다(표에 알림).
+    - 자리 안내(`place_hints`)는 기본 끔입니다. 이 칸에 `true` 를 적거나 환경 `STEWART_PLACE_HINTS=1` 이면 켜집니다. `=0` 이면 늘 꺼집니다.
+    - 작업자 지시문에는 허브 역할 글·현황판 지시가 처음부터 없습니다(작업자는 session_*·board 를 못 씁니다). 그래서 작업자에는 `role`·`board` 도 뜻이 없습니다(표에 알림).
     - 예: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
     - 측정용 `filler_file = "<경로>"`: 그 파일의 글을 프로필 지시 끝(기억 글·스킬 색인 앞)에 그대로 붙입니다. 길이만 맞춘 칸을 만들 때 씁니다. 상대 경로는 백엔드 표 폴더 기준이고, 읽지 못하면 시작하지 않습니다. 기능 지문에 sha·글자 수가 남습니다.
 - `stewart setup` 은 물어 가며 backends 표를 만듭니다(터미널에서만).

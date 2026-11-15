@@ -210,11 +210,11 @@ def tier_notes(t: dict, manual: bool = False) -> list[str]:
     out += pn
     if pv.get("filler_file") and not Path(os.path.expanduser(pv["filler_file"])).is_file():
         out.append(f"prompt.filler_file 파일이 없다({Path(pv['filler_file']).name}) — 이 등급으로 앉히거나 띄우면 시작하지 않는다")
-    chat_only = [k for k in ("place_hints", "nudges", "examples") if k in pv]
+    chat_only = [k for k in ("place_hints", "nudges", "examples", "role", "board") if k in pv]
     if chat_only and not manual:
-        out.append(f"prompt 의 {'·'.join(chat_only)} 는 대화 길(메인·새 대화)에만 — 작업자에는 그 장치가 없다")
+        out.append(f"prompt 의 {'·'.join(chat_only)} 는 메인 자리(메인·새 대화)에만 — 작업자 지시문에는 그 글·장치가 없다")
     if t.get("slim") and any(k in pv for k in ("role", "board", "engine_core")):
-        out.append("slim 은 짧은 지시로 바꾸므로 prompt 의 role·board·engine_core 는 메인 자리에서 뜻이 없다(작업자에는 먹는다)")
+        out.append("slim 은 짧은 지시로 바꾸므로 prompt 의 role·board·engine_core 는 메인 자리에서 뜻이 없다(작업자에는 engine_core 만 먹는다)")
     if t.get("profile"):
         from .config import ConfigError, load_profile
         try:
