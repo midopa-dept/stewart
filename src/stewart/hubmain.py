@@ -551,6 +551,21 @@ def with_role(profile):
     return profile
 
 
+HUB_ABSENT = "허브 없이 돌고 있어 허브 도구(board·session_*)는 쓸 수 없다. 이 과제는 허브 도구 없이 끝낸다."
+
+
+def hub_main_form(profile, rec=None):
+    """판 151: 허브 없이 허브 메인 꼴로 — 역할 글(with_role) + 허브 도구 정의(첫 요청 본문이 허브 메인과 같다).
+    허브 도구를 부르면 늘 같은 거절 글(HUB_ABSENT)을 돌려주고 기록에 hub_tool_refused 사건을 남긴다. (프로필, extra_tools) 를 돌려준다."""
+    from . import hubtools as HT
+
+    def refuse(name: str, args: dict) -> tuple[bool, str]:
+        if rec is not None:
+            rec.event("hub_tool_refused", name=name)
+        return False, HUB_ABSENT
+    return with_role(profile), (HT.DEFINITIONS, refuse)
+
+
 def kind_of(profile) -> str:
     """판 120: 대화 칸의 종류 — 프로필 surface 가 talk 면 talk(대화), 아니면 code(코드)."""
     return "talk" if str((getattr(profile, "raw", None) or {}).get("surface") or "") == "talk" else "code"

@@ -522,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="--once 와 함께: 메인 자리가 아니라 허브가 띄우는 작업자 꼴로 과제 하나를 돌린다(지시문·도구·문맥 창·생각이 허브 작업자와 같다). "
                         "read = 도구를 적지 않은 일(읽기 도구만), write = 도구를 적은 일. --tier 는 작업자의 등급(없으면 표의 default_for). 판 138")
     c.add_argument("--worker-tools", default=None, help="--worker 와 함께: 작업자에게 적어 줄 도구 이름(쉼표로). 없으면 read·write 기본")
+    c.add_argument("--hub-main", action="store_true",
+                   help="--once 와 함께: 허브 메인 꼴(허브 역할 글 + 허브 도구 정의)로 한 번. 허브가 없으니 허브 도구를 부르면 거절 글이 돌아간다")
     _resume_args(c)
     _common(c, task=False)
     rw = sub.add_parser("rewind", help="실행 기록의 체크포인트로 파일을 되돌린다(도구가 쓴 파일만)")
@@ -896,6 +898,13 @@ def main(argv: list[str] | None = None) -> int:
             if a.max_steps:
                 profile.max_steps = a.max_steps
             rec = Recorder(Path(a.runs_dir), "chat-" + profile.name)
+            extra = None
+            if a.hub_main:   # 판 151: 허브 메인 꼴(역할 글 + 허브 도구 정의, 허브 도구는 거절 글)
+                if not a.once or a.worker:
+                    print("stewart chat --hub-main: --once 와 함께, --worker 없이 쓴다", file=sys.stderr)
+                    return 2
+                from .hubmain import hub_main_form
+                profile, extra = hub_main_form(profile, rec)
             if a.once and a.worker:   # 판 138: 허브 작업자와 같은 길(_spawn_run)로 한 번
                 sess = ChatSession(profile, backend, rec, confirm=a.confirm, history=history, resumed_from=resumed, stream=False,
                                    mode=a.mode or "auto", default_mode="auto", think=a.think)
@@ -915,7 +924,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if w.get("stop_reason") in ("completed", "asked") else 1
             if a.once:   # 판 114: 사람 없이 한 차례 — 화면은 지금 화면, 모드는 주지 않으면 auto
                 sess = ChatSession(profile, backend, rec, confirm=a.confirm, history=history, resumed_from=resumed, stream=a.stream,
-                                   mode=a.mode or ("auto" if a.confirm is None else None), default_mode="auto", think=a.think)
+                                   mode=a.mode or ("auto" if a.confirm is None else None), default_mode="auto", think=a.think, extra_tools=extra)
                 from . import timebudget as TB
                 sess.time_budget = TB.make(a.time_budget, t0=_T_START)   # 판 128: 바깥 벽시계와 같이 프로세스 시작부터
                 sess._tb_each_turn = False

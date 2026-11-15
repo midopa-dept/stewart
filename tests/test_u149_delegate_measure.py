@@ -69,14 +69,16 @@ class TOne(unittest.TestCase):
         self.addCleanup(e.stop)
         self.b = Backend("b", "http://127.0.0.1:9/v1", "m", "q", 100000)
 
-    def run_with(self, scene, cell, script):
+    def run_with(self, scene, cell, script, dry=False):
         seen = []
+        self.tools_seen = []
 
         def fake(backend, messages, tools=None, *a, **k):
             seen.append(json.loads(json.dumps(messages)))
+            self.tools_seen.append([t["function"]["name"] for t in tools or []])
             return script(messages)
         with mock.patch.object(C, "chat", side_effect=fake), mock.patch.object(E, "chat", side_effect=fake):
-            r = self.M.one(scene, self.b, cell, 12)
+            r = self.M.one(scene, self.b, cell, 12, dry)
         return r, seen
 
     def test_delegate_runs_child_and_counts(self):
@@ -107,6 +109,42 @@ class TOne(unittest.TestCase):
         self.assertGreaterEqual(r["nudge"], 1)                                                      # 읽기 8번 넘어 넛지가 떴다
         r2, _ = self.run_with(sc, "chat-nonudge", script)
         self.assertEqual(r2["nudge"], 0)
+
+
+    def test_hub_cell_is_hub_main_form(self):
+        """판 151: hub 칸 = `chat --once --hub-main` 과 같은 길 — 허브 도구 정의가 실리고, 부르면 거절 글·hub_refused 로 센다."""
+        from stewart.hubmain import HUB_ABSENT
+
+        def script(ms):
+            if not any(m.get("role") == "tool" for m in ms):
+                return resp(calls=[("session_spawn", {"name": "w", "task": "src 아래 정리"})])
+            return resp("끝")
+        r, seen = self.run_with({"id": "h", "kind": "should_not", "said": "README 첫 줄"}, "hub-nonudge", script)
+        self.assertIn("session_spawn", self.tools_seen[0])
+        self.assertIn("board", self.tools_seen[0])
+        self.assertIn(HUB_ABSENT, json.dumps(seen[-1], ensure_ascii=False))
+        self.assertEqual(r["hub_refused"], 1)
+        self.run_with({"id": "c", "kind": "should_not", "said": "README 첫 줄"}, "chat-nonudge", lambda ms: resp("끝"))
+        self.assertNotIn("session_spawn", self.tools_seen[0])                                      # chat 칸은 허브 도구 없음
+
+    def test_dry(self):
+        """판 151 --dry: 읽기만 실제로, 쓰기·셸은 실행 안 함, delegate 는 작업자를 띄우지 않고 부름·맡긴 글만 기록."""
+        def script(ms):
+            if str(ms[0]["content"]).startswith("너는 부모 에이전트가 맡긴"):
+                return resp("작업자가 돌았다")
+            n = sum(1 for m in ms if m.get("role") == "tool")
+            if n == 0:
+                return resp(calls=[("read_file", {"path": "README.md"}), ("write_file", {"path": "x.txt", "content": "x"}),
+                                   ("bash", {"command": "touch y.txt"}),
+                                   ("delegate", {"task": "src/ledgerly 아래 load_config 쓰임을 파일별로 정리해 돌려라"})])
+            return resp("끝")
+        r, seen = self.run_with({"id": "dg", "kind": "should", "said": "정리"}, "chat-nonudge", script, dry=True)
+        self.assertFalse(any(str(m[0]["content"]).startswith("너는 부모 에이전트가 맡긴") for m in seen))   # 작업자 안 띄움
+        self.assertEqual((r["ok"], r["first_step"], r["scope"], r["ret"]), (True, 1, True, True), r)    # 판정은 같다
+        tool_msgs = [str(m.get("content")) for m in seen[-1] if m.get("role") == "tool"]
+        self.assertEqual(len(tool_msgs), 4)
+        self.assertIn("Ledgerly", tool_msgs[0])                                                      # 읽기는 실제로
+        self.assertTrue(all(self.M.DRY_RESULT in t for t in tool_msgs[1:]), tool_msgs)
 
 
 if __name__ == "__main__":

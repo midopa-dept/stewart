@@ -6,10 +6,12 @@
 - 장면: tests/scenes/delegate/scenes.toml(개발 묶음 — 결과를 읽고 고쳐도 된다. 확증은 따로 둔 장면으로).
 - 작업 폴더: 장면·회차마다 새 시험 저장소(tools/scenes/fixture_repo.py, 파일 46개).
 - 칸 넷(--cells 로 고름): hub-nudge·hub-nonudge·chat-nudge·chat-nonudge
-  - hub = 허브가 메인에 붙이는 역할 글(hubmain.with_role) 있음, chat = 보통 코드 자리
+  - hub = 허브 메인 꼴(hubmain.hub_main_form — 역할 글 + 허브 도구 정의, `chat --once --hub-main` 과 같다), chat = 보통 코드 자리
   - nudge = 맡기기 넛지(판 97) 켬·끔
 - 도구는 실제로 돈다(읽기·쓰기·작업자·위임 모두, 모드 auto, 작업 폴더 안). 웹 검색은 닿지 않는 주소(빨리 실패).
   셸도 실제로 돈다 — 평가 실행기의 격리 안에서 돌린다.
+  --dry 면 읽기 도구만 실제로 돌고, 쓰기·셸은 거절 글, delegate·workers 는 띄우지 않고 부름·맡긴 글만 기록(dry_call)에 남긴다.
+  판정은 부름과 맡긴 글로 하니 같다. 다만 맡긴 일의 결과를 받지 못하니 그 뒤 걸음은 실제와 다르다.
 - 메인 걸음 상한 --steps(기본 12). 작업자는 delegate 의 예산(메인 상한 × 2)·기본 걸음 안에서 돈다.
 - 판정(기계): 첫 N 걸음 안에 delegate 또는 workers(action=spawn)를 불렀는가 · 부른 걸음 번호 · 맡긴 글에 범위(경로·폴더)와 돌려받을 것(정리·목록·표…)이
   있는가 · 맡기지 말아야 할 말에서의 헛부름 · 넛지가 떴는가(기록의 delegate_nudge 사건).
@@ -87,18 +89,46 @@ def judge(scene: dict, messages: list[dict], nudges: int, limit: int) -> dict:
     return r
 
 
-def one(scene: dict, backend, cell: str, limit: int) -> dict:
+DRY_RESULT = "(측정: 이 도구는 실행하지 않았다. 읽기 도구만 실제로 돈다.)"
+
+
+def dry_wrap(s) -> None:
+    """판 151 --dry: 읽기 도구(delegate.READ_TOOLS)만 실제로 돌리고, 쓰기·셸은 거절 글, delegate·workers 는 띄우지 않고
+    부름과 맡긴 글만 기록(dry_call 사건)에 남긴다."""
+    real = s._exec
+
+    def ex(rc: dict, step: int) -> dict:
+        fn = rc.get("function") or {}
+        name, raw = fn.get("name", ""), fn.get("arguments") or "{}"
+        if name in DG.READ_TOOLS:
+            return real(rc, step)
+        try:
+            args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except (ValueError, TypeError):
+            args = {}
+        task = args.get("task") if isinstance(args, dict) else None
+        s.rec.event("dry_call", name=name, step=step, **({"task": str(task)} if task else {}))
+        s.st["tool_calls"] += 1
+        return {"id": rc.get("id"), "name": name, "raw_arguments": raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False),
+                "ok": True, "result": DRY_RESULT, "elapsed_s": 0.0}
+    s._exec = ex
+
+
+def one(scene: dict, backend, cell: str, limit: int, dry: bool = False) -> dict:
     tmp = Path(tempfile.mkdtemp(prefix="dg-scene-"))
     repo = make_repo(tmp / "repo")
     p = load_profile("chat")
     p = dataclasses.replace(p, workdir=repo, max_steps=limit)
-    if cell.startswith("hub"):
-        from stewart.hubmain import with_role
-        p = with_role(p)
+    rec, extra = Recorder(tmp / "runs", "dg"), None
+    if cell.startswith("hub"):   # 판 151: `chat --once --hub-main` 과 같은 길(역할 글 + 허브 도구 정의, 허브 도구는 거절 글)
+        from stewart.hubmain import hub_main_form
+        p, extra = hub_main_form(p, rec)
     hist = [{"role": "system", "content": ""}] + list(scene.get("history") or []) if scene.get("history") else None
-    s = C.ChatSession(p, backend, Recorder(tmp / "runs", "dg"), C.UI(out=io.StringIO(), color=False), stream=False, mode="auto",
-                      history=hist)
+    s = C.ChatSession(p, backend, rec, C.UI(out=io.StringIO(), color=False), stream=False, mode="auto",
+                      history=hist, extra_tools=extra)
     s.dnudge = DG.Nudge(on=cell.endswith("-nudge") and DG.NAME in s.tool_names)
+    if dry:
+        dry_wrap(s)
     t0 = time.time()
     try:
         reason = s.turn(scene["said"])
@@ -109,13 +139,15 @@ def one(scene: dict, backend, cell: str, limit: int) -> dict:
             s.close()
         except Exception:   # noqa: BLE001
             pass
-    nudges = 0
+    nudges = refused = 0
     try:
-        nudges = sum(1 for ln in (s.rec.dir / "events.jsonl").read_text(encoding="utf-8").splitlines() if '"delegate_nudge"' in ln)
+        evs = (s.rec.dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        nudges = sum(1 for ln in evs if '"delegate_nudge"' in ln)
+        refused = sum(1 for ln in evs if '"hub_tool_refused"' in ln)   # 판 151: 허브 도구를 불러 거절 글을 받은 수
     except OSError:
         pass
     r = judge(scene, s.messages, nudges, limit)
-    r.update(reason=str(reason)[:120], secs=round(time.time() - t0, 1))
+    r.update(reason=str(reason)[:120], secs=round(time.time() - t0, 1), hub_refused=refused)
     return r
 
 
@@ -162,6 +194,7 @@ def main() -> int:
     ap.add_argument("--scenes", default=str(SCENES))
     ap.add_argument("--out", default="")
     ap.add_argument("--table", default="")
+    ap.add_argument("--dry", action="store_true", help="실행하지 않는 꼴: 읽기만 실제로, 쓰기·셸은 거절, delegate·workers 는 부름·맡긴 글만 기록")
     a = ap.parse_args()
     if a.lanes and not a.model:
         ap.error("--lanes 에는 --model 이 필요하다")
@@ -187,7 +220,7 @@ def main() -> int:
                 cell, sc = jobs.get_nowait()
             except queue.Empty:
                 return
-            r = one(sc, b, cell, a.steps)
+            r = one(sc, b, cell, a.steps, a.dry)
             with lock:
                 res.setdefault(f"{cell}|{sc['id']}", []).append(r)
                 done = sum(len(v) for v in res.values())
@@ -199,7 +232,7 @@ def main() -> int:
         t.start()
     for t in ths:
         t.join()
-    meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "steps": a.steps, "n": a.n, "cells": cells,
+    meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "steps": a.steps, "n": a.n, "cells": cells, "dry": a.dry,
             "scenes": [{"id": s["id"], "kind": s["kind"]} for s in scenes]}
     if a.out:
         Path(a.out).write_text(json.dumps({"meta": meta, "results": res}, ensure_ascii=False, indent=1), encoding="utf-8")

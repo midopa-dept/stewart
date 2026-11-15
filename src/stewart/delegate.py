@@ -138,6 +138,8 @@ def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, b
     elif read_default and not kind:   # chat·허브: 도구를 적지 않으면 읽기 도구만(조사·탐색)
         allowed &= M.READ_TOOLS
     allowed -= NO_CHILD
+    from . import skills as SK, tools as T
+    allowed &= set(T.TOOLS) | {SK.NAME}   # 판 151: 작업자(engine)가 만들 수 있는 도구만 — forge_*·workers·기억 도구 같은 부모 자리 도구는 넘기지 않는다
     if exec_mode == "plan":
         allowed &= M.READ_TOOLS
     tools = [t for t in parent_tools if t in allowed]
