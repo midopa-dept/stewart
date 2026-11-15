@@ -32,6 +32,7 @@ A small agent runner that lets a model you host work on a local folder.
 - **사람과 나눠 하기:** 단계 세워 묻기, 되짚기, 사람 손 카드는 논문이 아니라 실제로 써 보며 본 실패에서 나왔습니다.
 - **지난 일에서 배우기:** 잘 된 꼴을 예시로 두고 비슷한 일에 하나만 붙이며(학습 없이), 표시한 기록은 학습 자료로 내보냅니다([아래 절](#지난-일에서-배우기)).
 - 자료마다 무엇이 stewart 의 어디에 들어갔는지(들어감·부분·계획)는 [docs/research-notes.md](docs/research-notes.md) 에 있습니다.
+- 고친 것을 어떻게 쟀는지(계획·결과 전 규칙·sha·결과, 확증하지 못한 것과 돈 포함)는 [research/](research/README.md) 에 있습니다. 개발 묶음과 봉인 묶음을 나눠, 확증이 아닌 숫자로 "나아졌다"를 말하지 않습니다.
 
 ## 목차
 

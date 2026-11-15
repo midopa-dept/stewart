@@ -30,6 +30,7 @@ With the same Claude models on the same coding tasks, stewart used 0.69–0.77×
 - **Working with a person:** step plans with check-ins, reflection and hand-off cards came from failures seen in real use, not from papers.
 - **Learning from past work:** good patterns are kept as examples and only one is attached to a similar task (no training), and marked runs can be exported as training data ([section below](#learning-from-past-work)).
 - [docs/research-notes.md](docs/research-notes.md) lists what each source contributed and where it is in stewart (in, partial, planned).
+- How changes were measured (plans, rules fixed before results, sha256 hashes, results, including what could not be confirmed and what it cost) is in [research/](research/README.md) (in Korean). Development and sealed sets are kept apart, and no improvement is claimed from numbers that are not a confirmation.
 
 ## Contents
 
