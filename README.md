@@ -216,6 +216,7 @@ uv run stewart hub --project ~/my-project
 #### presto 의 기본 생각 깊이
 - `presto` 로 도는 메인·작업자는 생각 깊이 기본이 `low` 이고, 대화 틀 자리(`chat_template_kwargs`)에 싣습니다.
   - 등급 칸에 `reasoning_effort = "low"`, `reasoning_effort_at = "template"` 을 적은 것과 같은 요청이 나갑니다.
+  - 이 꼴로 봉인 묶음에서 한 번 잰 확증에서 정답률은 줄지 않았고(비열등), 걸린 시간은 약 0.77배, 출력 토큰은 약 0.59배였습니다([창 5 기록](research/w5-presto-worker/README.md)).
 - moderato 와 다른 점: 백엔드에 `effort_values` 가 없어도 싣습니다.
   - 목록이 있는데 `low` 가 없으면 싣지 않습니다.
   - 바깥 API 백엔드(`provider` 를 적었거나 바깥 주소)에는 싣지 않습니다. 그 칸을 모르는 API 가 많습니다. 실으려면 등급 칸에 적습니다.

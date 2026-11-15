@@ -214,6 +214,7 @@ uv run stewart hub --project ~/my-project
 #### Default thinking depth for presto
 - A main or worker running on `presto` defaults to a thinking depth of `low`, sent in the chat template slot (`chat_template_kwargs`).
   - The request is the same as writing `reasoning_effort = "low"` and `reasoning_effort_at = "template"` in the tier field.
+  - In a one-shot confirmatory run of this shape on a sealed set, accuracy did not drop (non-inferior), wall time was about 0.77× and output tokens about 0.59× ([window 5 record](research/w5-presto-worker/README.md)).
 - How it differs from moderato: it is sent even when the backend has no `effort_values`.
   - If there is a list and it has no `low`, nothing is sent.
   - It is not sent to external API backends (a `provider` is set, or the address is external); many APIs do not know that field. To send it there, write it in the tier field.

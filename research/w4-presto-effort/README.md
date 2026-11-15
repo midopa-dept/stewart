@@ -17,7 +17,7 @@
 ## 목차
 0. 맨 위 요약 · 1. 낱말 풀이 · 2. 창 4 — 물음과 결과 · 3. 결과 뒤에 본 것 · 4. 결과 뒤에 바뀐 것(모두) · 5. 작업자·등급에 대해 알게 된 사실 · 6. 결정 A · B · 7. 시간과 돈 · 8. 안 본 것 · 부록. 같은 장비에서 함께 돈 것
 
-함께 보는 파일: [results.md](results.md)(평가 담당·연구 담당의 결과 보고 원본). 설계와 결과 전 고정 sha 는 창 5 와 함께 더한다.
+함께 보는 파일: [results.md](results.md)(평가 담당·연구 담당의 결과 보고 원본) · [design.md](design.md)(설계와 그 이력) · [fixed-before-run.md](fixed-before-run.md)(결과 전 고정 sha). 다음 창: [../w5-presto-worker/](../w5-presto-worker/README.md)(읽기 작업자 꼴, low 채택).
 
 ## 1. 낱말 풀이
 - **presto · moderato · largo**: 등급. presto 는 찾기·읽기·요약, moderato 는 코딩·대화, largo 는 계획·검토다. rubato 는 바깥 유료 모델 등급이라 이 보고서와 무관하다.
