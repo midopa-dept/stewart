@@ -1,0 +1,115 @@
+% 연구 저장소의 확인된 서지만. note = 확인 수준(2026-11-09–10 기준)
+%   본문(직접)      = 연구 담당이 arXiv HTML 본문을 열어 읽음(WebFetch 요약 경유)
+%   본문(하위)      = 하위 조사 에이전트가 HTML 본문을 읽음(WebFetch 요약 경유) — 인용 수치는 원문 대조 전
+%   초록(직접/하위)  = abs 페이지만
+%   저자 목록이 "and others" 인 것은 전체 저자를 확인하지 못함(투고 전 채움)
+%   공개판: 우리가 쓴 모델 판(원본·abliteration 판·제3자 양자화 판)의 HF 카드 항목 3개와, 판 이름 낱말이 겹치는 공개 abliteration 도구 항목 1개를 뺐다(모델 판 이름 가림)
+
+@misc{arditi2024refusal,
+  title  = {Refusal in Language Models Is Mediated by a Single Direction},
+  author = {Arditi, Andy and Obeso, Oscar and others and Nanda, Neel},
+  year   = {2024}, eprint = {2406.11717}, archivePrefix = {arXiv},
+  note   = {초록(하위). NeurIPS 2024 채택 여부 미확인}
+}
+@misc{wollschlager2025geometry,
+  title  = {The Geometry of Refusal in Large Language Models: Concept Cones and Representational Independence},
+  author = {Wollschl{\"a}ger, Tom and Elstner, Jannes and Geisler, Simon and Cohen-Addad, Vincent and G{\"u}nnemann, Stephan and Gasteiger, Johannes},
+  year   = {2025}, eprint = {2502.17420}, archivePrefix = {arXiv},
+  note   = {초록(하위). ICML 채택 미확인}
+}
+@misc{young2025comparative,
+  title  = {Comparative Analysis of LLM Abliteration Methods: A Cross-Architecture Evaluation},
+  author = {Young, Richard J.},
+  year   = {2025}, eprint = {2512.13655}, archivePrefix = {arXiv},
+  note   = {본문(하위), v2 2026-01-08. 7--14B 16종, 도구 4종, KL·MMLU·GSM8K, 1회 실행}
+}
+@misc{david2026safety,
+  title  = {Measuring Safety Alignment Effects in Autonomous Security Agents},
+  author = {David, Isaac and Gervais, Arthur},
+  year   = {2026}, eprint = {2605.19722}, archivePrefix = {arXiv},
+  note   = {초록(직접) + 본문(하위). 공개 파생 GGUF 4쌍, 보안 30과제 + 코딩 대조 20, seed 5, strict/repair 2x2(Gemma 31B 10과제)}
+}
+@misc{fafula2026scalpel,
+  title  = {Abliteration Is Not a Scalpel: Off-Target Effects of Refusal Removal on Decision Disposition Across Model Families},
+  author = {Fafu{\l}a, Aleksander},
+  year   = {2026}, eprint = {2607.17427}, archivePrefix = {arXiv},
+  note   = {본문(하위) + §3.2·§5.3 본문(직접, 2026-11-10). Draft v0.5. 한 제작자의 공개 abliteration 판 MoE 2쌍 BF16 그대로 서빙, 해시 대조. 앞선 파일럿(NVFP4, ModelOpt W4A4 vs llmcompressor)을 오염으로 보고 BF16 재실험에서 결론이 뒤집힘}
+}
+@misc{hurtado2026checkpoint,
+  title  = {Has This Checkpoint Been Abliterated? A Two-Signal Audit and Its Failure Map},
+  author = {Hurtado, Gabriel},
+  year   = {2026}, eprint = {2607.01854}, archivePrefix = {arXiv},
+  note   = {본문(직접), v2 2026-08-18. 공개 등록부 273(평가 57/37), 중간 층 띠 ΔW rank-1 에너지 + 활성 신호, 양자화본 없음}
+}
+@misc{messenger2026detecting,
+  title  = {Detecting Safety Training Modification in Language Models via Activation Analysis},
+  author = {Messenger, Glen},
+  year   = {2026}, eprint = {2608.05578}, archivePrefix = {arXiv},
+  note   = {초록(직접). IEEE Access 2026 표기(미확인)}
+}
+@misc{garcia2026uncensored,
+  title  = {Uncensored Open-weight Models: Redistribution as the Persistence Layer},
+  author = {Garcia and others},
+  year   = {2026}, eprint = {2609.05241}, archivePrefix = {arXiv},
+  note   = {초록(하위). 저자 목록 미확인(10a Labs)}
+}
+@misc{jang2026flat,
+  title  = {Flat Score, Amplified Failures: How the Error Budget Masks Damage in Quantized LLM Agents},
+  author = {Jang, Jiwon and Yang, Kisu and Lim, Heuiseok and Park, Hyunwoo},
+  year   = {2026}, eprint = {2607.27275}, archivePrefix = {arXiv},
+  note   = {초록(직접) + 본문(하위). tau2-bench, 16/8/4비트 같은 계보, 셀당 456 에피소드, 오류 수리 프롬프트}
+}
+@misc{li2026finding,
+  title  = {Finding the Right Fit: Model-Harness Interactions across Agent Tasks},
+  author = {Li and Zhou and Teng and others and An, Bo},
+  year   = {2026}, eprint = {2610.00917}, archivePrefix = {arXiv},
+  note   = {본문(하위). 모델 5 x 하네스 66구성, 과제당 1회, 통계 검정 없음. 저자 목록·소속 미확인}
+}
+@misc{fan2026harness,
+  title  = {An Empirical Study of Harness Design for Coding Agents},
+  author = {Fan and Zhang and others and Wang, Xiaoyang},
+  year   = {2026}, eprint = {2609.20804}, archivePrefix = {arXiv},
+  note   = {본문 일부(하위, 앞 100k/164k자). Nemotron-3 30B--550B·Mistral, 176설정, 과제당 1회, McNemar+BH. 저자 목록 미확인}
+}
+@misc{hu2026beyond,
+  title  = {Beyond the Model: Demystifying Harness Effects in Software Engineering Agents},
+  author = {Hu and Zhang and Yu and others and Xiao},
+  year   = {2026}, eprint = {2609.32459}, archivePrefix = {arXiv},
+  note   = {본문(하위, 질의 요약). 열린 모델 10, NanoHarness 5요소, temperature 0·반복 없음. 저자 목록 미확인}
+}
+@misc{galanti2026fewer,
+  title  = {Fewer Bits, More Tries: Recovering Capability Under Memory Constraints},
+  author = {Galanti, Tomer and Susskind and Malach, Eran},
+  year   = {2026}, eprint = {2610.15372}, archivePrefix = {arXiv},
+  note   = {본문(하위). 단일 턴 코드 생성, 검증된 재시도. 이름(Tomer·Eran) 미확인}
+}
+@misc{cuadron2025overthinking,
+  title  = {The Danger of Overthinking: Examining the Reasoning-Action Dilemma in Agentic Tasks},
+  author = {Cuadron, Alejandro and Li and Ma and others},
+  year   = {2025}, eprint = {2502.08235}, archivePrefix = {arXiv},
+  note   = {초록(하위). 저자 목록 미확인}
+}
+@misc{dong2025acbench,
+  title  = {Can Compressed LLMs Truly Act? An Empirical Evaluation of Agentic Capabilities in LLM Compression},
+  author = {Dong and Tang and Liu and Li and Chu and Li},
+  year   = {2025}, eprint = {2505.19433}, archivePrefix = {arXiv},
+  note   = {초록(하위). ICML 2025 표기. 정식 제목 부제·이름 미확인}
+}
+@misc{liu2025quantization,
+  title  = {Quantization Hurts Reasoning? An Empirical Study on Quantized Reasoning Models},
+  author = {Liu and others},
+  year   = {2025}, eprint = {2504.04823}, archivePrefix = {arXiv},
+  note   = {초록(하위). COLM 2025 표기 미확인}
+}
+@misc{labonne2024abliteration,
+  title  = {Uncensor any LLM with abliteration},
+  author = {Labonne, Maxime},
+  year   = {2024}, howpublished = {Hugging Face blog, 2024-06-13},
+  note   = {본문(하위)}
+}
+@misc{autoround,
+  title  = {AutoRound (auto-round 0.14.2)},
+  author = {{Intel}},
+  howpublished = {https://github.com/intel/auto-round},
+  note   = {0.14.2 사용(우리 양자화). 원 논문(SignRound 등) 서지는 투고 전 확인해 바꿀 것}
+}
