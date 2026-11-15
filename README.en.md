@@ -188,6 +188,8 @@ uv run stewart hub --project ~/my-project
   - Effort words differ by the server's chat template. If a backend lists `effort_values = [...]` (the words that template accepts), other values are reported at startup and not sent. If it does not, the value is sent as is, and a template that does not know it may silently treat it as another level.
   - Experimental knobs: `thinking_token_budget` (server thinking budget, as a tier field or `STEWART_THINKING_TOKEN_BUDGET`) and `reasoning_passback` (tier field; the `STEWART_REASONING_PASSBACK` environment variable wins).
 - A tier's context budget is the compaction window for both a main seated with `--tier` and workers started on that tier. Runs without a tier behave as before.
+- Every tier a worker can be started on is listed in the description of the main place's `workers` tool, so adding a tier to the table changes the main place's tool definition. Manual-only tiers (`manual = true`) are left out.
+- A tier's `tools` and `tools_deny` also shrink worker tools.
 
 #### Default thinking depth for moderato
 - A main or worker running on `moderato` defaults to a thinking depth (`reasoning_effort`) of `medium`, even when the tier field is left empty.
@@ -234,6 +236,40 @@ uv run stewart hub --project ~/my-project
   - Tools are only ever a subset of that place's tools (stewart or *parlando*); nothing is added. Listing `run_shell` for *parlando* does not give it a shell.
   - The table records `tools = [...]`, `reasoning_effort`, `budget` and `manual = true`. It is for people to pick only; workers and automatic dispatch do not use it.
   - Writing `tools` by hand in any other tier entry follows the same subset rule.
+- Tool bundles and prompt shape per tier: a tier entry bundles not only model, window and thinking but also tools and the system prompt.
+
+  | Field | Hub main · `chat --tier` | "+ New conversation" code place | *parlando* place | Workers |
+  |---|---|---|---|---|
+  | `backend` · `budget` · thinking fields | applies | applies | applies | applies |
+  | `profile` (that profile's tool list and prompt) | applies | applies | does not apply (own prompt) | applies as the worker kind |
+  | `slim` · `slim_keep` · `slim_system` | applies | applies | does not apply | does not apply |
+  | `tools` (names to keep) · `tools_deny` (names to drop) | applies | applies | applies | applies |
+
+  - Tools can only shrink. Of the place's tools, only names in `tools` are kept and names in `tools_deny` are dropped. A name in both is dropped.
+    - Workers additionally get only the tools a worker may use.
+    - Hub tools (board, session_*) belong to the hub and stay as they are.
+  - Even when the main is seated on a tier (for example the slim shape of `hub --tier presto`), that shape does not leak into new conversations of other tiers.
+  - Without these fields, behaviour is as before.
+  - Fields that have no effect are reported one line each in `stewart tiers` and on that tier's row in the settings sheet. Examples: an unknown field name, `slim_keep` without `slim`, `default_for` on a manual-only tier, a `profile` that cannot be found.
+  - Prompt section switches `prompt = { … }`: they only remove sections of the system prompt and never rewrite the text that stays. Sections you do not list stay as they are now. They apply to the main, new conversations and workers.
+
+    | Field | Values | What it removes |
+    |---|---|---|
+    | `role` | `"full"` · `"line"` · `"off"` | hub role text (`line` keeps only the header line and the first line) |
+    | `board` | true · false | board instructions |
+    | `engine_core` | true · false | coding and checking items of the built-in chat prompt (identity, safety, approval and answer-shape lines stay) |
+    | `place_hints` | true · false | place guidance lines and tool-description additions |
+    | `nudges` | true · false | conversation-path nudges (intent, to-do, web, delegation) and hub goal reminders |
+    | `examples` | true · false | example bank |
+    | `memory_guide` | true · false | memory guidance and index (memory tools stay) |
+    | `user_memory` | true · false | STEWART.md in the user settings folder |
+    | `claude_md` | true · false | CLAUDE.md compatibility text |
+    | `skills_index` | `"full"` · `"names"` · `"off"` | skills index (`names` keeps names only) |
+
+    - AGENTS.md and STEWART.md in the working folder (project rules) always stay.
+    - These fields do not change tools. Use `tools` and `tools_deny` for tools.
+    - `place_hints`, `nudges` and `examples` are conversation-path devices and mean nothing for workers (reported in the table).
+    - Example: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
 - `stewart setup` builds the backends table by asking questions (terminal only).
   - With no table yet it starts with a model server. Given an address, it finds the model name and context size with `GET /models`.
   - Then for each tier it lets you pick a server or add one. For rubato it asks for the outside API's address, model, provider name, spending caps and key (hidden input, stored in the keychain).

@@ -42,8 +42,10 @@ def search_dirs(workdir: Path) -> list[Path]:
     return list(reversed(dirs))
 
 
-def collect(workdir: Path, names=DEFAULT_NAMES, max_chars: int = DEFAULT_MAX_CHARS, fl=None) -> tuple[str, list[dict]]:
-    """(지시문에 붙일 글, 기록용 목록). 파일이 없으면 ("", [])."""
+def collect(workdir: Path, names=DEFAULT_NAMES, max_chars: int = DEFAULT_MAX_CHARS, fl=None, skip: dict | None = None) -> tuple[str, list[dict]]:
+    """(지시문에 붙일 글, 기록용 목록). 파일이 없으면 ("", []).
+    skip(판 154 지시문 절 켬끔): user = 사용자 설정 폴더의 STEWART.md 를 빼고, claude = CLAUDE.md(작업 폴더·사용자 전역)를 뺀다."""
+    skip = skip or {}
     from . import projcfg as PC
     fl = fl or PC.Flags()
     names = tuple(names)
@@ -51,14 +53,15 @@ def collect(workdir: Path, names=DEFAULT_NAMES, max_chars: int = DEFAULT_MAX_CHA
     imports: dict[str, list[dict]] = {}
     skipped: list[dict] = []
     files: list[Path] = []
-    if fl.user:
+    if fl.user and not skip.get("claude"):
         files.append(PC.claude_home() / "CLAUDE.md")
-    if "STEWART.md" in names:
+    if "STEWART.md" in names and not skip.get("user"):
         files.append(PC.user_dir() / "STEWART.md")
     for d in search_dirs(workdir):
         for n in names:
             if n == "AGENTS.md" and not (d / n).is_file() and fl.compat:
-                files.append(d / "CLAUDE.md")   # 호환: AGENTS.md 가 없는 폴더에서만
+                if not skip.get("claude"):
+                    files.append(d / "CLAUDE.md")   # 호환: AGENTS.md 가 없는 폴더에서만
             else:
                 files.append(d / n)
     agents_texts: set[str] = set()

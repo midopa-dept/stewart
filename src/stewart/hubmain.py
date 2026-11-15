@@ -1215,12 +1215,26 @@ class HubMain:
             raise ValueError(f"등급 {tier} 는 이 허브에 연결이 없다")
         if r.get("key") == "없음":
             raise ValueError(f"등급 {tier} 의 키가 없다 — `stewart tiers` 의 안내대로 넣는다")
-        prof, _ = self.kind_profile(kind)
-        _, back = resolve(str(prof.path), r["backend"], str(prof.workdir), check_workdir=False)
+        root = self._root()
+        if kind == root.kind and root.kind_resolver is not None and ((root._profile.raw or {}).get("tier")):
+            # 판 154: 메인이 등급으로 앉았으면(얇은 꼴·등급 프로필) 그 꼴이 새 대화로 새지 않게 — 그 자리의 바탕 프로필에서 시작한다
+            p0, _ = root.kind_resolver(kind)
+            prof = with_role(p0)
+        else:
+            prof, _ = self.kind_profile(kind)
         t = {**(SP.load_tiers().get(tier) or {}), "name": tier}
+        code = kind != "talk"   # 판 154: profile·slim 은 코드 자리에만(대화 자리는 자기 지시문 — tier_notes 가 알린다)
+        if code and t.get("profile"):   # 판 154: 등급의 프로필(도구 목록·지시문)로 — hub --tier 의 메인과 같게
+            p2, back = resolve(str(t["profile"]), r["backend"], str(prof.workdir), check_workdir=False)
+            prof = with_role(p2)
+        else:
+            _, back = resolve(str(prof.path), r["backend"], str(prof.workdir), check_workdir=False)
         if t.get("budget"):
             back = dataclasses.replace(back, context_budget=max(4096, min(int(t["budget"]), back.max_context)))
         prof = dataclasses.replace(prof, raw={**(prof.raw or {}), "tier": SP.tier_raw(t, back)})   # 판 132: 기본 생각 깊이
+        if code and t.get("slim"):   # 판 154: 얇은 꼴도 hub --tier 의 메인과 같게(핵심 도구 밖은 칩, 짧은 지시)
+            from . import slim as SL
+            prof = SL.apply(prof, t)
         if r.get("manual") and r.get("external"):
             back = self.guard_outside(back, tier, t)
         return prof, back

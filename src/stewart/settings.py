@@ -18,7 +18,7 @@ NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 BACKEND_KEYS = {"base_url": str, "model": str, "concurrency": int, "provider": str, "max_context": int,
                 "api_key_keychain": str, "api_key_env": str}
 TIER_KEYS = {"backend": str, "max_usd_day": float, "max_usd_chat": float, "max_tokens_day": int, "manual": bool, "budget": int, "use": str,
-             "reasoning_effort": str, "tools": list}   # 판 153: 생각 깊이·도구 부분집합(사용자가 꾸미는 꼴)
+             "reasoning_effort": str, "tools": list, "tools_deny": list}   # 판 153: 생각 깊이·도구 부분집합(사용자가 꾸미는 꼴), 판 154: 거부 목록
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 
 

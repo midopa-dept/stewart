@@ -135,11 +135,13 @@ def child_profile(parent, parent_tools: list[str], exec_mode: str, args: dict, b
     allowed = set(parent_tools) & base_tools
     if args.get("tools"):
         allowed &= {str(t) for t in args["tools"]}
-    elif read_default and not kind:   # chat·허브: 도구를 적지 않으면 읽기 도구만(조사·탐색)
+    elif read_default and (not kind or args.get("_tier_kind")):   # chat·허브: 도구를 적지 않으면 읽기 도구만(조사·탐색) — 판 154: 등급 profile 로 정한 종류도
         allowed &= M.READ_TOOLS
     allowed -= NO_CHILD
     from . import skills as SK, tools as T
     allowed &= set(T.TOOLS) | {SK.NAME}   # 판 151: 작업자(engine)가 만들 수 있는 도구만 — forge_*·workers·기억 도구 같은 부모 자리 도구는 넘기지 않는다
+    from . import spawn as SP
+    allowed = set(SP.narrow_tools(sorted(allowed), args.get("_tier")))   # 판 154: 작업자 등급의 tools·tools_deny(줄이기만)
     if exec_mode == "plan":
         allowed &= M.READ_TOOLS
     tools = [t for t in parent_tools if t in allowed]

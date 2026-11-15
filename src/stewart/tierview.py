@@ -99,6 +99,10 @@ def rows(backends: dict, default: str, tiers: dict, instance_backend: str | None
             r["tools"] = list(t["tools"])   # 판 153: 도구 부분집합(설정 시트가 보인다)
         if (t or {}).get("budget"):
             r["budget"] = t["budget"]
+        if (t or {}).get("tools_deny") is not None:
+            r["tools_deny"] = list(t["tools_deny"])   # 판 154
+        if isinstance((t or {}).get("prompt"), dict):
+            r["prompt"] = dict(t["prompt"])           # 판 154: 지시문 절 켬끔(표에 적은 그대로)
         if b is None:
             r.update(status="none" if instance_backend or src == "연결 없음" else "unset", manual=False)
             if bname and bname not in backends:
@@ -124,6 +128,13 @@ def rows(backends: dict, default: str, tiers: dict, instance_backend: str | None
         if manual and b.external():
             r["caps"] = caps(t)
         out.append(r)
+    from . import spawn as SP
+    for r in out:   # 판 154: 표에 적었지만 쓰지 않는 칸 — 조용히 무시하지 않게 한 줄씩
+        t = tiers.get(r["tier"])
+        if t:
+            ns = SP.tier_notes(t, manual=bool(r.get("manual")))
+            if ns:
+                r["notes"] = ns
     return out
 
 
@@ -213,6 +224,9 @@ def text(rows_: list[dict], title: str = "") -> str:
             lines.append(f"· {r['tier']}: 키 없음 — {key_hint(r)}")
         elif r.get("key") == KEY_EMPTY_LOCAL and r.get("connected"):
             lines.append(f"· {r['tier']}: {r['key_where']} — 키 없이 보낸다(서버가 키를 요구하면 상태가 '인증 거부'로 바뀐다)")
+    for r in rows_:
+        for n in r.get("notes") or ():
+            lines.append(f"· {r['tier']}: {n}")
     for r in rows_:
         if (r.get("effort") or {}).get("note"):
             lines.append(f"· {r['tier']} 생각 깊이: {r['effort']['note']}")

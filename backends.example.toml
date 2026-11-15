@@ -90,6 +90,11 @@ max_tokens = 8192                     # 단계당 생성 상한(늘어지는 생
 # # 생각 깊이 기본은 medium 이다(판 132 — 적지 않아도, 백엔드 effort_values 에 medium 이 있을 때만).
 # # 되돌리기(가장 깊게 — 노력 값을 보내지 않음): reasoning_effort = "none"   또는 환경 STEWART_REASONING_EFFORT=none
 # # reasoning_effort = "none"
+# 등급마다 도구 묶음·지시문 꼴(판 154 — 적지 않으면 그 자리 그대로, 도구는 줄이기만):
+# # tools = ["read_file", "search", "glob"]   # 남길 도구
+# # tools_deny = ["run_shell"]                # 뺄 도구
+# # profile = "<프로필 이름>"                 # 그 프로필의 지시문·도구 목록으로(대화 자리 제외)
+# # prompt = { role = "line", engine_core = false, skills_index = "names" }   # 지시문 절 빼기(README '작업자 등급')
 # [tiers.largo]
 # max = 1                      # 서버 창 전부(budget 없음) — 모든 기능의 메인: stewart hub --tier largo
 # use = "계획·분배·검토"

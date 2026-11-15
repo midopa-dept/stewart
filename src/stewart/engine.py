@@ -325,13 +325,15 @@ def web_search_enabled(profile: Profile) -> int:
 
 
 def memory_for(profile: Profile, interactive: bool = False) -> tuple[str, list[dict]]:
-    """프로젝트 기억 파일(memfile). 프로필 memory_files=[] 이면 끔."""
+    """프로젝트 기억 파일(memfile). 프로필 memory_files=[] 이면 끔. 판 154: 등급 prompt 칸의 user_memory·claude_md 를 따른다."""
     names = memfile.DEFAULT_NAMES if profile.memory_files is None else tuple(profile.memory_files)
     if not names:
         return "", []
-    from . import projcfg as PC
+    from . import projcfg as PC, promptparts as PP
+    parts = PP.of(profile)
     return memfile.collect(profile.workdir, names, profile.memory_max_chars or memfile.DEFAULT_MAX_CHARS,
-                           fl=PC.flags(profile, interactive) if profile.memory_files is None else PC.Flags())
+                           fl=PC.flags(profile, interactive) if profile.memory_files is None else PC.Flags(),
+                           **({"skip": PP.memfile_skip(parts)} if parts else {}))
 
 
 def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps: int | None = None,
@@ -424,14 +426,16 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     if ctx["warn"]:
         print(f"stewart: 경고 — {ctx['warn']}", file=sys.stderr)
 
-    system = profile.system.strip()
+    from . import promptparts as PP, slim as _SL
+    pparts = PP.of(profile)   # 판 154: 등급 prompt 칸(지시문 절 켬끔) — 없으면 지금 그대로
+    system = PP.apply_base(profile.system.strip(), pparts)
     mem_text, mem_log = memory_for(profile)
     if mem_text:
         system += "\n\n" + mem_text
-    if skill_list:
-        system += "\n\n" + SK.list_text(skill_list)
+    if skill_list and PP.skills(skill_list, pparts, SK.list_text, _SL.skills_text):
+        system += "\n\n" + PP.skills(skill_list, pparts, SK.list_text, _SL.skills_text)
     mem_inject = []
-    if mem is not None:   # L3: 대상 MEMORY.md(대상당 40줄·4 KB, 합 6 KB) + 무엇을 위한 기억인지
+    if mem is not None and PP.on(pparts, "memory_guide"):   # L3: 대상 MEMORY.md(대상당 40줄·4 KB, 합 6 KB) + 무엇을 위한 기억인지
         mtext, mem_inject = mem.inject()
         system += "\n\n" + mtext
     agents = PC.discover_agents(profile.workdir, pfl) if DG.NAME in tool_names else []

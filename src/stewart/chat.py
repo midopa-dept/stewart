@@ -56,6 +56,8 @@ from . import allowrules as AR
 from . import components as CM
 from . import train as TRAIN
 from . import examples as EX
+from . import promptparts as PP
+from .slim import skills_text as SL_names
 from . import spawn as SP
 from . import timebudget as TB
 from .checkpoint import Checkpoints
@@ -342,8 +344,8 @@ def with_place_lines(system: str, kind: str, names) -> str:
 OFF_TOOLS_NOTE = "꺼져 있는 도구(사람이 허브 머리의 도구 칩으로 켠다): {names}. 필요하면 다른 도구로 우회하지 말고 사람에게 켜 달라고 말한다."
 
 
-def _chat_desc(d: dict) -> dict:
-    add = CHAT_DESC_ADD.get(d["function"]["name"], "") + (PLACE_DESC_ADD.get(d["function"]["name"], "") if place_hints_on() else "")
+def _chat_desc(d: dict, place: bool = True) -> dict:
+    add = CHAT_DESC_ADD.get(d["function"]["name"], "") + (PLACE_DESC_ADD.get(d["function"]["name"], "") if place and place_hints_on() else "")
     if not add:
         return d
     return {**d, "function": {**d["function"], "description": d["function"]["description"] + add}}
@@ -421,9 +423,10 @@ class ChatSession:
                 self.ui.warn(f"  forge 설정을 쓰지 않는다: {e}")
         if self.forge is not None:
             defs += FG.DEFINITIONS
-        only = ((profile.raw or {}).get("tier") or {}).get("tools")
-        if isinstance(only, list):   # 판 153: 등급의 도구 부분집합 — 이 자리 도구 가운데 적힌 이름만(더 주지 않는다, 작업자에게 넘길 목록도 같이)
-            keep = {str(x) for x in only}
+        tier_tools = (profile.raw or {}).get("tier") or {}
+        if isinstance(tier_tools.get("tools"), list) or isinstance(tier_tools.get("tools_deny"), list):
+            # 판 153·154: 등급의 도구 칸 — 이 자리 도구 가운데 tools 의 이름만, tools_deny 의 이름은 빼고(더 주지 않는다, 작업자에게 넘길 목록도 같이)
+            keep = set(SP.narrow_tools([d["function"]["name"] for d in defs], tier_tools))
             defs = [d for d in defs if d["function"]["name"] in keep]
         defs += self.extra_defs
         self.extra_names = {d["function"]["name"] for d in self.extra_defs}
@@ -442,7 +445,9 @@ class ChatSession:
             self.toggleable += [d["function"]["name"] for d in defs
                                 if d["function"]["name"] not in kp and d["function"]["name"] not in self.toggleable]
         self.disabled_tools = {n for n in self.toggleable if n not in ((profile.raw or {}).get("toggle_on") or [])}
-        defs = [_chat_desc(d) for d in defs]   # 판 117.1: 실사용 길만 search·web_search 설명에 "언제 어느 쪽" 한 구절(평가 길 앞부분은 그대로)
+        self.pparts = PP.of(profile)   # 판 154: 등급 prompt 칸(지시문 절 켬끔) — 없으면 지금 그대로
+        self.nudges_on = PP.on(self.pparts, "nudges")
+        defs = [_chat_desc(d, PP.on(self.pparts, "place_hints")) for d in defs]   # 판 117.1: 실사용 길만 search·web_search 설명에 "언제 어느 쪽" 한 구절(평가 길 앞부분은 그대로)
         self._all_defs = defs
         defs = [d for d in defs if d["function"]["name"] not in self.disabled_tools]
         self.tool_defs = defs
@@ -457,9 +462,9 @@ class ChatSession:
         from . import hostgui as _HG
         self.env.host_gui = _HG.enabled(profile)   # 판 117: 이 컴퓨터 조작(기본 끔)
         from . import webnudge as WN
-        self.dnudge = DG.Nudge(on=DG.nudge_on() and DG.NAME in self.tool_names)   # 맡기기 넛지(판 97)
+        self.dnudge = DG.Nudge(on=DG.nudge_on() and DG.NAME in self.tool_names and self.nudges_on)   # 맡기기 넛지(판 97)
         self.nudge = WN.Nudger(search=self.web_status["search"] and "web_search" in self.tool_names,
-                               fetch=self.web_status["fetch"] and "web_fetch" in self.tool_names, on=WN.enabled())
+                               fetch=self.web_status["fetch"] and "web_fetch" in self.tool_names, on=WN.enabled() and self.nudges_on)
         from . import toolrepair as TR   # 견고성(판 81): 본문 툴콜·깨진 인자 복구·편집 되먹임(실사용 켬), 생각 되돌려 보내기(기본 끔)
         self.repair_on = TR.on("STEWART_TOOLCALL_REPAIR", True)
         self.edit_fb = TR.on("STEWART_EDIT_FEEDBACK", True)
@@ -471,16 +476,16 @@ class ChatSession:
         self.check = load_check(profile.action_check)
         mem_text, mem_log = memory_for(profile, interactive=True)
         self.env_info = envinfo.measure(profile.workdir)   # 세션 시작 때 한 번(이어 하기는 새로 잰다)
-        base_sys = profile.system.strip()
-        self.place_hints = place_hints_on() and self.slim is None   # 판 141(얇은 꼴은 자기 짧은 지시를 쓴다)
+        base_sys = PP.apply_base(profile.system.strip(), self.pparts)   # 판 154: role·board·engine_core 칸
+        self.place_hints = place_hints_on() and self.slim is None and PP.on(self.pparts, "place_hints")   # 판 141(얇은 꼴은 자기 짧은 지시를 쓴다)
         if self.place_hints:
             base_sys = with_place_lines(base_sys, "talk" if str((profile.raw or {}).get("surface") or "") == "talk" else "code",
                                         self.tool_names)
         system = base_sys + (f"\n\n{mem_text}" if mem_text else "") \
-            + (f"\n\n{SL.skills_text(self.skills) if self.slim is not None else SK.list_text(self.skills)}" if self.skills else "") \
+            + (f"\n\n{self._skills_index()}" if self.skills and self._skills_index() else "") \
             + (f"\n\n{PC.agents_text(self.agents)}" if self.agents else "")
         self.mem_inject: list = []
-        if self.mem is not None:   # L3 주입
+        if self.mem is not None and PP.on(self.pparts, "memory_guide"):   # L3 주입(판 154: memory_guide 칸)
             mtext, self.mem_inject = self.mem.inject()
             system += "\n\n" + mtext
         self._env_note: str | None = (envinfo.user_note(self.env_info)   # 다이어트 안 a: 이 세션 첫 사람 입력 앞에 붙인다
@@ -761,7 +766,7 @@ class ChatSession:
         return [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
 
     def _todo_watch(self, step: int, calls: list) -> None:
-        if not todo_nudge_on() or "todo_write" not in self.tool_names:
+        if not todo_nudge_on() or not self.nudges_on or "todo_write" not in self.tool_names:
             return
         if any(c.get("name") == "todo_write" and c.get("ok") for c in calls):
             self._todo_since = 0
@@ -779,7 +784,7 @@ class ChatSession:
     def _todo_final(self, content: str, step: int) -> bool:
         """답(물음 포함)을 내기 전: 이번 차례에 도구를 썼는데 목록이 그 뒤로 안 바뀌었거나, 답에 "단계 N 끝" 인데 목록의 N 이 안 끝났으면
         한 번 갱신 차례를 준다(같은 답을 다시 쓰지 말라고). 해야 하면 True."""
-        if not todo_nudge_on() or self._todo_final_done or "todo_write" not in self.tool_names:
+        if not todo_nudge_on() or not self.nudges_on or self._todo_final_done or "todo_write" not in self.tool_names:
             return False
         todos = list(getattr(self.env, "todos", None) or [])
         if not todos or not self._todo_open():
@@ -1016,7 +1021,7 @@ class ChatSession:
             result += self._err_watch(str(args.get("command") or ""), result, tc)
         same = self.guard.observe(name, raw_s, ok, result)
         g_note = self.guard.note(same)
-        if g_note is None and same == 2 and getattr(self.ui, "goal_notes", False):   # 허브: 두 번째부터 "이미 받은 결과"
+        if g_note is None and same == 2 and self._goal_notes():   # 허브: 두 번째부터 "이미 받은 결과"
             g_note = G.EARLY_NOTE
         if g_note:
             if same >= G.STRONG:   # chat 은 도구를 빼지 않고 사람에게 묻는다
@@ -1178,6 +1183,16 @@ class ChatSession:
         return Compactor(self.backend.budget(), c["ratio"], c["keep_recent"], CLIP_OLD, start=1, fold=c["fold"],
                          reserve=reply_reserve(p, self.backend), tail_tokens=True)
 
+    def _goal_notes(self) -> bool:
+        """허브 목표 알림(판 100) — 판 154: 등급 prompt 칸 nudges = false 면 끔."""
+        return bool(getattr(self.ui, "goal_notes", False)) and getattr(self, "nudges_on", True)
+
+    def _skills_index(self) -> str:
+        """스킬 색인 글 — 얇은 꼴은 이름만, 판 154: 등급 prompt 칸 skills_index 가 있으면 그것."""
+        if "skills_index" in self.pparts:
+            return PP.skills(self.skills, self.pparts, SK.list_text, SL_names)
+        return SL_names(self.skills) if self.slim is not None else SK.list_text(self.skills)
+
     def _close_open_calls(self, reason: str) -> None:
         """중단으로 결과 없이 남은 tool_calls 에 결과를 채운다(다음 요청이 형식 오류가 나지 않게)."""
         for i in range(len(self.messages) - 1, 0, -1):
@@ -1197,7 +1212,7 @@ class ChatSession:
         extra = [t for t in self.ui.take_interjections() if t.strip()]
         if not extra:
             return
-        text = "\n\n".join(extra) + ("\n\n" + INTERJECT_NOTE if getattr(self.ui, "goal_notes", False) else "")
+        text = "\n\n".join(extra) + ("\n\n" + INTERJECT_NOTE if self._goal_notes() else "")
         self.messages.append({"role": "user", "content": text})
         self.st["interjections"] = self.st.get("interjections", 0) + len(extra)
         self.rec.event("interject", step=step, n=len(extra), chars=len(text), content=text)
@@ -1462,7 +1477,7 @@ class ChatSession:
             self.ui.warn(f"  이 백엔드({self.backend.name})는 이미지를 받지 않는다(backends 표 vision = false). 이미지는 빼고 글만 보낸다.")
             images = None
         todos_open = [t for t in (getattr(self.env, "todos", None) or []) if t.get("status") != "done"]
-        if getattr(self.ui, "goal_notes", False) and (todos_open or self.bans or self._last_reason not in (None, "answered", "asked")):
+        if self._goal_notes() and (todos_open or self.bans or self._last_reason not in (None, "answered", "asked")):
             text = text + "\n\n" + NEW_GOAL_NOTE   # 앞 차례의 미완 걸음·목록·되짚기 계획이 이 말을 덮지 않게
         self.nudge.reset_turn()
         self.dnudge.reset_turn()
@@ -1483,7 +1498,7 @@ class ChatSession:
                 self.rec.event("tool_mention", note=tn.strip()[:500])
                 for line in screen:
                     self.ui.warn(line)
-        if self.mem is not None and EX.enabled():   # 예시 은행(판 92): 비슷한 지난 일의 받아 둔 꼴 하나
+        if self.mem is not None and EX.enabled() and PP.on(self.pparts, "examples"):   # 예시 은행(판 92): 비슷한 지난 일의 받아 둔 꼴 하나
             try:
                 hit = EX.pick(EX.load(self.mem.store.dir), self._raw_text)
             except (OSError, ValueError, AttributeError):
@@ -1659,7 +1674,7 @@ class ChatSession:
                         self.messages.append({"role": "tool", "tool_call_id": rc["id"], "name": tc["name"],
                                               "content": tc["result"]})
                     consecutive = 0 if any_ok else consecutive + 1
-                    if getattr(self.ui, "goal_notes", False):   # 허브: 말 없이 도구만 5걸음 넘게 → 한 번 "지금 무엇을 하는지 한 문장으로"
+                    if self._goal_notes():   # 허브: 말 없이 도구만 5걸음 넘게 → 한 번 "지금 무엇을 하는지 한 문장으로"
                         self._silent = 0 if content.strip() else getattr(self, "_silent", 0) + 1
                         if self._silent >= SILENT_STEPS and not getattr(self, "_narrate_nudged", False):
                             self._narrate_nudged = True
@@ -1837,13 +1852,13 @@ class ChatSession:
                     self.ui.warn(f"  답이 생성 상한에서 {self._continued + 1}번 연달아 끊겨 멈췄다. 더 이으려면 '계속' 이라고 친다.")
                     reason = "cut_answer"
                     break
-                if (self._intent_nudged and IN.on() and self.tool_names
+                if (self._intent_nudged and IN.on() and self.nudges_on and self.tool_names
                         and IN.intent_only(self._raw_text, content, len(self._turn_calls))
                         and self._reflect("intent_only", step, 0, calls=[], label="말만 하고 멈춤 2번")):   # 두 번째: 되짚기
                     self.rec.event("step", step=step, new_messages=self.messages[n_before:], response=srec)
                     self.rec.md_step(step, srec)
                     continue
-                if (not self._intent_nudged and IN.on() and self.tool_names
+                if (not self._intent_nudged and IN.on() and self.nudges_on and self.tool_names
                         and IN.intent_only(self._raw_text, content, len(self._turn_calls))):   # 말만 하고 멈춤: 한 번 되돌린다
                     self._intent_nudged = True
                     self.st["intent_nudges"] = self.st.get("intent_nudges", 0) + 1
@@ -2222,7 +2237,7 @@ class ChatSession:
                 bs, _ = load_backends()
                 backend = bs.get(tier["backend"], backend)
             if tier.get("profile") and not args.get("kind"):
-                args = {**args, "kind": tier["profile"]}
+                args = {**args, "kind": tier["profile"], "_tier_kind": True}   # 판 154: 등급이 고른 종류 — 읽기 작업자 규칙은 그대로 건다
             if tier.get("budget"):
                 backend = dataclasses.replace(backend, context_budget=int(tier["budget"]))
             args = {**args, "_tier": SP.tier_raw(tier, backend)}   # 판 116: 작업자 프로필 raw["tier"] — 압축 예산·생각 칸(판 132: 기본 생각 깊이)

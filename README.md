@@ -190,6 +190,8 @@ uv run stewart hub --project ~/my-project
   - 노력 낱말은 서버의 대화 틀마다 다릅니다. 백엔드에 `effort_values = [...]`(그 틀이 받는 낱말)를 적으면 밖의 값은 시작할 때 알리고 보내지 않습니다. 적지 않으면 그대로 보내는데, 틀이 모르는 값은 오류 없이 다른 수준으로 처리될 수 있습니다.
   - 실험 손잡이: `thinking_token_budget`(서버 생각 예산 — 등급 칸 또는 `STEWART_THINKING_TOKEN_BUDGET`), `reasoning_passback`(등급 칸 — 환경 변수 `STEWART_REASONING_PASSBACK` 이 이깁니다).
 - 등급의 문맥 예산은 그 등급의 메인(`--tier`)과 작업자 모두의 압축 창입니다. 등급 없이 도는 실행은 예전 그대로입니다.
+- 작업자로 띄울 수 있는 등급 전부가 메인 자리 `workers` 도구 설명에 실립니다. 그래서 표에 등급을 하나 더하면 메인 자리의 도구 정의가 바뀝니다. 사람만 등급(`manual = true`)은 빠집니다.
+- 등급의 `tools`·`tools_deny` 는 작업자 도구도 줄입니다.
 
 #### moderato 의 기본 생각 깊이
 - `moderato` 로 도는 메인·작업자는 생각 깊이(`reasoning_effort`) 기본이 `medium` 입니다. 등급 칸에 값을 적지 않아도 그렇습니다.
@@ -236,6 +238,40 @@ uv run stewart hub --project ~/my-project
   - 도구는 그 자리(stewart·*parlando*) 도구의 부분집합만 남고, 더 주지는 않습니다. *parlando* 에 `run_shell` 을 적어도 생기지 않습니다.
   - 표에는 `tools = [...]`·`reasoning_effort`·`budget`·`manual = true` 로 적힙니다. 사람만 고르는 꼴이라 작업자·자동 분배는 쓰지 않습니다.
   - 다른 등급 칸에 `tools` 를 손으로 적어도 같은 부분집합 규칙이 먹습니다.
+- 등급마다 도구 묶음·지시문 꼴: 한 등급 칸이 모델·창·생각뿐 아니라 도구와 지시문도 묶습니다.
+
+  | 칸 | 허브 메인·`chat --tier` | 「＋ 새 대화」 코드 자리 | *parlando* 자리 | 작업자 |
+  |---|---|---|---|---|
+  | `backend`·`budget`·생각 칸 | 먹음 | 먹음 | 먹음 | 먹음 |
+  | `profile`(그 프로필의 도구 목록·지시문) | 먹음 | 먹음 | 안 먹음(자기 지시문) | 작업자 종류로 먹음 |
+  | `slim`·`slim_keep`·`slim_system` | 먹음 | 먹음 | 안 먹음 | 안 먹음 |
+  | `tools`(남길 이름)·`tools_deny`(뺄 이름) | 먹음 | 먹음 | 먹음 | 먹음 |
+
+  - 도구는 줄이기만 합니다. 그 자리 도구 가운데 `tools` 의 이름만 남기고 `tools_deny` 의 이름을 뺍니다. 둘 다 적힌 이름은 빠집니다.
+    - 작업자는 여기에 더해 작업자가 쓸 수 있는 도구만 받습니다.
+    - 허브 도구(board·session_*)는 허브 몫이라 그대로입니다.
+  - 메인이 등급으로 앉았어도(예: `hub --tier presto` 의 얇은 꼴) 그 꼴이 다른 등급의 새 대화로 새지 않습니다.
+  - 칸이 없으면 예전과 같습니다.
+  - 쓰이지 않는 칸은 `stewart tiers` 와 설정 시트의 그 등급 줄에 한 줄씩 알립니다. 예: 모르는 칸 이름, `slim` 없는 `slim_keep`, 사람만 등급의 `default_for`, 찾지 못하는 `profile`.
+  - 지시문 절 켬끔 `prompt = { … }`: 지시문의 절을 빼기만 하고, 남긴 글은 고치지 않습니다. 적지 않은 절은 지금 그대로입니다. 메인·새 대화·작업자 모두에 먹습니다.
+
+    | 칸 | 값 | 빼는 것 |
+    |---|---|---|
+    | `role` | `"full"`·`"line"`·`"off"` | 허브 역할 글(`line` 은 머리 줄과 첫 줄만 남김) |
+    | `board` | true·false | 현황판 지시 |
+    | `engine_core` | true·false | 내장 chat 지시문의 코딩·확인 항목(정체·안전·승인·답 꼴 줄은 남음) |
+    | `place_hints` | true·false | 자리 안내 줄과 도구 설명 덧붙임 |
+    | `nudges` | true·false | 대화 길 넛지(의도·할 일·웹·맡기기)와 허브 목표 알림 |
+    | `examples` | true·false | 예시 은행 |
+    | `memory_guide` | true·false | 기억 안내와 색인(기억 도구는 그대로) |
+    | `user_memory` | true·false | 사용자 설정 폴더의 STEWART.md |
+    | `claude_md` | true·false | CLAUDE.md 호환 글 |
+    | `skills_index` | `"full"`·`"names"`·`"off"` | 스킬 색인(`names` 는 이름만) |
+
+    - 작업 폴더의 AGENTS.md·STEWART.md(프로젝트 규칙)는 늘 남습니다.
+    - 도구는 이 칸으로 바뀌지 않습니다. 도구는 `tools`·`tools_deny` 로 바꿉니다.
+    - `place_hints`·`nudges`·`examples` 는 대화 길 장치라 작업자에는 뜻이 없습니다(표에 알림).
+    - 예: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
 - `stewart setup` 은 물어 가며 backends 표를 만듭니다(터미널에서만).
   - 표가 없으면 모델 서버부터 묻습니다. 주소를 넣으면 `GET /models` 로 모델 이름·문맥 크기를 찾아 보입니다.
   - 그다음 등급마다 서버를 고르거나 새 서버를 더합니다. rubato 는 바깥 API 의 주소·모델·제공자 이름·돈 상한과 키(가림 입력 → 키체인)를 묻습니다.

@@ -113,6 +113,7 @@ function Edit({ v, r, back, reload }) {
         <div class="text-[12px] text-mute mt-1">{tools === null ? '모두 고름 = 그 자리 도구 그대로' : `${tools.length}개`} · 흐린 이름은 parlando 에 없는 도구(parlando 에서는 생기지 않는다) · 사람만 고르는 꼴(작업자는 쓰지 않는다)</div>
       </div>
     </>}
+    {r.notes?.length > 0 && <div class="py-2 border-b border-line text-[12px] text-warn">{r.notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}
     {r.effort && !custom && <div class="py-2 border-b border-line"><span class="text-[13px] text-mute">생각 깊이</span>
       <div class={'mt-1 text-[15px] ' + (r.effort.note ? 'text-warn' : '')}>{effortLabel(r.effort)}</div>
       <div class="text-[12px] text-mute mt-1">{r.effort.note ? r.effort.note + ' · ' : ''}표 = 등급 칸 reasoning_effort · 기본 = 등급 기본값 · 환경 = STEWART_REASONING_EFFORT · 값 없음 = 보내지 않음(서버 기본).

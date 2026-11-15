@@ -43,7 +43,7 @@ DEFINITION = {"type": "function", "function": {
 
 # ── 작업자 등급(판 110): backends 표의 [tiers.<이름>] — backend·profile·budget·max·use(모델에게 보일 한 줄) ──
 TIER_KEYS = ("backend", "profile", "budget", "max", "use", "default_for", "slim", "slim_keep", "slim_system",
-             "manual", "max_usd_day", "max_usd_chat", "max_tokens_day", "tools",
+             "manual", "max_usd_day", "max_usd_chat", "max_tokens_day", "tools", "tools_deny", "prompt",
              "think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling", "thinking_token_budget", "reasoning_passback")
 THINK_KEYS = ("think", "think_max_tokens", "think_max_tokens_first", "reasoning_effort", "reasoning_effort_at", "think_sampling",
               "thinking_token_budget", "reasoning_passback")
@@ -122,6 +122,13 @@ def load_tiers(path=None, main: bool = False) -> dict:
                               "manual": (bool(t["manual"]) if "manual" in t else None),
                               # 판 153: 도구 부분집합 — 그 자리 도구 가운데 이 이름들만 남긴다(더 주지 않는다). 없으면 그 자리 그대로
                               "tools": ([str(x) for x in t["tools"]] if isinstance(t.get("tools"), list) else None),
+                              # 판 154: 도구 거부 목록 — 그 자리 도구에서 이 이름들을 뺀다(tools 와 함께 적으면 남긴 것에서 다시 뺀다)
+                              "tools_deny": ([str(x) for x in t["tools_deny"]] if isinstance(t.get("tools_deny"), list) else None),
+                              # 판 154: 지시문 절 켬끔(promptparts) — 표에 적은 그대로(검사는 promptparts.check)
+                              **({"prompt": t["prompt"]} if "prompt" in t else {}),
+                              # 판 154: 표에 적었지만 쓰지 않는 칸·값 — tier_notes 가 한 줄씩 알린다(조용히 무시하지 않게)
+                              "unknown_keys": sorted(str(k) for k in t if k not in TIER_KEYS),
+                              "bad_lists": sorted(k for k in ("tools", "tools_deny") if k in t and not isinstance(t[k], list)),
                               **{k: t[k] for k in ("max_usd_day", "max_usd_chat", "max_tokens_day") if k in t}}
     return out
 
@@ -155,7 +162,55 @@ def tier_raw(t: dict, backend=None) -> dict:
         think.update(reasoning_effort=d, effort_default=True)
     return {"name": t.get("name"), "budget": t.get("budget"), **({"think": think} if think else {}),
             **({"effort_default_skipped": why} if why else {}),
-            **({"tools": list(t["tools"])} if isinstance(t.get("tools"), list) else {})}
+            **({"tools": list(t["tools"])} if isinstance(t.get("tools"), list) else {}),
+            **({"tools_deny": list(t["tools_deny"])} if isinstance(t.get("tools_deny"), list) else {}),
+            **({"prompt": _PP.check(t["prompt"])[0]} if _PP.check(t.get("prompt"))[0] else {})}
+
+
+def narrow_tools(names, tier: dict | None):
+    """판 153·154: 등급의 도구 칸으로 이름 목록을 줄인다(더 주지 않는다) — tools 가 있으면 그 이름만, tools_deny 가 있으면 그 이름을 뺀다.
+    tier 는 load_tiers 꼴이나 tier_raw 꼴(둘 다 tools·tools_deny 칸). 칸이 없으면 그대로."""
+    only, deny = (tier or {}).get("tools"), (tier or {}).get("tools_deny")
+    keep = {str(x) for x in only} if isinstance(only, list) else None
+    drop = {str(x) for x in deny} if isinstance(deny, list) else set()
+    return [n for n in names if (keep is None or n in keep) and n not in drop]
+
+
+from . import promptparts as _PP   # noqa: E402 — 판 154
+
+
+def tier_notes(t: dict, manual: bool = False) -> list[str]:
+    """판 154: 이 등급 칸 가운데 쓰이지 않는 것(조용히 무시하지 않게) — stewart tiers·설정 시트가 한 줄씩 보인다."""
+    out = []
+    if t.get("unknown_keys"):
+        out.append(f"모르는 칸 {', '.join(t['unknown_keys'])} — 쓰지 않는다(아는 칸은 README '작업자 등급')")
+    for k in t.get("bad_lists") or ():
+        out.append(f'{k} 는 이름 목록(["read_file", …] 꼴)이어야 한다 — 이 값은 쓰지 않는다')
+    if not t.get("slim") and (t.get("slim_keep") is not None or t.get("slim_system") is not None):
+        out.append("slim = true 가 없어 slim_keep·slim_system 은 쓰지 않는다")
+    if t.get("slim") and not manual:
+        out.append("slim 은 메인 자리(허브 메인·chat·「＋ 새 대화」 코드 자리)에만 — 작업자로 띄울 때는 얇은 꼴을 쓰지 않는다")
+    if t.get("slim") or t.get("profile"):
+        out.append("profile·slim 은 대화(parlando) 자리에서는 쓰지 않는다 — 그 자리는 자기 지시문 그대로(백엔드·창·생각·도구 칸은 먹는다)")
+    if manual and (t.get("default_for") or t.get("max")):
+        out.append("사람만 등급이라 작업자로 띄우지 않는다 — default_for·max 는 쓰지 않는다")
+    both = sorted(set(t.get("tools") or ()) & set(t.get("tools_deny") or ()))
+    if both:
+        out.append(f"{', '.join(both)} 가 tools 와 tools_deny 에 다 있다 — 빼는 쪽이 이긴다")
+    pv, pn = _PP.check(t.get("prompt"))
+    out += pn
+    chat_only = [k for k in ("place_hints", "nudges", "examples") if k in pv]
+    if chat_only and not manual:
+        out.append(f"prompt 의 {'·'.join(chat_only)} 는 대화 길(메인·새 대화)에만 — 작업자에는 그 장치가 없다")
+    if t.get("slim") and any(k in pv for k in ("role", "board", "engine_core")):
+        out.append("slim 은 짧은 지시로 바꾸므로 prompt 의 role·board·engine_core 는 메인 자리에서 뜻이 없다(작업자에는 먹는다)")
+    if t.get("profile"):
+        from .config import ConfigError, load_profile
+        try:
+            load_profile(str(t["profile"]))
+        except (ConfigError, OSError, ValueError):
+            out.append(f"profile '{t['profile']}' 를 찾거나 읽지 못한다 — 이 등급으로 앉히거나 띄우면 오류가 난다(stewart profiles 로 이름 확인)")
+    return out
 
 
 def unknown_note(tiers: dict, asked, manual: set | frozenset = frozenset()) -> str:
