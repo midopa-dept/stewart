@@ -481,6 +481,9 @@ class ChatSession:
         if self.place_hints:
             base_sys = with_place_lines(base_sys, "talk" if str((profile.raw or {}).get("surface") or "") == "talk" else "code",
                                         self.tool_names)
+        ftext, self.filler_info = PP.filler(self.pparts)   # 판 154: 측정용 — 프로필 지시 끝(기억 글·스킬 색인 앞)에 그대로
+        if ftext:
+            base_sys += "\n\n" + ftext
         system = base_sys + (f"\n\n{mem_text}" if mem_text else "") \
             + (f"\n\n{self._skills_index()}" if self.skills and self._skills_index() else "") \
             + (f"\n\n{PC.agents_text(self.agents)}" if self.agents else "")
@@ -565,7 +568,9 @@ class ChatSession:
         }
         from . import features as FT
         self.meta["features"] = FT.fingerprint(self.messages[0].get("content") if self.messages and self.messages[0].get("role") == "system" else "",
-                                               self.tool_defs, "chat", {"toggled_off": sorted(getattr(self, "disabled_tools", ()))})
+                                               self.tool_defs, "chat", {"toggled_off": sorted(getattr(self, "disabled_tools", ())),
+                                                                         **({"prompt": self.pparts} if self.pparts else {}),
+                                                                         **({"prompt_filler": self.filler_info} if getattr(self, "filler_info", None) else {})})
         rec.event("run_start", meta=self.meta, messages=self.messages)
         # 판 139: 생각 깊이 사건은 run_start 뒤에(기록 첫 줄은 늘 run_start — 첫 줄로 meta 를 읽는 곳이 있다)
         if self.tks.get("effort_rejected"):

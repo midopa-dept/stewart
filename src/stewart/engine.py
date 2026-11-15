@@ -429,6 +429,9 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
     from . import promptparts as PP, slim as _SL
     pparts = PP.of(profile)   # 판 154: 등급 prompt 칸(지시문 절 켬끔) — 없으면 지금 그대로
     system = PP.apply_base(profile.system.strip(), pparts)
+    ftext, filler_info = PP.filler(pparts)   # 판 154: 측정용 — 프로필 지시 끝(기억 글·스킬 색인 앞)에 그대로
+    if ftext:
+        system += "\n\n" + ftext
     mem_text, mem_log = memory_for(profile)
     if mem_text:
         system += "\n\n" + mem_text
@@ -491,6 +494,8 @@ def run(profile: Profile, backend: Backend, task: str, rec: Recorder, max_steps:
                                                           "repair": _TRK.on("STEWART_TOOLCALL_REPAIR", False),
                                                           "edit_feedback": _TRK.on("STEWART_EDIT_FEEDBACK", False),
                                                           "passback": _TRK.passback(default=((getattr(profile, "raw", None) or {}).get("tier") or {}).get("think", {}).get("reasoning_passback")),
+                                                          **({"prompt": PP.of(profile)} if PP.of(profile) else {}),
+                                                          **({"prompt_filler": filler_info} if filler_info else {}),
                                                           **({"tier": {"name": tier.get("name"), "budget_source": "tier" if tier.get("budget") else None,
                                                                        "think": tier.get("think") or {}}} if tier else {})})
     rec.event("run_start", meta=meta, messages=messages)

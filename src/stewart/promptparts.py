@@ -11,6 +11,8 @@
 - user_memory: true | false — 사용자 기억 글(사용자 설정 폴더의 STEWART.md)
 - claude_md: true | false — CLAUDE.md 호환 글(작업 폴더·사용자 전역의 CLAUDE.md)
 - skills_index: "full" | "names" | "off" — 스킬 색인(이름·설명) · 이름만 · 뺌(load_skill 도구는 그대로)
+- filler_file: "<경로>" — (측정용) 그 파일의 글을 프로필 지시 끝(기억 글·스킬 색인 앞)에 그대로 붙인다. 길이만 맞추는 칸을 만들 때 쓴다.
+  상대 경로는 백엔드 표가 있는 폴더 기준. 읽지 못하면 시작하지 않는다. 기능 지문에 sha·글자 수가 남는다
 작업 폴더의 AGENTS.md·STEWART.md(프로젝트 규칙)는 늘 남는다.
 """
 
@@ -19,7 +21,8 @@ from __future__ import annotations
 KEY = "prompt"
 CHOICES = {"role": ("full", "line", "off"), "skills_index": ("full", "names", "off")}
 BOOLS = ("board", "engine_core", "place_hints", "nudges", "examples", "memory_guide", "user_memory", "claude_md")
-FIELDS = tuple(CHOICES) + BOOLS
+PATHS = ("filler_file",)
+FIELDS = tuple(CHOICES) + BOOLS + PATHS
 
 # 내장 chat 지시문의 코딩·확인 절 — 이 머리로 시작하는 항목(이어지는 들여 쓴 줄 포함)을 뺀다
 CORE_PREFIXES = ("- 요청을 받으면 필요한 만큼만 읽고", "- 고칠 때는 edit_file", "- 고친 뒤에는 테스트나 실행으로 확인한다",
@@ -39,6 +42,11 @@ def check(v) -> tuple[dict, list[str]]:
                 out[k] = x
             else:
                 notes.append(f"{KEY}.{k} 는 {' · '.join(CHOICES[k])} 가운데 하나 — '{x}' 는 쓰지 않는다")
+        elif k in PATHS:
+            if isinstance(x, str) and x.strip():
+                out[k] = x
+            else:
+                notes.append(f"{KEY}.{k} 는 파일 경로 글 — 이 값은 쓰지 않는다")
         elif k in BOOLS:
             if isinstance(x, bool):
                 out[k] = x
@@ -113,3 +121,19 @@ def skills(skill_list, parts: dict, full_text, names_text) -> str:
         return ""
     m = parts.get("skills_index", "full")
     return "" if m == "off" else names_text(skill_list) if m == "names" else full_text(skill_list)
+
+
+def filler(parts: dict) -> tuple[str, dict | None]:
+    """filler_file 의 글과 기록(sha256 앞 16·글자 수·파일 이름). 칸이 없으면 ("", None). 읽지 못하면 ConfigError(그 칸 없이 돌지 않게)."""
+    f = parts.get("filler_file")
+    if not f:
+        return "", None
+    import hashlib
+    import os
+    from pathlib import Path
+    from .config import ConfigError
+    try:
+        text = Path(os.path.expanduser(f)).read_text(encoding="utf-8").rstrip()
+    except OSError as e:
+        raise ConfigError(f"등급 {KEY}.filler_file 을 읽지 못한다: {f} ({type(e).__name__})") from None
+    return text, {"sha": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16], "chars": len(text), "name": Path(f).name}

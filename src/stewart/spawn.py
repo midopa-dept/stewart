@@ -125,12 +125,21 @@ def load_tiers(path=None, main: bool = False) -> dict:
                               # 판 154: 도구 거부 목록 — 그 자리 도구에서 이 이름들을 뺀다(tools 와 함께 적으면 남긴 것에서 다시 뺀다)
                               "tools_deny": ([str(x) for x in t["tools_deny"]] if isinstance(t.get("tools_deny"), list) else None),
                               # 판 154: 지시문 절 켬끔(promptparts) — 표에 적은 그대로(검사는 promptparts.check)
-                              **({"prompt": t["prompt"]} if "prompt" in t else {}),
+                              **({"prompt": _prompt_paths(t["prompt"], path)} if "prompt" in t else {}),
                               # 판 154: 표에 적었지만 쓰지 않는 칸·값 — tier_notes 가 한 줄씩 알린다(조용히 무시하지 않게)
                               "unknown_keys": sorted(str(k) for k in t if k not in TIER_KEYS),
                               "bad_lists": sorted(k for k in ("tools", "tools_deny") if k in t and not isinstance(t[k], list)),
                               **{k: t[k] for k in ("max_usd_day", "max_usd_chat", "max_tokens_day") if k in t}}
     return out
+
+
+def _prompt_paths(v, path) -> object:
+    """판 154: prompt.filler_file 의 상대 경로는 백엔드 표가 있는 폴더 기준으로 푼다."""
+    f = v.get("filler_file") if isinstance(v, dict) else None
+    if not isinstance(f, str) or not f.strip() or Path(os.path.expanduser(f)).is_absolute():
+        return v
+    from .config import backends_path
+    return {**v, "filler_file": str(Path(path or backends_path()).parent / f)}
 
 
 def split_manual(tiers: dict, backends: dict | None = None) -> tuple[dict, set]:
@@ -199,6 +208,8 @@ def tier_notes(t: dict, manual: bool = False) -> list[str]:
         out.append(f"{', '.join(both)} 가 tools 와 tools_deny 에 다 있다 — 빼는 쪽이 이긴다")
     pv, pn = _PP.check(t.get("prompt"))
     out += pn
+    if pv.get("filler_file") and not Path(os.path.expanduser(pv["filler_file"])).is_file():
+        out.append(f"prompt.filler_file 파일이 없다({Path(pv['filler_file']).name}) — 이 등급으로 앉히거나 띄우면 시작하지 않는다")
     chat_only = [k for k in ("place_hints", "nudges", "examples") if k in pv]
     if chat_only and not manual:
         out.append(f"prompt 의 {'·'.join(chat_only)} 는 대화 길(메인·새 대화)에만 — 작업자에는 그 장치가 없다")

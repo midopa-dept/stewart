@@ -212,7 +212,11 @@ class TPromptParts(unittest.TestCase):
                       + '\n[tiers.thin]\nuse = "얇게"\nprompt = { role = "line", board = false, engine_core = false, place_hints = false, '
                         'nudges = false, examples = false, memory_guide = false, user_memory = false, claude_md = false, skills_index = "names" }\n'
                       + '\n[tiers.noskill]\nuse = "스킬 색인 없음"\nprompt = { skills_index = "off", role = "off" }\n'
-                      + '\n[tiers.same]\nuse = "칸만 있음"\nprompt = {}\n', encoding="utf-8")
+                      + '\n[tiers.same]\nuse = "칸만 있음"\nprompt = {}\n'
+                      + '\n[tiers.mid]\nuse = "중간"\nprompt = { place_hints = false, nudges = false, examples = false, skills_index = "names" }\n'
+                      + '\n[tiers.midl]\nuse = "중간 + 길이 맞춤"\nprompt = { place_hints = false, nudges = false, examples = false, '
+                        'skills_index = "names", filler_file = "filler.txt" }\n', encoding="utf-8")
+        self.filler = ud / "filler.txt"   # 상대 경로는 백엔드 표 폴더 기준
         (self.root / "project").mkdir(exist_ok=True)
         (self.root / "project" / "README.md").write_text("첫 줄\n", encoding="utf-8")
         (self.root / "project" / "CLAUDE.md").write_text("CLAUDE-호환-글\n", encoding="utf-8")
@@ -270,6 +274,35 @@ class TPromptParts(unittest.TestCase):
         self.assertNotIn("load_skill 로 본문을 읽고", no)
         self.assertNotIn("허브 메인으로서", no)
         self.assertIn("현황판(board 도구)", no)                                                        # board 는 따로
+
+    def test_filler_same_length(self):
+        """M-I−L 칸: 뺀 만큼의 글을 프로필 지시 끝에 그대로 붙여 지시문 길이를 C 와 ±3% 안으로. 본문은 그 글 한 덩이만 다르다."""
+        import json
+        c, tc, _ = self.once("--hub-main")
+        mid, tm, _ = self.once("--hub-main", "--tier", "mid")
+        gap = len(c) - len(mid) - 2
+        self.assertGreater(gap, 500)
+        text = ("봄비가 그친 뒤 골목의 담장 위로 젖은 흙냄새가 천천히 번진다. " * 200)[:gap].rstrip()   # 붙일 때 끝 공백은 뺀다
+        self.filler.write_text(text + "\n", encoding="utf-8")
+        n0 = len(self.model.requests)
+        r = subprocess.run([sys.executable, "-m", "stewart", "chat", "--once", "--backend", "cloud", "-p", "chat", "--hub-main", "--tier", "midl",
+                            "--workdir", str(self.root / "project"), TASK], env=self.env, cwd=str(self.root), capture_output=True, text=True, timeout=180)
+        self.assertEqual(r.returncode, 0, r.stderr[-500:])
+        b = [x for x in self.model.requests[n0:] if x.get("tools")][0]
+        midl = str(b["messages"][0]["content"])
+        self.assertLessEqual(abs(len(midl) - len(c)) / len(c), 0.03)
+        self.assertEqual(midl.replace("\n\n" + text, "", 1), mid)                                     # 그 글 한 덩이만 다르다
+        self.assertEqual([t["function"]["name"] for t in b["tools"]], tm)
+        self.assertLess(midl.index(text), midl.index("규칙 00"))                                       # 기억 글 앞(프로필 지시 끝)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        meta = json.loads((Path(out["run_dir"]) / "events.jsonl").read_text(encoding="utf-8").splitlines()[0])["meta"]
+        self.assertEqual(meta["features"]["prompt_filler"]["chars"], len(text))
+        self.assertEqual(len(meta["features"]["prompt_filler"]["sha"]), 16)
+        self.filler.unlink()
+        r = subprocess.run([sys.executable, "-m", "stewart", "chat", "--once", "--backend", "cloud", "-p", "chat", "--hub-main", "--tier", "midl",
+                            "--workdir", str(self.root / "project"), TASK], env=self.env, cwd=str(self.root), capture_output=True, text=True, timeout=180)
+        self.assertNotEqual(r.returncode, 0)                                                           # 파일이 없으면 그 칸 없이 돌지 않는다
+        self.assertIn("filler_file", r.stderr + r.stdout)
 
     def test_worker_parts(self):
         full, _, _ = self.once("--worker", "read", worker=True)

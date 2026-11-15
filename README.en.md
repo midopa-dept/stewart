@@ -270,6 +270,7 @@ uv run stewart hub --project ~/my-project
     - These fields do not change tools. Use `tools` and `tools_deny` for tools.
     - `place_hints`, `nudges` and `examples` are conversation-path devices and mean nothing for workers (reported in the table).
     - Example: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
+    - For measurement, `filler_file = "<path>"` appends that file's text as is at the end of the profile instructions (before memory text and the skills index). Use it to build a cell that matches only in length. A relative path is resolved from the backends table's folder, and if the file cannot be read the run does not start. The feature fingerprint records its sha and character count.
 - `stewart setup` builds the backends table by asking questions (terminal only).
   - With no table yet it starts with a model server. Given an address, it finds the model name and context size with `GET /models`.
   - Then for each tier it lets you pick a server or add one. For rubato it asks for the outside API's address, model, provider name, spending caps and key (hidden input, stored in the keychain).

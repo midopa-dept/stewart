@@ -272,6 +272,7 @@ uv run stewart hub --project ~/my-project
     - 도구는 이 칸으로 바뀌지 않습니다. 도구는 `tools`·`tools_deny` 로 바꿉니다.
     - `place_hints`·`nudges`·`examples` 는 대화 길 장치라 작업자에는 뜻이 없습니다(표에 알림).
     - 예: `prompt = { role = "line", engine_core = false, skills_index = "names" }`
+    - 측정용 `filler_file = "<경로>"`: 그 파일의 글을 프로필 지시 끝(기억 글·스킬 색인 앞)에 그대로 붙입니다. 길이만 맞춘 칸을 만들 때 씁니다. 상대 경로는 백엔드 표 폴더 기준이고, 읽지 못하면 시작하지 않습니다. 기능 지문에 sha·글자 수가 남습니다.
 - `stewart setup` 은 물어 가며 backends 표를 만듭니다(터미널에서만).
   - 표가 없으면 모델 서버부터 묻습니다. 주소를 넣으면 `GET /models` 로 모델 이름·문맥 크기를 찾아 보입니다.
   - 그다음 등급마다 서버를 고르거나 새 서버를 더합니다. rubato 는 바깥 API 의 주소·모델·제공자 이름·돈 상한과 키(가림 입력 → 키체인)를 묻습니다.
