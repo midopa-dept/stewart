@@ -147,5 +147,60 @@ class TOne(unittest.TestCase):
         self.assertTrue(all(self.M.DRY_RESULT in t for t in tool_msgs[1:]), tool_msgs)
 
 
+class TTierCells(unittest.TestCase):
+    """판 166: 등급 칸 hub@<이름> — 백엔드 표의 [tiers.<등급>] 를 허브 --tier 와 같은 길로 싣는다(도구 칸·지시문 절), 넛지는 제품 기본."""
+    setUp = TOne.setUp
+
+    def table(self, body: str) -> str:
+        d = Path(tempfile.mkdtemp())
+        (d / "t.toml").write_text('[backends.x]\nbase_url = "http://127.0.0.1:9/v1"\nmodel = "m"\n\n[tiers.largo]\nmanual = true\n' + body,
+                                  encoding="utf-8")
+        return str(d / "t.toml")
+
+    def test_tools_cell_and_plain_cell(self):
+        plain = self.table("")
+        narrow = self.table('tools = ["read_file", "list_dir", "delegate", "workers"]\n')
+        tiers = {"C": (plain, "largo"), "T": (narrow, "largo")}
+        seen = {}
+        for cell in ("hub-nudge", "hub@C", "hub@T"):
+            def fake(backend, messages, tools=None, *a, **k):
+                seen[cell] = (messages[0]["content"], [t["function"]["name"] for t in tools or []])
+                return resp("끝")
+            with mock.patch.object(C, "chat", side_effect=fake), mock.patch.object(E, "chat", side_effect=fake):
+                r = self.M.one({"id": "x", "kind": "should_not", "said": "README 첫 줄"}, self.b, cell, 12, False, None, tiers)
+            if cell != "hub-nudge":
+                self.assertEqual(r["n_tools"], len(seen[cell][1]), cell)
+        self.assertEqual(seen["hub-nudge"], seen["hub@C"])                       # 칸만 적은 등급 = 등급 없는 허브 메인과 같은 첫 요청
+        self.assertIn("board", seen["hub@T"][1])                                  # 허브 도구는 늘 붙는다
+        self.assertNotIn("write_file", seen["hub@T"][1])                          # 등급 tools 로 좁힘
+        self.assertIn("delegate", seen["hub@T"][1])
+        with self.assertRaises(KeyError):
+            self.M.one({"id": "x", "kind": "should_not", "said": "a"}, self.b, "hub@없음", 12, False, None, tiers)
+
+    def test_backend_error_is_error(self):
+        """판 166: 서버에 닿지 못한 회차는 오류 회차다(맡기지 않음·틀림으로 세지 않는다)."""
+        def boom(*a, **k):
+            raise ConnectionError("닿지 않음")
+        with mock.patch.object(C, "chat", side_effect=boom), mock.patch.object(E, "chat", side_effect=boom):
+            r = self.M.safe_one({"id": "x", "kind": "should", "said": "정리"}, self.b, "hub-nudge", 12)
+        self.assertTrue(r.get("error"), r)
+
+    def test_tier_cell_uses_current_table(self):
+        """판 166: --tier-cell 은 지금 백엔드 표(STEWART_BACKENDS)를 등급 표로 — 머리에 그 표 sha·칸 도구 수."""
+        narrow = self.table('tools = ["read_file", "list_dir", "delegate", "workers"]\n')
+        out = Path(tempfile.mkdtemp()) / "d.json"
+        argv = ["x", "--backend", "x", "-n", "1", "--only", "dgn-typo", "--tier-cell", "T", "--out", str(out)]
+        with mock.patch.dict(os.environ, {"STEWART_BACKENDS": narrow}), mock.patch("sys.argv", argv), \
+                mock.patch.object(C, "chat", return_value=resp("끝")), mock.patch.object(E, "chat", return_value=resp("끝")):
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = self.M.main()
+        meta = json.loads(out.read_text(encoding="utf-8"))["meta"]
+        self.assertEqual((rc, meta["cells"], meta["tier"], meta["got"]), (0, ["hub@T"], "largo", 1))
+        self.assertEqual(meta["tier_tables"]["T"]["file"], "t.toml")
+        n = meta["cell_tools"]["hub@T"][0][0]
+        self.assertLess(n, 20)                                                     # 좁힌 도구 + 허브 도구
+
+
 if __name__ == "__main__":
     unittest.main()

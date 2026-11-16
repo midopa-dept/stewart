@@ -12,6 +12,11 @@
   셸도 실제로 돈다 — 평가 실행기의 격리 안에서 돌린다.
   --dry 면 읽기 도구만 실제로 돌고, 쓰기·셸은 거절 글, delegate·workers 는 띄우지 않고 부름·맡긴 글만 기록(dry_call)에 남긴다.
   판정은 부름과 맡긴 글로 하니 같다. 다만 맡긴 일의 결과를 받지 못하니 그 뒤 걸음은 실제와 다르다.
+- 등급 칸(판 166): --tier <등급> --tier-table <이름>=<백엔드 표> 를 주면 칸 hub@<이름> 이 더해진다.
+  허브 메인 꼴에 그 표의 [tiers.<등급>] 를 허브 --tier 와 같은 길(프로필 raw.tier — 도구·지시문 절·생각 칸·budget, slim)로 싣는다.
+  등급의 backend 칸은 쓰지 않는다(모델은 --lanes·--backend). 넛지는 제품 기본(STEWART_DELEGATE_NUDGE·prompt.nudges)을 따른다.
+  --tier-cell <이름> 은 표 자리에 지금 백엔드 표(STEWART_BACKENDS 등, --backend 가 읽는 그 표)를 쓴다 — 평가 대행이 차례마다 표 하나만 줄 때.
+  --tier-table·--tier-cell 이 없으면 칸 넷만 돌 때와 결과가 같다.
 - 메인 걸음 상한 --steps(기본 12). 작업자는 delegate 의 예산(메인 상한 × 2)·기본 걸음 안에서 돈다.
 - 판정(기계): 첫 N 걸음 안에 delegate 또는 workers(action=spawn)를 불렀는가 · 부른 걸음 번호 · 맡긴 글에 범위(경로·폴더)와 돌려받을 것(정리·목록·표…)이
   있는가 · 맡기지 말아야 할 말에서의 헛부름 · 넛지가 떴는가(기록의 delegate_nudge 사건).
@@ -24,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import io
 import json
 import os
@@ -116,7 +122,24 @@ def dry_wrap(s) -> None:
     s._exec = ex
 
 
-def one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Path | None = None) -> dict:
+def tier_profile(p, backend, table: str, tier: str):
+    """판 166: 등급 칸 — 백엔드 표의 [tiers.<tier>] 를 허브 --tier(hubmain.main_tier)와 같은 꼴로 프로필·백엔드에 싣는다(backend 칸은 빼고)."""
+    from stewart import spawn as SP
+    t = SP.load_tiers(path=table, main=True).get(tier)
+    if t is None:
+        raise ValueError(f"표 {table} 에 등급 {tier} 이 없다")
+    if t.get("profile"):
+        p = dataclasses.replace(load_profile(t["profile"]), workdir=p.workdir, max_steps=p.max_steps)
+    if t.get("budget"):
+        backend = dataclasses.replace(backend, context_budget=max(4096, min(int(t["budget"]), backend.max_context)))
+    p = dataclasses.replace(p, raw={**(p.raw or {}), "tier": SP.tier_raw(t, backend)})
+    if t.get("slim"):
+        from stewart import slim as SL
+        p = SL.apply(p, t)
+    return p, backend
+
+
+def one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Path | None = None, tiers: dict | None = None) -> dict:
     """한 회차. work 가 있으면 그 폴더에 시험 저장소(repo)·기록(runs)을 남긴다(없으면 임시 폴더)."""
     if work is not None:
         work.mkdir(parents=True, exist_ok=True)
@@ -127,13 +150,19 @@ def one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Pa
     p = load_profile("chat")
     p = dataclasses.replace(p, workdir=repo, max_steps=limit)
     rec, extra = Recorder(tmp / "runs", "dg"), None
+    tier_cell = cell.startswith("hub@")
+    if tier_cell:   # 판 166: 등급 칸 — (표, 등급)
+        table, tname = (tiers or {})[cell[4:]]
+        p, backend = tier_profile(p, backend, table, tname)
     if cell.startswith("hub"):   # 판 151: `chat --once --hub-main` 과 같은 길(역할 글 + 허브 도구 정의, 허브 도구는 거절 글)
         from stewart.hubmain import hub_main_form
         p, extra = hub_main_form(p, rec)
     hist = [{"role": "system", "content": ""}] + list(scene.get("history") or []) if scene.get("history") else None
     s = C.ChatSession(p, backend, rec, C.UI(out=io.StringIO(), color=False), stream=False, mode="auto",
                       history=hist, extra_tools=extra)
-    s.dnudge = DG.Nudge(on=cell.endswith("-nudge") and DG.NAME in s.tool_names)
+    shown = [n for n in s.tool_names if n not in s.disabled_tools]   # 판 166: 모델에게 보인 도구(등급 칸 대조용)
+    if not tier_cell:   # 등급 칸은 세션이 정한 제품 기본 그대로
+        s.dnudge = DG.Nudge(on=cell.endswith("-nudge") and DG.NAME in s.tool_names)
     if dry:
         dry_wrap(s)
     t0 = time.time()
@@ -160,16 +189,18 @@ def one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Pa
     except OSError:
         pass
     r = judge(scene, s.messages, nudges, limit)
+    if tier_cell:   # 판 166: 등급 칸만 — 칸 넷의 결과 꼴은 그대로
+        r.update(n_tools=len(shown), tools_sha=hashlib.sha256(",".join(sorted(shown)).encode()).hexdigest()[:12])
     r.update(reason=str(reason)[:120], secs=round(time.time() - t0, 1), hub_refused=refused, bg_cleaned=cleaned)
-    if str(reason).startswith("오류 "):
+    if str(reason).startswith("오류 ") or str(reason) == "backend_error":   # 판 166: 서버 오류로 끝난 회차도 오류(맡기지 않음으로 세지 않게)
         r["error"] = str(reason)[:200]
     return r
 
 
-def safe_one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Path | None = None) -> dict:
+def safe_one(scene: dict, backend, cell: str, limit: int, dry: bool = False, work: Path | None = None, tiers: dict | None = None) -> dict:
     """one() 이 어디서 깨지든(세션 만들기 포함) 그 회차를 오류 결과로 남긴다 — 스레드가 죽어 결과가 모자라는 일이 없게."""
     try:
-        return one(scene, backend, cell, limit, dry, work)
+        return one(scene, backend, cell, limit, dry, work, tiers)
     except Exception as e:   # noqa: BLE001
         return {"ok": False, "delegated": False, "first_step": None, "n_calls": 0, "nudge": 0, "steps": 0, "names": [],
                 "error": f"{type(e).__name__}: {str(e)[:200]}", "secs": 0.0, "hub_refused": 0, "bg_cleaned": 0}
@@ -181,6 +212,16 @@ def empty_user_env() -> dict:
     for sub in ("skills", "profiles"):
         (d / sub).mkdir()
     return {"STEWART_USER_DIR": str(d), "STEWART_SKILLS_DIR": str(d / "skills"), "STEWART_PROFILES_DIR": str(d / "profiles")}
+
+
+def engine_head() -> str:
+    """판 166: 엔진 git 머리(없으면 빈 글) — 결과가 어느 엔진 판에서 났는지."""
+    import subprocess
+    try:
+        return subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=HERE.parents[1], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def table_md(res: dict, meta: dict) -> str:
@@ -222,7 +263,10 @@ def main() -> int:
     ap.add_argument("-n", type=int, default=3)
     ap.add_argument("--per-lane", type=int, default=2)
     ap.add_argument("--steps", type=int, default=12)
-    ap.add_argument("--cells", default=",".join(CELLS))
+    ap.add_argument("--cells", default="", help="고를 칸(쉼표). 기본: 칸 넷, --tier-table 을 주면 그 등급 칸들만")
+    ap.add_argument("--tier", default="largo", help="등급 칸이 쓸 [tiers.<이름>](판 166)")
+    ap.add_argument("--tier-table", action="append", default=[], metavar="이름=표", help="등급 칸 hub@<이름> 을 더한다(되풀이)")
+    ap.add_argument("--tier-cell", action="append", default=[], metavar="이름", help="등급 칸 hub@<이름> — 표는 지금 백엔드 표(되풀이)")
     ap.add_argument("--only", default="")
     ap.add_argument("--scenes", default=str(SCENES))
     ap.add_argument("--out", default="")
@@ -239,7 +283,23 @@ def main() -> int:
     os.environ.update(empty_user_env())   # 사용자 자리는 빈 시험 자리(기억 글·스킬·프로필 없음) — 돌리는 사람 설정에 기대지 않게
     work = Path(a.work) if a.work else (Path(a.out).resolve().parent / "work" if a.out else Path(tempfile.mkdtemp(prefix="dscene-work-")))
     scenes = [s for s in load(a.scenes) if not a.only or s["id"] in a.only.split(",")]
-    cells = [c for c in a.cells.split(",") if c in CELLS]
+    tiers = {}
+    for x in a.tier_table:
+        k, _, v = x.partition("=")
+        if not k or not v or not Path(v).is_file():
+            ap.error(f"--tier-table 은 이름=있는 표 파일: {x}")
+        tiers[k] = (str(Path(v).resolve()), a.tier)
+    for k in a.tier_cell:
+        from stewart.config import backends_path
+        if not k or k in tiers:
+            ap.error(f"--tier-cell 이름이 비었거나 겹친다: {k!r}")
+        tiers[k] = (str(Path(backends_path()).resolve()), a.tier)
+    known = list(CELLS) + [f"hub@{k}" for k in tiers]
+    cells = [c for c in (a.cells.split(",") if a.cells else ([f"hub@{k}" for k in tiers] or list(CELLS))) if c in known]
+    for k, (table, tname) in tiers.items():   # 시작 전에 표·등급을 확인한다(회차마다 오류로 새지 않게)
+        from stewart import spawn as SP
+        if tname not in SP.load_tiers(path=table, main=True):
+            ap.error(f"표 {table} 에 등급 {tname} 이 없다")
     lanes = M.lane_backends(a)
     jobs: queue.Queue = queue.Queue()
     for i in range(a.n):
@@ -257,7 +317,7 @@ def main() -> int:
             except queue.Empty:
                 return
             wd = work / f"{cell}-{sc['id']}-{i + 1}"
-            r = safe_one(sc, b, cell, a.steps, a.dry, wd)
+            r = safe_one(sc, b, cell, a.steps, a.dry, wd, tiers)
             r["work"] = os.path.relpath(wd, Path(a.out).resolve().parent) if a.out else str(wd)
             with lock:
                 res.setdefault(f"{cell}|{sc['id']}", []).append(r)
@@ -276,7 +336,12 @@ def main() -> int:
     meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "steps": a.steps, "n": a.n, "cells": cells, "dry": a.dry,
             "scenes": [{"id": s["id"], "kind": s["kind"]} for s in scenes],
             "scenes_sha": hashlib.sha256(Path(a.scenes).read_bytes()).hexdigest()[:16],
-            "expected": total, "got": got, "errors": errors, "memory": a.memory}
+            "expected": total, "got": got, "errors": errors, "memory": a.memory,
+            **({"tier": a.tier, "tier_tables": {k: {"file": Path(v[0]).name, "sha16": hashlib.sha256(Path(v[0]).read_bytes()).hexdigest()[:16]}
+                                                for k, v in tiers.items()}, "engine": engine_head(),
+                "cell_tools": {c: sorted({(x.get("n_tools"), x.get("tools_sha")) for v in [res.get(f"{c}|{s['id']}", []) for s in scenes] for x in v
+                                         if x.get("n_tools") is not None}) for c in cells},
+                "place_hints": os.environ.get("STEWART_PLACE_HINTS", "")} if tiers else {})}
     if a.out:
         Path(a.out).write_text(json.dumps({"meta": meta, "results": res}, ensure_ascii=False, indent=1), encoding="utf-8")
     md = table_md(res, meta)
