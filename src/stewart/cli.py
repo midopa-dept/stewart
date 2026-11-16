@@ -637,7 +637,8 @@ def main(argv: list[str] | None = None) -> int:
     hb.add_argument("--tier", default=None, help="메인을 backends 표 [tiers.<이름>] 등급(백엔드·프로필·문맥 예산)으로 켠다. "
                     "등급에 slim = true 면 작은 모델용 얇은 메인(짧은 지시·핵심 도구만, 나머지는 칩). -b 는 작업자 기본으로 남는다")
     hb.add_argument("--worker-profile", default=None, help="작업자 기본 프로필(기본: 메인과 같음)")
-    hb.add_argument("--new-main", action="store_true", help="메인 대화를 새로 시작(기본: 이 허브의 마지막 메인 대화를 이어 받는다)")
+    hb.add_argument("--new-main", action="store_true", help="옛 이름 — 이제 기본이 빈 새 대화로 켜기라 뜻이 없다")
+    hb.add_argument("--resume-last", action="store_true", help="이 허브의 마지막 대화를 이어 받아 켠다(기본: 빈 새 대화)")
     hb.add_argument("--mode", choices=["auto", "edits", "ask", "plan"], default="edits", help="메인 모드(작업자는 이보다 넓을 수 없다)")
     hb.add_argument("--port", type=int, default=None, help="웹 포트(기본 설정값 또는 8765)")
     hb.add_argument("--config", default=None, help="허브 설정 파일([hub] 표, 기본 ~/.config/stewart/hub.toml)")

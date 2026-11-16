@@ -89,7 +89,7 @@ class THubCutCard(unittest.TestCase):
         msgs = json.loads(mj.read_text(encoding="utf-8"))
         mj.write_text(json.dumps([x for x in msgs if "카드 띄울 말" not in json.dumps(x, ensure_ascii=False)], ensure_ascii=False), encoding="utf-8")
         n0 = len(m.requests)
-        h = Hub(root, env)
+        h = Hub(root, env, extra_args=["--resume-last"])   # 판 161: 이어 받기는 고를 때만
         self.addCleanup(h.close)
         time.sleep(2)
         self.assertEqual([b for b in m.requests[n0:] if b.get("tools")], [])                       # 스스로 돌리지 않는다

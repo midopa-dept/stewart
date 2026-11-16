@@ -2279,7 +2279,8 @@ class ChatSession:
                "budget": self._dg_budget, "log": self.delegations, "ask": _spawn_no_ask, "on_call": on_call, "ask_cfg": None,
                "bounds": self.bd, "projcfg": self.pfl, "read_default": True,
                "rule": lambda name, a, deny_only=False: self.shell_rule(a, True) if name == "run_shell" else (None, ""),
-               "ask_outside": None}
+               "ask_outside": None,
+               "on_dir": lambda d: self._worker_dir(wid, d)}
         self.rec.event("spawn_start", id=wid, task=str(args.get("task") or "")[:500])
         ok, text = DG.run_child(ctx, args)
         self.rec.event("spawn_end", id=wid, ok=ok)
@@ -2287,6 +2288,12 @@ class ChatSession:
             text += (f"\n(등급 {args.get('tier')} 의 백엔드 {tier['backend']} 에 닿지 못했다 — 기본 모델로 대신 돌리지 않았다. "
                      "서버를 켜거나, 등급의 backend 줄을 지우면 기본 모델로 돈다)")
         return ok, f"[작업자 {wid}" + (f" · {args.get('tier')}" if tier else "") + "] " + text   # 꼬리표 "자리 · 등급"(판 115)
+
+    def _worker_dir(self, wid: str, d) -> None:
+        """판 162: 대화 안 작업자의 기록 폴더를 pool 칸에(허브 화면이 그 작업자의 걸음을 읽는 자리)."""
+        r = (getattr(getattr(self, "pool", None), "w", None) or {}).get(wid)
+        if r is not None:
+            r["dir"] = str(d)
 
     def run_worker_once(self, task: str, write: bool = False, tier: str | None = None, tools: list | None = None,
                         max_steps: int | None = None) -> dict:

@@ -134,6 +134,8 @@ uv run stewart hub --project ~/my-project
   - Hand-off card: when the model reaches something only a person can do (a password, keychain prompt, sudo, a login), it stops retrying and hands it to you.
   - Talk and code tabs: "+ New conversation" lets you pick **talk** (ask, read things up, get text or files back; the project folder is left alone) or **code** (hand over one folder to read, edit and run commands in). The kind is fixed when the conversation is created and shown as a tag in the list and header. Set the main tab's kind with `stewart hub --kind talk|code` (default code).
   - Several conversations: start a new main conversation, branch the current one, or reopen a closed one. Approvals and stops apply per conversation. `/clear`, `/reset` and `/help` work.
+  - On start: the first screen is an empty new conversation (pick a place and tier, plus a "continue a past conversation" list). An earlier conversation is continued only when you pick it. To pick up the last conversation right away, start with `stewart hub --resume-last`.
+  - The first conversation can be closed like any other (its record goes to past conversations). A worker's report notice goes to the conversation that started that worker.
   - Side panel: board, memory, steps, plan, always-allow rules, tokens, status (backend, mode, thinking, context budget, estimated fixed-prefix tokens, tool list).
   - Conversation list: open and past conversations share one list in the side column (a drawer on phones), grouped by place (stewart · stewart *parlando*), most recently touched first, under Today, Yesterday, Last 7 days and Older. The title is the first message line (or the name you gave it).
   - Clicking a past conversation reopens it with its earlier content shown, so you can carry on. Every conversation in the hub's record folder is listed, whatever working folder it ran in.
@@ -145,6 +147,8 @@ uv run stewart hub --project ~/my-project
   - Rewind: ↶ on one of your messages removes that turn and restores the files tools changed after it; your message comes back to the input box. ↶ on the files card restores the files only. Files changed by shell commands cannot be restored.
   - Uploads and choices: 📎 in the input box puts documents, spreadsheets or PDFs in `inbox/` in the working folder (up to 20 MB, never overwriting). When the model asks with options, pick one with the buttons under the question.
   - Worker strip: concurrent workers' state, elapsed time and uncollected results show above the conversation. If a worker finishes after the main turn has ended, the hub opens one turn by itself to collect it (up to 3 in a row; `STEWART_AUTO_WAKE=0` turns this off).
+    - Clicking a worker in the strip opens its steps (task received, thinking, replies, tools, results, diffs) in a side panel inside that conversation, re-read every 2 seconds. Thinking is folded and shows in full when expanded. Collected workers stay in the strip, dimmed.
+    - The hub session worker view also shows each step's thinking, folded.
   - Model server status dot: ready, starting, unreachable, auth refused.
 - Slim main for small models: put `slim = true` on a tier in the backends table and start with `stewart hub --tier <that name>`. The main conversation's fixed prefix (system prompt plus tool definitions) drops from about 13k tokens to under 4k.
   - The model sees one short instruction and ten core tools; the rest can be turned on from the [tools N ▾] chip in the header. The skill index carries names only.

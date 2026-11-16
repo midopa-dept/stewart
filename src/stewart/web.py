@@ -566,6 +566,10 @@ class WebApp:
             num = lambda k: int((q.get(k) or ["-1"])[0]) if (q.get(k) or [""])[0].lstrip("-").isdigit() else None   # noqa: E731
             return self._json(h, 200, self.session_conversation(name, before=num("before"), limit=num("limit"),
                                                                  prior=(q.get("prior") or ["0"])[0] == "1"))
+        if path == "/api/chat/worker":   # 판 162: 대화 안 작업자(workers 도구)의 걸음 — 그 대화의 pool 이 아는 기록만
+            q = parse_qs(url.query)
+            num = lambda k: int((q.get(k) or ["-1"])[0]) if (q.get(k) or [""])[0].lstrip("-").isdigit() else None   # noqa: E731
+            return self._json(h, 200, self.chat_worker(self._conv_q(url), (q.get("id") or [""])[0], before=num("before"), limit=num("limit")))
         if path == "/api/stream":
             return self.stream(h, self._chat_q(url))
         if path == "/api/commands":   # 입력 칸 /명령 자동완성: 프로젝트·사용자 명령(.stewart/commands 등)
@@ -1102,6 +1106,9 @@ class WebApp:
         elif k == "interject":
             user(str(ev.get("content") or ""), interject=True)
         elif k == "step":
+            think = str((ev.get("response") or {}).get("reasoning_content") or "")
+            if think:   # 판 162: 생각 — 화면은 접어 두고 펼치면 전부(접기와 없애기를 가른다)
+                out.append({"kind": "think", "text": think})
             msgs([m for m in ev.get("new_messages") or [] if m.get("role") != "user"])
             for tc in (ev.get("response") or {}).get("tool_calls") or []:   # 고친 파일의 diff(접힌 한 줄, U2-5)
                 if tc.get("diff"):
@@ -1132,6 +1139,26 @@ class WebApp:
         end = len(pool) if before is None or before < 0 or before > len(pool) else before
         start = max(0, end - lim)
         return {**r, "items": pool[start:end], "total": len(pool), "start": start}
+
+    def chat_worker(self, cv, wid: str, before: int | None = None, limit: int | None = None) -> dict:
+        """판 162: 대화 안 작업자 하나의 걸음(받은 일·생각·답·도구·결과·diff). 경로 인자는 받지 않는다(pool 칸의 기록 폴더만)."""
+        pool = getattr(cv.sess, "pool", None)
+        r = (getattr(pool, "w", None) or {}).get(wid) if pool is not None else None
+        if r is None:
+            return {"error": "no_worker"}
+        now_ = time.monotonic()
+        head = {"id": wid, "status": r["status"], "tier": r.get("tier") or "", "task": r.get("task") or "", "collected": r["collected"],
+                "secs": round(((r["ended"] or now_) - r["started"]) if r.get("started") else 0)}
+        f = Path(r["dir"]) / "events.jsonl" if r.get("dir") else None
+        if f is None or not f.is_file():
+            return {**head, "items": [], "total": 0, "start": 0}
+        with self._conv_lock:
+            self._read_conv(f)
+            pool_items = self._conv[str(f)]["items"]
+        lim = limit if limit and limit > 0 else self.CONV_MAX
+        end = len(pool_items) if before is None or before < 0 or before > len(pool_items) else before
+        start = max(0, end - lim)
+        return {**head, "items": pool_items[start:end], "total": len(pool_items), "start": start}
 
     def _read_conv(self, f: Path) -> dict:
         cache = self._conv.setdefault(str(f), {"offset": 0, "items": []})

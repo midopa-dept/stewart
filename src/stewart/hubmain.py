@@ -626,7 +626,7 @@ class HubMain:
                                 extra_tools=(HT.DEFINITIONS, self.tools.execute), history=history, resumed_from=resumed_from)
         if history:
             _replay(self.ui, history, resumed_from)
-            self.ui._add("meta", f"앞 메인 대화를 이어 받았다({resumed_from}). 새로 시작하려면 허브를 --new-main 으로 띄운다.")
+            self.ui._add("meta", f"앞 대화를 이어 받았다({resumed_from}, --resume-last). 기본은 빈 새 대화로 켠다.")
             _cut_card(self.ui, resumed_from, history)
         self.ui.env = self.sess.env
         self.ui.run_rec = self.sess.rec   # 판 127: 승인 기록을 이 대화 기록 폴더에도
@@ -1122,12 +1122,17 @@ class HubMain:
     def _root(self) -> "HubMain":
         return getattr(self, "main", None) or self
 
+    def shown(self) -> bool:
+        """판 161: 처음 대화('main')는 말이 오간 뒤에만 대화 목록에 보인다(켜자마자는 빈 새 대화 화면이 첫 화면)."""
+        return bool(self._resumed or self.busy or self.sess.st.get("turns") or self.ui.pending
+                    or any(m.get("kind") in ("user", "assistant") for m in list(self.ui.log)))
+
     def _chat_list(self) -> list[dict]:
         from . import tierview as TV
         root = self._root()
         tier = (((root._profile.raw or {}).get("tier") or {}).get("name")) or ""
         shown = (lambda t: t) if os.environ.get("STEWART_INSTANCE") else (lambda t: t or TV.EMPTY_TIER)   # 판 152: 등급 없음('')은 largo 로 보인다
-        out = [{"name": "main", "title": "메인", "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": shown(tier),
+        out = [{"name": "main", "title": "메인", "hidden": not root.shown(), "busy": root.busy, "run_dir": str(root.sess.rec.dir), "kind": root.kind, "tier": shown(tier),
                 **_conv_brief(root.sess)}]
         for c in root.chats.values():
             out.append({"name": c.name, "title": c.title, "origin": c.origin, "busy": c.busy, "run_dir": str(c.sess.rec.dir),
@@ -1323,8 +1328,16 @@ class HubMain:
         return c
 
     def close_chat(self, name: str) -> str:
-        """대화 닫기(기록은 runs 에 남아 지난 세션에서 다시 연다). 일하는 중이면 거절. 메인은 닫지 않는다."""
+        """대화 닫기(기록은 runs 에 남아 지난 세션에서 다시 연다). 일하는 중이면 거절.
+        판 161: 처음 대화('main')도 닫는다 — 기록은 지난 대화로 가고, 그 자리는 빈 대화로 바뀌어 목록에서 숨는다(허브 몸통은 그대로)."""
         root = self._root()
+        if name == "main":
+            if root.busy:
+                raise RuntimeError("일하는 중이다 — 멈춘 뒤 닫는다")
+            run = str(root.sess.rec.dir)
+            root.new_main()
+            root.hub.event("chat_close", chat="main", run_dir=run)
+            return run
         c = root.chats.get(name)
         if c is None:
             raise KeyError(name)
@@ -1385,6 +1398,7 @@ class HubMain:
             return []
         now = time.monotonic()
         return [{"id": k, "tier": r.get("tier") or "", "status": r["status"], "task": r["task"][:80], "collected": r["collected"],
+                 "log": bool(r.get("dir")),   # 판 162: 걸음을 열 수 있나
                  "secs": round(((r["ended"] or now) - r["started"]) if r["started"] else 0)} for k, r in list(pool.w.items())][-12:]
 
     # ── 허브 고리 ──
@@ -1395,12 +1409,12 @@ class HubMain:
             except Exception as e:   # noqa: BLE001 — 깨우기 실패가 고리를 멈추지 않게
                 self.hub.event("auto_wake_error", error=type(e).__name__)
         r = self.hub.tick()
-        notes = self.hub.take_notices()
-        if notes:
-            with self.ui._lock:
-                self.ui.notices += notes
-            for n in notes:
-                self.ui._add("hub", n)
+        for par, n in self.hub.take_notices_for():   # 판 161: 보고 알림은 그 작업자를 띄운 대화로(닫혔거나 모르면 처음 대화)
+            cv = self.chats.get(par) if par and par != "main" else None
+            cv = cv or self
+            with cv.ui._lock:
+                cv.ui.notices.append(n)
+            cv.ui._add("hub", n)
         return r
 
     def start_loop(self) -> None:
@@ -1595,6 +1609,7 @@ class HubChat(HubMain):
         hub.chat_answers[name] = self.ui.put_answer
         self.tools = HT.MainTools(hub, main_mode=main._mode, default_profile=main._worker_profile,
                                   default_backend=main._worker_backend)
+        self.tools.parent = name   # 판 161: 이 대화가 띄운 작업자의 보고는 이 대화로
         self._profile, self._backend, self._mode, self._runs_dir = prof, back, main._mode, main._runs_dir
         self._worker_profile, self._worker_backend = main._worker_profile, main._worker_backend
         rec = Recorder(self._runs_dir, "hub-main")
@@ -1723,6 +1738,11 @@ def last_main(hub: Hub) -> tuple[list | None, str | None]:
     except Exception:   # 망가진 기록이면 새로 시작한다(허브는 뜬다)
         return None, None
     return (msgs, run) if msgs else (None, None)
+
+
+def start_history(a, hub: Hub) -> tuple[list | None, str | None]:
+    """판 161: 켤 때 이어 받을 대화. 기본은 없음(빈 새 대화가 첫 화면) — --resume-last 일 때만 마지막 대화."""
+    return last_main(hub) if getattr(a, "resume_last", False) else (None, None)
 
 
 def default_state_dir(project) -> "Path":
@@ -1862,7 +1882,7 @@ class UserHubs:
             profile, backend = main_tier(self.a, str(wd))
             profile.read_outside = "deny"
             profile.memory_root = str(self.state_dir / "users" / name / "memory")   # 기억도 사람마다(판 50 과 함께)
-            history, prev = last_main(hub)
+            history, prev = start_history(self.a, hub)
             rec = Recorder(self.runs_dir / "users" / name, "hub-main")
             main = HubMain(hub, profile, backend, rec, mode=self.a.mode, worker_profile=self.a.worker_profile or self.a.profile,
                            worker_backend=self.a.backend, history=history, resumed_from=prev)
@@ -2000,7 +2020,7 @@ def run_hub(a) -> int:
     if main_wd:
         Path(main_wd).mkdir(parents=True, exist_ok=True)
     profile, backend = main_tier(a, str(main_wd or project))
-    history, prev = last_main(hub) if not getattr(a, "new_main", False) else (None, None)
+    history, prev = start_history(a, hub)
     rec = Recorder(Path(a.runs_dir), "hub-main")
     main = HubMain(hub, profile, backend, rec, mode=a.mode, worker_profile=a.worker_profile or a.profile,
                    worker_backend=a.backend, history=history, resumed_from=prev)

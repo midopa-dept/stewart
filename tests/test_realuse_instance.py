@@ -32,8 +32,8 @@ class InstBase(PathBase):
         (self.proj / "README.md").write_text("첫 줄\n둘째 줄\n", encoding="utf-8")
         self.start()
 
-    def start(self):
-        self.hub = Hub(self.root, self.env, argv=argv(self.cfg), port=int(self.cfg["port"]))
+    def start(self, extra=()):
+        self.hub = Hub(self.root, self.env, argv=[*argv(self.cfg), *extra], port=int(self.cfg["port"]))
         self.addCleanup(lambda: self.hub.close())
 
     def new(self, kind="code"):
@@ -231,7 +231,7 @@ class I10Restart(InstBase):
     def test_restart_continues(self):
         self.turn("다시 켜기 전 말")
         self.hub.close()
-        self.start()
+        self.start(["--resume-last"])   # 판 161: 기본은 빈 새 대화 — 이어 받기는 고를 때만
         n0 = len(self.model.requests)
         self.turn("다시 켠 뒤")
         self.assertIn("다시 켜기 전 말", text_of(self.model.requests[n0]))

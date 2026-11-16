@@ -119,7 +119,7 @@ function PastRow({ x, sel, onSel, picking, reload }) {
         <button class="truncate font-[560] text-[14px] flex-1 min-w-0 text-left" title={x.kind === 'worker' ? label + ' — 대화 보기' : label}
           onClick={() => { if (x.kind === 'worker' && !picking) { view.value = x.name; drawer.value = false } else if (picking) onSel() }}>{label}</button>
         {!picking && x.kind === 'worker' && x.can_reopen && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" onClick={() => act(() => post('/api/session/control', { name: x.name, action: 'resume' }))}>{x.status === 'paused' ? '이어 가기' : '다시 열기'}</button>}
-        {!picking && x.kind === 'main' && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" title="메인 칸을 이 대화로 바꾼다(지금 메인 대화는 기록에 남는다)" onClick={() => act(() => post('/api/main/reopen', { run_dir: x.run_dir }).then(() => openChat('main')))}>메인으로</button>}
+        {!picking && x.kind === 'main' && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" title="이 대화를 새 칸으로 다시 연다(판 161)" onClick={() => act(() => post('/api/chat/new', { how: 'reopen', run_dir: x.run_dir }).then(r => openChat(r.chat)))}>다시 열기</button>}
         {!picking && x.kind === 'main' && <button class="btn btn-ghost !px-2 !py-0.5 text-xs flex-none" title="새 대화 칸으로 연다(메인은 그대로)" onClick={() => act(() => post('/api/chat/new', { how: 'reopen', run_dir: x.run_dir }).then(r => openChat(r.chat)))}>새 칸</button>}
         {!picking && <button class="btn btn-ghost !px-1.5 !py-0.5 text-xs flex-none" aria-label="메뉴" onClick={() => setMenu(!menu)}>⋯</button>}
       </div>

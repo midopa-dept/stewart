@@ -171,7 +171,7 @@ class M05RestartWithCard(MidBase):
         self.say("카드 띄울 말")
         self.assertTrue(self.card(), self.log_tail())
         self.hub.close()
-        self.hub = Hub(self.root, self.env)
+        self.hub = Hub(self.root, self.env, extra_args=["--resume-last"])   # 판 161: 이어 받기는 고를 때만
         self.addCleanup(self.hub.close)
         st = self.idle()
         self.assertTrue(st, self.log_tail())

@@ -242,15 +242,19 @@ function AskOptions({ opts }) {
   </div>
 }
 
+export const innerWorker = signal(null)   // 판 162: 이 대화 안에서 열어 둔 작업자 id
+
 // 판 109(SW-43 ③): 동시 작업자 띠 — 상태·걸린 시간, 누르면 그 작업자 결과를 안 거둔 것인지 보인다
 const WST = { queued: '⏳ 줄', running: '● 도는 중', done: '✓ 끝', cancelled: '✕ 취소' }
+// 판 162: 칩을 누르면 이 대화 안에서 그 작업자의 걸음(받은 일·생각·답·도구·결과·diff)이 옆 판으로 열린다. 거둔 작업자도 칩이 남는다(흐리게)
 function WorkerStrip() {
   const ws = hub.value?.workers || []
-  const live = ws.filter(w => w.status === 'running' || w.status === 'queued' || (w.status === 'done' && !w.collected))
-  if (!live.length) return null
+  if (!ws.length) return null
   return <div class="sticky top-0 z-10 my-2 flex gap-1.5 flex-wrap text-[12.5px]">
-    {live.map(w => <span key={w.id} class={'chip ' + (w.status === 'running' ? '!text-ok' : '')} title={w.task}>
-      작업자 {w.id}{w.tier ? ' · ' + w.tier : ''} {WST[w.status] || w.status} · {w.secs}초{w.status === 'done' && !w.collected ? ' · 결과 안 거둠' : ''}</span>)}
+    {ws.map(w => <button type="button" key={w.id} disabled={!w.log}
+      class={'chip ' + (w.status === 'running' ? '!text-ok ' : '') + (w.collected ? 'opacity-60 ' : '') + (innerWorker.value === w.id ? 'ring-1 ring-line' : '')}
+      title={(w.log ? '누르면 걸음을 본다 · ' : '') + w.task} onClick={() => { innerWorker.value = innerWorker.value === w.id ? null : w.id }}>
+      작업자 {w.id}{w.tier ? ' · ' + w.tier : ''} {WST[w.status] || w.status} · {w.secs}초{w.status === 'done' && !w.collected ? ' · 결과 안 거둠' : ''}</button>)}
   </div>
 }
 

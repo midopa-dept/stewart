@@ -353,12 +353,35 @@ class T16Restart(PathBase):
         self.say("다시 켜기 전 마지막 말")
         self.assertTrue(self.idle(), self.log_tail())
         self.hub.close()
-        self.hub = Hub(self.root, self.env)
+        self.hub = Hub(self.root, self.env, extra_args=["--resume-last"])   # 판 161: 이어 받기는 고를 때만
         self.addCleanup(self.hub.close)
         n0 = len(self.model.requests)
         self.say("다시 켠 뒤")
         self.assertTrue(self.idle(), self.log_tail())
         body = next(b for b in self.model.requests[n0:] if b.get("tools"))
+        self.assertIn("다시 켜기 전 마지막 말", text_of(body))
+
+    def test_restart_default_fresh(self):
+        """판 161: 그냥 다시 켜면 빈 새 대화 — 앞 대화는 지난 대화 목록에 있고, 고르면 이어진다."""
+        self.say("다시 켜기 전 마지막 말")
+        self.assertTrue(self.idle(), self.log_tail())
+        self.hub.close()
+        self.hub = Hub(self.root, self.env)
+        self.addCleanup(self.hub.close)
+        st = self.hub.get("/api/state")
+        self.assertTrue(next(c for c in st["chats"] if c["name"] == "main")["hidden"])
+        n0 = len(self.model.requests)
+        self.say("다시 켠 뒤")
+        self.assertTrue(self.idle(), self.log_tail())
+        body = next(b for b in self.model.requests[n0:] if b.get("tools"))
+        self.assertNotIn("다시 켜기 전 마지막 말", text_of(body))
+        past = self.hub.get("/api/past_sessions")["mains"]
+        run = next(m["run_dir"] for m in past if "다시 켜기 전 마지막 말" in (m.get("first") or ""))
+        c = self.hub.post("/api/chat/new", {"how": "reopen", "run_dir": run})["chat"]
+        n1 = len(self.model.requests)
+        self.hub.post("/api/main", {"text": "고른 대화에서", "chat": c})
+        self.assertTrue(self.hub.wait(lambda: not self.hub.get("/api/state?chat=" + c)["busy"] and len(self.model.requests) > n1, 30))
+        body = next(b for b in self.model.requests[n1:] if b.get("tools"))
         self.assertIn("다시 켜기 전 마지막 말", text_of(body))
 
 

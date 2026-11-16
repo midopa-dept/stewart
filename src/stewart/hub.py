@@ -261,7 +261,8 @@ class Hub:
         self.notify_url = (notify_url or "").strip() or None
         self._notify = notify or self._post   # 시험은 바꿔 끼운다
         self._notify_on = bool(self.notify_url or notify)
-        self.notices: list[str] = []          # 메인 차례에 끼워 넣을 알림(보고 도착)
+        self.notices: list[str] = []          # 대화 차례에 끼워 넣을 알림(보고 도착)
+        self.notice_parent: dict = {}         # 알림 글 → 그 작업자를 띄운 대화 이름
         from .allowrules import HubStore
         self.allow = HubStore(self.dir)        # "이 꼴 늘 허용"(허브 폴더, 저장소 밖). 허브가 뜰 때 한 번 읽고 메모리에 둔다
         self._allow_rules = self.allow.load()
@@ -293,7 +294,8 @@ class Hub:
     # ── 세션 ──
     @_locked
     def spawn(self, name: str, task: str, workdir: str | Path | None, profile: str, backend: str | None = None,
-              mode: str = "edits", role: str = "worker", worktree: dict | None = None, sender: str = "main") -> dict:
+              mode: str = "edits", role: str = "worker", worktree: dict | None = None, sender: str = "main",
+              parent: str | None = None) -> dict:
         if not NAME_RE.match(name):
             raise ValueError("세션 이름은 영숫자·'-' 32자까지")
         reg = self.registry()
@@ -318,7 +320,7 @@ class Hub:
                                  "backend": backend, "mode": mode, "executor": {"kind": "local"}, "status": "starting",
                                  "pid": None, "started": now(), "last_event": None, "run_dir": None,
                                  "inbox_seq": 0, "outbox_seq": 0, "read_reports": [], "notified_asks": [],
-                                 "noticed_reports": 0}
+                                 "noticed_reports": 0, "parent": parent}   # parent: 띄운 대화(보고 알림을 그 대화로)
         self._save(reg)
         n = sd.send(task, sender=sender)
         self._update(name, inbox_seq=n)
@@ -642,6 +644,7 @@ class Hub:
                     except Exception as ex:
                         self.event("board_from_report_fail", session=name, seq=n, error=type(ex).__name__)
                 self.notices.append(note)
+                self.notice_parent[note] = e.get("parent")
                 noticed.append(note)
                 e["noticed_reports"] = n
                 self.event("report_out", session=name, seq=n, report_kind=kind)
@@ -650,7 +653,13 @@ class Hub:
 
     def take_notices(self) -> list[str]:
         out, self.notices = self.notices, []
+        self.notice_parent = {}
         return out
+
+    def take_notices_for(self) -> list[tuple[str | None, str]]:
+        """알림을 (보낼 대화, 글)로. 보낼 대화는 그 작업자를 띄운 대화(모르면 None)."""
+        par = self.notice_parent
+        return [(par.get(n), n) for n in self.take_notices()]
 
     @_locked
     def recover(self, timeout_s: float = 60) -> list[str]:

@@ -18,7 +18,8 @@ import { detail, setDetail } from './detail.js'
 import { TABS as PANEL_TABS } from './panel.jsx'
 import { conn, tick, clockSkew } from './state.js'
 import { place, PlaceName } from './places.jsx'
-import { newChat, workerOpen } from './newchat.jsx'
+import { newChat, workerOpen, land } from './newchat.jsx'
+import { InnerWorkerPane } from './innerworker.jsx'
 import { SettingsSheet, settingsOpen } from './settings.jsx'
 
 // 한 칸이 그리다 깨져도 화면 전체가 멈추지 않게: 그 칸만 "못 그렸다 + 다시"로 바꾼다(승인 칸이 안 보이던 일의 재발 막기)
@@ -106,7 +107,7 @@ async function forkChat() {
 }
 async function closeChat(name) {
   if (!confirm('이 대화를 닫을까요?\n(기록은 남아 지난 대화에서 다시 열 수 있다)')) return
-  try { await post('/api/chat/close', { chat: name }); openChat('main') } catch (e) { toast('못 닫음: ' + e.message) }
+  try { await post('/api/chat/close', { chat: name }); await refresh(); land() } catch (e) { toast('못 닫음: ' + e.message) }   // 판 161: 닫으면 새 대화 첫 화면으로
 }
 
 const safeColor = c => (/^#?[0-9a-fA-F]{3,8}$/.test(c) || /^[a-z]+$/.test(c)) ? (c.match(/^[0-9a-fA-F]{3,8}$/) ? '#' + c : c) : 'var(--c-warn)'
@@ -125,7 +126,8 @@ function Center() {
   const w = useWorker(isMain ? '' : v)
   const [ref, onScroll] = useStick()
   useEffect(() => { if (isMain && chat.value !== v) openChat(v) }, [v])
-  const title = v === 'main' ? '메인' : conv ? ((/^(새 대화|대화 \d+)$/.test(conv.title || '') && conv.first) || conv.title) : `작업자 ${v}`   // 판 125: 새 대화는 첫 말을 이름으로
+  useEffect(() => { if (v === 'main' && conv?.hidden) land() }, [v, conv?.hidden])   // 판 161: 켜자마자·처음 대화를 닫은 뒤는 새 대화 첫 화면
+  const title = conv ? ((/^(메인|새 대화|대화 \d+)$/.test(conv.title || '') && conv.first) || conv.title) : `작업자 ${v}`   // 판 125: 새 대화는 첫 말을 이름으로
   const main = sessions.value.find(s => s.role === 'main')
   return (
     <main class="flex flex-col min-w-0 h-full relative">
@@ -146,6 +148,7 @@ function Center() {
           <Guard key={'c' + v} name="입력"><Composer target={isMain ? 'main' : v} /></Guard>
         </div>
       </div>
+      {isMain && <Guard name="작업자 걸음"><InnerWorkerPane /></Guard>}
       <Right worker={!isMain ? w : null} />
     </main>
   )
@@ -283,7 +286,7 @@ function ConvSheet() {
         {tabsOpen && <div class="pb-1 border-b border-line">{[...(isMain ? [] : [['session', '작업자']]), ...PANEL_TABS].map(([k, label]) =>
           <button key={k} class="row-btn !border-0 !min-h-[40px] pl-4" onClick={() => { close(); setPanel(k) }}><span class="text-[14.5px]">{label}</span><span class="sub w-4 h-4"><IconChev /></span></button>)}</div>}
         {isMain && <button class="row-btn" disabled={st?.busy} onClick={() => { close(); forkChat() }}><span>갈래 — 지금 대화를 복사해 새 대화로</span></button>}
-        {conv && v !== 'main' && <button class="row-btn text-bad" onClick={() => { close(); closeChat(v) }}><span>이 대화 닫기</span></button>}
+        {conv && <button class="row-btn text-bad" onClick={() => { close(); closeChat(v) }}><span>이 대화 닫기</span></button>}
         <button class="pt-2.5 text-[12.5px] text-mute text-left w-full truncate" aria-expanded={modelOpen} onClick={() => setModelOpen(!modelOpen)}
           title={st?.web?.why || ''}>모델 {m ? (m.served || [])[0] || m.configured : st?.backend?.model}
           {st?.web ? ' · ' + (st.web.search ? '웹 검색·읽기' : st.web.fetch ? '웹 읽기만' : '웹 꺼짐') : ''} {modelOpen ? '▴' : '▾'}</button>

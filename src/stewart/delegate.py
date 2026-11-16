@@ -206,6 +206,11 @@ def run_child(ctx: dict, args: dict) -> tuple[bool, str]:
     crec = Recorder(Path(ctx["rec"].dir) / "sub", f"{n}-{prof.name}")
     ctx["rec"].event("delegate_start", n=n, worker_kind=args.get("kind"), tools=prof.tools, max_steps=steps,
                      task=task[:2000], dir=str(crec.dir))
+    if ctx.get("on_dir"):   # 판 162: 부르는 쪽(대화 안 작업자)이 기록 폴더를 알게 — 화면이 그 작업자의 걸음을 연다
+        try:
+            ctx["on_dir"](crec.dir)
+        except Exception:   # noqa: BLE001 — 화면 고리 실패가 작업자를 막지 않는다
+            pass
     ask, on_call, ask_cfg = ctx.get("ask"), ctx.get("on_call"), ctx.get("ask_cfg")
     ask_out = ctx.get("ask_outside")
     parent = {"cps": ctx["cps"], "env": ctx["env"], "bounds": ctx.get("bounds"),

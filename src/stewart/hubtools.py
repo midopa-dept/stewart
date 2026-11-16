@@ -56,6 +56,7 @@ class MainTools:
     def __init__(self, hub: Hub, main_mode: str = "edits", default_profile: str = "chat", default_backend: str | None = None):
         self.hub, self.main_mode = hub, main_mode
         self.default_profile, self.default_backend = default_profile, default_backend
+        self.parent = "main"   # 이 도구를 가진 대화 — 띄운 작업자의 보고 알림이 이 대화로 간다
 
     def _known(self, name) -> str | None:
         reg = self.hub.registry()["sessions"]
@@ -87,7 +88,7 @@ class MainTools:
         if MODE_RANK.get(mode, 99) > MODE_RANK.get(self.main_mode, -1):
             return False, f"작업자 모드({mode})는 메인 모드({self.main_mode})보다 넓을 수 없다"
         e = self.hub.spawn(name, task, workdir, profile or self.default_profile, backend or self.default_backend,
-                           mode=mode, worktree=worktree)
+                           mode=mode, worktree=worktree, parent=self.parent)
         return True, (f"세션 {name} 을 띄웠다: 상태 {e['status']}, 작업 폴더 {e['workdir']}, 모드 {e['mode']}, 지시 0001. "
                       "보고가 오면 알림이 온다.")
 

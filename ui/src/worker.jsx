@@ -4,6 +4,7 @@ import { get, post } from './lib.js'
 import { sessions, refresh, toast } from './state.js'
 import { Md, DiffCard } from './thread.jsx'
 import { STATUS } from './side.jsx'
+import { ThinkBlock } from './think.jsx'
 
 export function useWorker(name) {
   const [conv, setConv] = useState(null), [detail, setDetail] = useState(null)
@@ -28,10 +29,11 @@ export function useWorker(name) {
   return { conv, detail, setConv }
 }
 
-function Item({ it }) {
+export function Item({ it }) {
   const [open, setOpen] = useState(false)
   if (typeof it.text !== 'string') it = { ...it, text: String(it.text ?? '') }
   if (it.kind === 'diff') return <DiffCard text={it.text} stat={it.stat} />
+  if (it.kind === 'think') return <ThinkBlock text={it.text} chars={it.text.length} />   // 판 162: 기본은 접힘, 펼치면 전부
   if (it.kind === 'assistant') return <div class="my-4"><Md text={it.text} /></div>
   if (it.kind === 'user') return (
     <div class="flex justify-end my-4"><div class="bg-soft px-3.5 py-2.5 rounded-[16px_16px_4px_16px] max-w-[78%] max-md:max-w-[88%] whitespace-pre-wrap break-words">

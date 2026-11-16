@@ -67,7 +67,7 @@ function Row({ label, on, sub, mark, onOpen, menu, title }) {
 
 const Mark = ({ k, folder }) => <span class="text-[12px] text-mute flex-none max-w-[40%] truncate">{k === 'talk' ? <i>parlando</i> : (folder || placeText('code'))}</span>
 
-function reopen(m, label) {
+export function reopen(m, label) {
   return post('/api/chat/new', { how: 'reopen', run_dir: m.run_dir, title: (label || '').slice(0, 80) })
     .then(r => { openChat(r.chat); refresh(); loadPast() }, e => toast('안 됨: ' + e.message))
 }
@@ -102,7 +102,7 @@ export function ConvList({ Item }) {
   const main = ss.find(s => s.role === 'main')
   const chats = ss.filter(s => s.role === 'chat')
   const info = name => (st?.chats || []).find(c => c.name === name) || {}
-  const openRows = [...(main ? [main] : []), ...chats].filter(s => s.role === 'main' || s.name === chat.value || !isDraft(info(s.name))).map(s => {   // 판 125: 말하기 전 새 대화는 보는 것만
+  const openRows = [...(main && !info('main').hidden ? [main] : []), ...chats].filter(s => s.role === 'main' || s.name === chat.value || !isDraft(info(s.name))).map(s => {   // 판 161: 처음 대화도 말이 오가기 전에는 숨는다   // 판 125: 말하기 전 새 대화는 보는 것만
     const c = info(s.role === 'main' ? 'main' : s.name)
     const title = c.title || s.title || (s.role === 'main' ? '메인' : s.name)
     return { open: true, s, kind: c.kind || 'code', last: c.last || 0, label: (!DEFAULT_TITLE.test(title) && title) || c.first || title, run: c.run_dir }

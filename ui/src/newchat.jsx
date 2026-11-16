@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { get, post } from './lib.js'
 import { hub, chat, openChat, refresh, toast } from './state.js'
+import { past, loadPast, reopen } from './convlist.jsx'
 
 const KIND_KEY = 'stewart.newKind', TIER_KEY = 'stewart.newTier'
 const read = (k, d) => { try { return localStorage.getItem(k) ?? d } catch { return d } }
@@ -32,6 +33,18 @@ export async function startNew(kind, tier) {
   refresh()
   return r
 }
+// 판 161: 켜면 첫 화면 = 새 대화 입력 화면. 처음 대화('main')가 말 없이 숨어 있거나 보던 대화가 닫혔으면
+// 말하기 전 새 대화가 있으면 그리로, 없으면 새로 연다(같은 화면 둘이 동시에 불러도 한 번만)
+let landing = null
+export function land() {
+  if (landing) return landing
+  const draft = (hub.value?.chats || []).find(isDraft)
+  landing = (draft ? Promise.resolve(openChat(draft.name)) : startNew())
+    .catch(e => toast('새 대화를 못 열었다: ' + e.message))
+    .finally(() => { landing = null })
+  return landing
+}
+
 export function newChat() {
   const cur = (hub.value?.chats || []).find(c => c.name === chat.value)
   if (isDraft(cur)) return   // 이미 빈 새 대화를 보고 있다
@@ -74,5 +87,19 @@ export function DraftPick() {
       {opts.map(o => btn(tier === o.tier, o.ok, o.label, () => pick(kind, o.tier), o.tier || '-'))}
     </div>}
     <div class="text-[12.5px] text-mute">{sub}{off.length ? (sub ? ' · ' : '') + off.join(' · ') : ''}</div>
+    <PastResume />
+  </div>
+}
+
+// 판 161: 새 대화 첫 화면의 "지난 대화 이어 가기" — 옆 목록과 같은 자료(최근 것부터), 누르면 그 대화를 새 칸으로 다시 연다
+const PAST_SHOW = 5
+function PastResume() {
+  useEffect(() => { loadPast() }, [])
+  const ms = (past.value.mains || []).slice().sort((a, b) => (b.last || 0) - (a.last || 0)).slice(0, PAST_SHOW)
+  if (!ms.length) return null
+  return <div class="mt-8 mx-auto max-w-md text-left" aria-label="지난 대화 이어 가기">
+    <div class="text-[12.5px] text-mute mb-1 px-1">지난 대화 이어 가기</div>
+    {ms.map(m => <button key={m.run_dir} class="block w-full text-left truncate px-2 py-1.5 rounded-lg hover:bg-soft text-[13.5px]"
+      title={m.first || ''} onClick={() => reopen(m, m.title || m.first)}>{m.title || m.first || '대화'}</button>)}
   </div>
 }
