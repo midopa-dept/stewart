@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>발표 제목</title>
+<style>
+/* === 색·글꼴: 여기만 바꾸면 전체가 바뀐다 === */
+:root {
+  --bg: #f6f4ef;          /* 장 바탕 */
+  --ink: #1d1d1b;         /* 본문 글 */
+  --mute: #6b6a66;        /* 흐린 글(쪽 번호·설명) */
+  --accent: #c2410c;      /* 강조 하나 */
+  --line: #d9d5cc;        /* 가는 선 */
+  --frame: #2a2a28;       /* 무대 밖(가장자리) */
+  --font: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+}
+
+/* === 고정 무대: 1920×1080 을 창 크기에 맞춰 통째로 늘이고 줄인다(내용은 다시 배치하지 않는다) === */
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--frame); }
+.deck { position: fixed; inset: 0; overflow: hidden; }
+.stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; }
+
+/* === 장 바꾸기: display 는 그대로 두고 visibility·opacity 로(숨은 장도 크기를 잴 수 있게) === */
+.slide {
+  position: absolute; inset: 0; box-sizing: border-box; padding: 120px 160px 110px;
+  background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 40px; line-height: 1.5;
+  visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .35s ease, visibility 0s linear .35s;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.slide.active { visibility: visible; opacity: 1; pointer-events: auto; transition: opacity .35s ease; }
+.slide h1 { font-size: 96px; line-height: 1.2; margin: 0 0 40px; letter-spacing: -0.02em; }
+.slide h2 { font-size: 64px; line-height: 1.25; margin: 0 0 48px; }
+.slide p, .slide li { margin: 0 0 20px; }
+.slide ul { margin: 0; padding-left: 1.1em; }
+.slide .em { color: var(--accent); }
+.slide.title { justify-content: center; }
+.slide .sub { color: var(--mute); font-size: 40px; }
+.slide .foot { position: absolute; left: 160px; right: 160px; bottom: 48px; display: flex; justify-content: space-between;
+  font-size: 24px; color: var(--mute); border-top: 2px solid var(--line); padding-top: 16px; }
+.slide svg { display: block; max-width: 100%; }
+
+/* === 움직임을 줄이라는 설정을 따른다 === */
+@media (prefers-reduced-motion: reduce) {
+  .slide, .slide.active { transition: none; }
+}
+
+/* === 인쇄: 한 장이 한 쪽(가로 16:9) === */
+@page { size: 1920px 1080px; margin: 0; }
+@media print {
+  html, body { height: auto; overflow: visible; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .deck, .stage { position: static; transform: none !important; width: 1920px; height: auto; overflow: visible; }
+  .slide { position: relative; visibility: visible; opacity: 1; transition: none; width: 1920px; height: 1080px;
+    break-after: page; page-break-after: always; }
+  .slide:last-child { break-after: auto; page-break-after: auto; }
+}
+</style>
+</head>
+<body>
+<div class="deck"><div class="stage" id="stage">
+
+  <section class="slide title">
+    <h1>발표 제목</h1>
+    <p class="sub">한 줄 부제 · 날짜</p>
+    <div class="foot"><span>발표 제목</span><span class="pg"></span></div>
+  </section>
+
+  <section class="slide">
+    <h2>한 장에 생각 하나</h2>
+    <ul>
+      <li>말하는 발표는 1–3줄</li>
+      <li>읽는 자료는 4–8줄, 넘치면 <span class="em">장을 나눈다</span></li>
+    </ul>
+    <div class="foot"><span>발표 제목</span><span class="pg"></span></div>
+  </section>
+
+  <section class="slide">
+    <h2>그림은 인라인 SVG</h2>
+    <svg width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-label="세 단계 흐름">
+      <g font-family="inherit" font-size="36" text-anchor="middle">
+        <rect x="0" y="120" width="300" height="120" rx="16" fill="none" stroke="currentColor" stroke-width="4"/>
+        <text x="150" y="192" fill="currentColor">입력</text>
+        <rect x="450" y="120" width="300" height="120" rx="16" fill="none" stroke="currentColor" stroke-width="4"/>
+        <text x="600" y="192" fill="currentColor">처리</text>
+        <rect x="900" y="120" width="300" height="120" rx="16" fill="var(--accent)"/>
+        <text x="1050" y="192" fill="#fff">결과</text>
+        <path d="M310 180 H440 M760 180 H890" stroke="currentColor" stroke-width="4"/>
+      </g>
+    </svg>
+    <div class="foot"><span>발표 제목</span><span class="pg"></span></div>
+  </section>
+
+</div></div>
+<script>
+/* === 넘기기: 화살표·Space·PageUp/Down·Home/End·#n 해시. 몇 해 지난 브라우저에서도 도는 문법만 === */
+(function () {
+  'use strict';
+  var W = 1920, H = 1080;
+  var stage = document.getElementById('stage');
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length, cur = 0;
+
+  slides.forEach(function (s, i) {
+    var pg = s.querySelector('.pg');
+    if (pg) pg.textContent = (i + 1) + ' / ' + total;
+  });
+
+  function fit() {
+    var f = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (window.innerWidth - W * f) / 2, y = (window.innerHeight - H * f) / 2;
+    stage.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + f + ')';
+  }
+
+  function fromHash() {
+    var m = /^#(\d+)$/.exec(window.location.hash || '');
+    return m ? Math.max(0, Math.min(total - 1, parseInt(m[1], 10) - 1)) : 0;
+  }
+
+  function show(i, keepHash) {
+    cur = Math.max(0, Math.min(total - 1, i));
+    slides.forEach(function (s, k) {
+      s.classList.toggle('active', k === cur);
+      s.setAttribute('aria-hidden', k === cur ? 'false' : 'true');
+    });
+    if (!keepHash && window.history && window.history.replaceState) window.history.replaceState(null, '', '#' + (cur + 1));
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    var k = e.key;
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || ((k === ' ' || k === 'Spacebar') && !e.shiftKey)) { e.preventDefault(); show(cur + 1); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp' || ((k === ' ' || k === 'Spacebar') && e.shiftKey)) { e.preventDefault(); show(cur - 1); }
+    else if (k === 'Home') { e.preventDefault(); show(0); }
+    else if (k === 'End') { e.preventDefault(); show(total - 1); }
+  });
+  window.addEventListener('hashchange', function () { show(fromHash(), true); });
+  window.addEventListener('resize', fit);
+  fit();
+  show(fromHash(), true);
+})();
+</script>
+</body>
+</html>

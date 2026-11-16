@@ -168,5 +168,31 @@ class TSkillsRun(unittest.TestCase):
         self.assertEqual(s.summary()["skills_loaded"], ["fmt", "fmt"])
 
 
+class TBuiltinSlides(unittest.TestCase):
+    """판 164: 내장 스킬 html-slides — 목록에 보이고, 본문·딸린 바탕 틀을 읽고, 바탕 틀은 바깥 주소·옛 브라우저에 없는 기능을 쓰지 않는다."""
+
+    def test_listed_and_loaded(self):
+        import re
+        with mock.patch.dict(os.environ, {"STEWART_SKILLS_DIR": tempfile.mkdtemp()}):
+            got = SK.discover(Path(tempfile.mkdtemp()), builtin=True)
+        s = SK.find(got, "html-slides")
+        self.assertIsNotNone(s)
+        self.assertEqual(s.scope, "builtin")
+        self.assertIn("- html-slides: 발표자료", SK.list_text(got))
+        self.assertEqual(s.surfaces, [])                                   # 대화·코드 양쪽 자리
+        ok, body = SK.load(got, "html-slides")
+        self.assertTrue(ok)
+        for w in ("1920×1080", "display:none", "prefers-reduced-motion", "Malgun Gothic", "fonttools", "Chromium", "MIT"):
+            self.assertIn(w, body, w)
+        self.assertIn("base.html", body.split("[딸린 파일")[1])
+        ok, html = SK.load(got, "html-slides", "base.html")
+        self.assertTrue(ok)
+        self.assertNotRegex(html, r"https?://")                            # 망 없는 곳에서도 열린다
+        self.assertIsNone(re.search(r"\b[ds]vh\b|:has\(|@container|@layer|color-mix|\.at\(|structuredClone|type=\"module\"|display:\s*none", html))
+        for w in ("1920px", ":root", ".slide.active", "prefers-reduced-motion", "@page", "break-after: page", "PageDown", "Home", "End",
+                  "hashchange", "Malgun Gothic", "<svg"):
+            self.assertIn(w, html, w)
+
+
 if __name__ == "__main__":
     unittest.main()
