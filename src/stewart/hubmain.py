@@ -1870,6 +1870,24 @@ class UserHubs:
         check_name(name)
         return self.user_root / name
 
+    def _kinds(self, wd: Path, backend_name, memory_root: str):
+        """판 163: 사람별 허브의 종류 → (프로필, 백엔드). 판 161 뒤로 화면이 켜자마자 새 대화를 여는데, 계정 모드에는 종류 풀이가 없어
+        다른 종류의 새 대화가 거절됐다. 어느 종류든 그 사람의 폴더·기억 안에서만 돈다(폴더 밖 읽기 거절)."""
+        def r(kind: str):
+            from . import surfaces as SF
+            from .cli import resolve
+            if kind == "talk":
+                p, b = resolve(SF.TALK_PROFILE, backend_name, str(wd))
+            else:
+                name = self.a.profile if self.a.profile and self.a.profile != SF.TALK_PROFILE else "chat"
+                p, b = resolve(name, backend_name, str(wd))
+                if kind_of(p) != "code":
+                    p, b = resolve("chat", backend_name, str(wd))
+            p.read_outside = "deny"
+            p.memory_root = memory_root
+            return p, b
+        return r
+
     def get(self, name: str) -> tuple:
         with self._lock:
             if name in self._hubs:
@@ -1886,6 +1904,7 @@ class UserHubs:
             rec = Recorder(self.runs_dir / "users" / name, "hub-main")
             main = HubMain(hub, profile, backend, rec, mode=self.a.mode, worker_profile=self.a.worker_profile or self.a.profile,
                            worker_backend=self.a.backend, history=history, resumed_from=prev)
+            main.kind_resolver = self._kinds(wd, backend.name, profile.memory_root)   # 판 163: 계정 모드에서도 새 대화의 자리 고르기
             hub.recover()
             main.start_loop()
             self._hubs[name] = (main, hub)

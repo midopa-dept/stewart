@@ -238,6 +238,18 @@ class TAccountsMemory(TAccountsWeb):
     def test_user_folder_names(self):
         pass
 
+    def test_new_chat_other_kind_in_own_folder(self):
+        """판 163: 계정 모드 허브도 다른 종류(대화·코드)의 새 대화를 연다 — 그 사람의 폴더·기억 안에서만."""
+        main, _ = self.users.get("alice")
+        k2 = "code" if main.kind == "talk" else "talk"
+        c = main.new_chat("fresh", kind=k2)
+        self.assertEqual(c.kind, k2)
+        p = c._profile
+        self.assertEqual(Path(p.workdir).resolve(), (self.tmp / "people" / "alice").resolve())
+        self.assertEqual(p.read_outside, "deny")
+        self.assertEqual(p.memory_root, main._profile.memory_root)
+        main.close_chat(c.name)
+
     def test_memory_per_person(self):
         with mock.patch.dict(os.environ, {"STEWART_MEMORY": "1"}):
             a_main, _ = self.users.get("alice")
